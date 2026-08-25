@@ -1,0 +1,146 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================================
+    // HELPER FUNCTIONS
+    // ============================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserExists() {
+      return isSignedIn()
+        && exists(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        );
+    }
+
+    function currentUser() {
+      return get(
+        /databases/$(database)/documents/users/$(request.auth.uid)
+      ).data;
+    }
+
+    function isSuperAdmin() {
+      return currentUserExists()
+        && currentUser().role == 'super_admin';
+    }
+
+    function isAdmin() {
+      return currentUserExists()
+        && currentUser().role == 'admin';
+    }
+
+    function isActiveUser() {
+      return currentUserExists()
+        && (
+          currentUser().status == 'active'
+          || currentUser().status == 'approved'
+        );
+    }
+
+    // ============================================================
+    // USERS
+    // ============================================================
+
+    match /users/{userId} {
+
+      // User can read own profile.
+      // Admin and Super Admin can read users.
+      allow read: if isSignedIn()
+        && (
+          userId == request.auth.uid
+          || isSuperAdmin()
+          || isAdmin()
+        );
+
+      // Only Super Admin can create users.
+      // Another Super Admin cannot be created.
+      allow create: if isSuperAdmin()
+        && request.resource.data.role != 'super_admin'
+        && request.resource.data.createdBy == request.auth.uid;
+
+      // Only Super Admin can update other users.
+      // Another Super Admin cannot be created.
+      allow update: if isSuperAdmin()
+        && userId != request.auth.uid
+        && request.resource.data.role != 'super_admin';
+
+      // Only Super Admin can delete users.
+      // Super Admin cannot delete own profile.
+      allow delete: if isSuperAdmin()
+        && userId != request.auth.uid;
+    }
+
+    // ============================================================
+    // REQUESTS
+    // ============================================================
+
+    match /requests/{requestId} {
+
+      // Super Admin and Admin can see all requests.
+      // Other active users can see only their own requests.
+      allow read: if isActiveUser()
+        && (
+          isSuperAdmin()
+          || isAdmin()
+          || resource.data.requestedBy == request.auth.uid
+        );
+
+      // Active users can create their own requests.
+      allow create: if isActiveUser()
+        && request.resource.data.requestedBy == request.auth.uid
+        && request.resource.data.status == 'Pending';
+
+      // Only Admin and Super Admin can update requests.
+      allow update: if isActiveUser()
+        && (
+          isSuperAdmin()
+          || isAdmin()
+        );
+
+      // Only Super Admin can delete requests.
+      allow delete: if isSuperAdmin();
+    }
+
+    // ============================================================
+    // ASSETS / INVENTORY
+    // ============================================================
+
+    match /assets/{assetId} {
+
+      // All active authenticated users can view assets.
+      allow read: if isActiveUser();
+
+      // Admin and Super Admin can create assets directly.
+      allow create: if isActiveUser()
+        && (
+          isSuperAdmin()
+          || isAdmin()
+        );
+
+      // Admin and Super Admin can update assets.
+      allow update: if isActiveUser()
+        && (
+          isSuperAdmin()
+          || isAdmin()
+        );
+
+      // Admin and Super Admin can delete assets.
+      allow delete: if isActiveUser()
+        && (
+          isSuperAdmin()
+          || isAdmin()
+        );
+    }
+
+    // ============================================================
+    // DEFAULT DENY
+    // ============================================================
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
