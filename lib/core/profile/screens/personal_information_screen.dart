@@ -1,6 +1,13 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+
+import '../../providers/user_provider.dart';
+import '../../services/permission_service.dart';
+import '../../services/user_service.dart';
+import '../../theme/app_theme.dart';
+import '../../theme/colors.dart';
 
 class PersonalInformationScreen extends StatefulWidget {
   const PersonalInformationScreen({super.key});
@@ -24,8 +31,15 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
 
     final user = FirebaseAuth.instance.currentUser;
 
+    // The Firestore profile is the source of truth for the name shown across
+    // the app (users list, requests, dashboard).
+    final profileName =
+        context.read<UserProvider>().currentUserProfile?.name.trim() ?? '';
+
     _nameController = TextEditingController(
-      text: user?.displayName?.trim().isNotEmpty == true
+      text: profileName.isNotEmpty
+          ? profileName
+          : user?.displayName?.trim().isNotEmpty == true
           ? user!.displayName!.trim()
           : _nameFromEmail(user?.email),
     );
@@ -57,123 +71,114 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
           },
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: const Text(
-          'Personal Information',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
+        title: const Text('Personal Information'),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
           physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(context),
-                const SizedBox(height: 24),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 900),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildHeader(context),
+                    const SizedBox(height: AppSpacing.xl),
 
-                _buildSectionTitle(
-                  context,
-                  'Personal Details',
-                  'Manage the information associated with your account',
-                ),
-                const SizedBox(height: 12),
-
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: colors.surface,
-                    borderRadius: BorderRadius.circular(22),
-                    border: Border.all(
-                      color: colors.outline.withValues(alpha: 0.10),
+                    _buildSectionTitle(
+                      context,
+                      'Personal Details',
+                      'Manage the information associated with your account',
                     ),
-                  ),
-                  child: Column(
-                    children: [
-                      _buildTextField(
-                        context,
-                        controller: _nameController,
-                        label: 'Full Name',
-                        hint: 'Enter your full name',
-                        icon: Icons.person_outline_rounded,
-                        validator: (value) {
-                          final name = value?.trim() ?? '';
+                    const SizedBox(height: AppSpacing.sm + 2),
 
-                          if (name.isEmpty) {
-                            return 'Please enter your name';
-                          }
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppSpacing.lg),
+                        child: Column(
+                          children: [
+                            _buildTextField(
+                              context,
+                              controller: _nameController,
+                              label: 'Full Name',
+                              hint: 'Enter your full name',
+                              icon: Icons.person_outline_rounded,
+                              validator: (value) {
+                                final name = value?.trim() ?? '';
 
-                          if (name.length < 2) {
-                            return 'Name must contain at least 2 characters';
-                          }
+                                if (name.isEmpty) {
+                                  return 'Please enter your name';
+                                }
 
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      _buildTextField(
-                        context,
-                        controller: _emailController,
-                        label: 'Email Address',
-                        hint: 'Email address',
-                        icon: Icons.email_outlined,
-                        enabled: false,
-                      ),
-                    ],
-                  ),
-                ),
+                                if (name.length < 2) {
+                                  return 'Name must contain at least 2 characters';
+                                }
 
-                const SizedBox(height: 24),
-
-                _buildSectionTitle(
-                  context,
-                  'Account Information',
-                  'Information managed by the system',
-                ),
-                const SizedBox(height: 12),
-
-                _buildAccountInfoCard(context),
-
-                const SizedBox(height: 24),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: FilledButton.icon(
-                    onPressed: _isSaving ? null : _saveInformation,
-                    icon: _isSaving
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2.2),
-                          )
-                        : const Icon(Icons.save_outlined),
-                    label: Text(
-                      _isSaving ? 'Saving...' : 'Save Changes',
-                      style: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
+                                return null;
+                              },
+                            ),
+                            const SizedBox(height: AppSpacing.lg),
+                            _buildTextField(
+                              context,
+                              controller: _emailController,
+                              label: 'Email Address',
+                              hint: 'Email address',
+                              icon: Icons.email_outlined,
+                              enabled: false,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ),
 
-                const SizedBox(height: 12),
+                    const SizedBox(height: AppSpacing.xl),
 
-                Text(
-                  'Your email address is managed through Firebase Authentication '
-                  'and cannot be changed from this screen.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.4,
-                    color: colors.onSurfaceVariant,
-                  ),
+                    _buildSectionTitle(
+                      context,
+                      'Account Information',
+                      'Information managed by the system',
+                    ),
+                    const SizedBox(height: AppSpacing.sm + 2),
+
+                    _buildAccountInfoCard(context),
+
+                    const SizedBox(height: AppSpacing.xl),
+
+                    AppActionButtonBox(
+                      height: 48,
+                      child: FilledButton.icon(
+                        onPressed: _isSaving ? null : _saveInformation,
+                        icon: _isSaving
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.2,
+                                ),
+                              )
+                            : const Icon(Icons.save_outlined),
+                        label: Text(_isSaving ? 'Saving...' : 'Save Changes'),
+                      ),
+                    ),
+
+                    const SizedBox(height: AppSpacing.md),
+
+                    Text(
+                      'Your email address is managed through Firebase Authentication '
+                      'and cannot be changed from this screen.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        height: 1.45,
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -191,86 +196,71 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
 
     final initials = _getInitials(name);
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [colors.primary, colors.primary.withValues(alpha: 0.76)],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: colors.primary.withValues(alpha: 0.18),
-            blurRadius: 26,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 70,
-            height: 70,
-            decoration: BoxDecoration(
-              color: colors.onPrimary.withValues(alpha: 0.14),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: colors.onPrimary.withValues(alpha: 0.25),
-                width: 2,
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg + 2),
+        child: Row(
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: colors.primary,
+                shape: BoxShape.circle,
               ),
-            ),
-            child: Center(
-              child: Text(
-                initials,
-                style: TextStyle(
-                  color: colors.onPrimary,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Your Information',
-                  style: TextStyle(
-                    color: colors.onPrimary.withValues(alpha: 0.75),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              child: Center(
+                child: Text(
+                  initials,
                   style: TextStyle(
                     color: colors.onPrimary,
                     fontSize: 20,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  user?.email ?? 'No email available',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: colors.onPrimary.withValues(alpha: 0.82),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Your Information',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.onSurfaceVariant,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.onSurface,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    user?.email ?? 'No email available',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.onSurfaceVariant,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -282,19 +272,27 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
   ) {
     final colors = Theme.of(context).colorScheme;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          subtitle,
-          style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: colors.onSurface,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.2,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 12.5, color: colors.onSurfaceVariant),
+          ),
+        ],
+      ),
     );
   }
 
@@ -307,8 +305,6 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
     bool enabled = true,
     String? Function(String?)? validator,
   }) {
-    final colors = Theme.of(context).colorScheme;
-
     return TextFormField(
       controller: controller,
       enabled: enabled,
@@ -320,81 +316,60 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
         prefixIcon: Icon(icon),
         suffixIcon: enabled
             ? null
-            : Icon(
-                Icons.lock_outline_rounded,
-                size: 19,
-                color: colors.onSurfaceVariant,
-              ),
-        filled: true,
-        fillColor: colors.surfaceContainerHighest.withValues(alpha: 0.45),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide.none,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: colors.outline.withValues(alpha: 0.08)),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: colors.primary, width: 1.5),
-        ),
-        disabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: BorderSide(color: colors.outline.withValues(alpha: 0.06)),
-        ),
+            : const Icon(Icons.lock_outline_rounded, size: 19),
       ),
     );
   }
 
   Widget _buildAccountInfoCard(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     final user = FirebaseAuth.instance.currentUser;
 
     final createdAt = user?.metadata.creationTime;
     final lastSignIn = user?.metadata.lastSignInTime;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.outline.withValues(alpha: 0.10)),
-      ),
-      child: Column(
-        children: [
-          _buildInfoRow(
-            context,
-            icon: Icons.admin_panel_settings_outlined,
-            title: 'Account Role',
-            value: 'IT Administrator',
-          ),
-          Divider(height: 1, color: colors.outline.withValues(alpha: 0.08)),
-          _buildInfoRow(
-            context,
-            icon: Icons.verified_user_outlined,
-            title: 'Account Status',
-            value: 'Active',
-            valueColor: Colors.green,
-          ),
-          Divider(height: 1, color: colors.outline.withValues(alpha: 0.08)),
-          _buildInfoRow(
-            context,
-            icon: Icons.calendar_today_outlined,
-            title: 'Account Created',
-            value: createdAt == null ? 'Not available' : _formatDate(createdAt),
-          ),
-          Divider(height: 1, color: colors.outline.withValues(alpha: 0.08)),
-          _buildInfoRow(
-            context,
-            icon: Icons.login_outlined,
-            title: 'Last Sign In',
-            value: lastSignIn == null
-                ? 'Not available'
-                : _formatDate(lastSignIn),
-          ),
-        ],
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+        child: Column(
+          children: [
+            _buildInfoRow(
+              context,
+              icon: Icons.admin_panel_settings_outlined,
+              title: 'Account Role',
+              value: PermissionService.roleLabel(
+                context.watch<UserProvider>().currentUserRole,
+              ),
+            ),
+            const Divider(height: 1),
+            _buildInfoRow(
+              context,
+              icon: Icons.verified_user_outlined,
+              title: 'Account Status',
+              value: _statusLabel(
+                context.watch<UserProvider>().currentUserProfile?.status,
+              ),
+              valueColor: AppColors.success,
+            ),
+            const Divider(height: 1),
+            _buildInfoRow(
+              context,
+              icon: Icons.calendar_today_outlined,
+              title: 'Account Created',
+              value: createdAt == null
+                  ? 'Not available'
+                  : _formatDate(createdAt),
+            ),
+            const Divider(height: 1),
+            _buildInfoRow(
+              context,
+              icon: Icons.login_outlined,
+              title: 'Last Sign In',
+              value: lastSignIn == null
+                  ? 'Not available'
+                  : _formatDate(lastSignIn),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -409,19 +384,19 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
     final colors = Theme.of(context).colorScheme;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 15),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.md + 2),
       child: Row(
         children: [
           Container(
-            width: 42,
-            height: 42,
+            width: 40,
+            height: 40,
             decoration: BoxDecoration(
-              color: colors.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(13),
+              color: AppColors.tint(colors.primary, colors.brightness),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
             ),
             child: Icon(icon, size: 20, color: colors.primary),
           ),
-          const SizedBox(width: 13),
+          const SizedBox(width: AppSpacing.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -429,20 +404,20 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
                 Text(
                   title,
                   style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                     color: colors.onSurfaceVariant,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: valueColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: valueColor ?? colors.onSurface,
                   ),
                 ),
               ],
@@ -472,6 +447,9 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
     });
 
     try {
+      // Only the descriptive `name` field is written; Firestore rules deny
+      // any self-change of role, status or ownership.
+      await UserService().updateOwnProfileName(uid: user.uid, name: name);
       await user.updateDisplayName(name);
       await user.reload();
 
@@ -494,7 +472,7 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
       });
 
       _showMessage(e.message ?? 'Unable to update personal information.');
-    } catch (_) {
+    } catch (e) {
       if (!mounted) {
         return;
       }
@@ -503,8 +481,18 @@ class _PersonalInformationScreenState extends State<PersonalInformationScreen> {
         _isSaving = false;
       });
 
-      _showMessage('Unable to update personal information. Please try again.');
+      _showMessage('Unable to update personal information: $e');
     }
+  }
+
+  String _statusLabel(String? status) {
+    final value = (status ?? '').trim();
+
+    if (value.isEmpty) {
+      return 'Unknown';
+    }
+
+    return '${value[0].toUpperCase()}${value.substring(1).toLowerCase()}';
   }
 
   void _showMessage(String message) {

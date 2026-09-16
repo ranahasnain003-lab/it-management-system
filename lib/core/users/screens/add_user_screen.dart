@@ -6,6 +6,8 @@ import 'package:provider/provider.dart';
 import '../../../models/user_model.dart';
 import '../../constants/app_constants.dart';
 import '../../providers/user_provider.dart';
+import '../../theme/app_theme.dart';
+import '../../theme/colors.dart';
 
 class AddUserScreen extends StatefulWidget {
   const AddUserScreen({super.key});
@@ -27,8 +29,26 @@ class _AddUserScreenState extends State<AddUserScreen> {
   String _selectedRole = AppConstants.USER;
   String _selectedStatus = 'active';
 
+  String? _selectedAdminUid;
+
   bool _isLoading = false;
   bool _obscurePassword = true;
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final provider = context.read<UserProvider>();
+
+      provider.loadCurrentUserProfile(forceRefresh: true);
+      provider.listenToUsers();
+
+      setState(() {});
+    });
+  }
 
   @override
   void dispose() {
@@ -56,170 +76,191 @@ class _AddUserScreenState extends State<AddUserScreen> {
                 },
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: const Column(
+        titleSpacing: 0,
+        title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Add User', style: TextStyle(fontWeight: FontWeight.w800)),
+            const Text(
+              'Add User',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
             Text(
               'Create a new system user',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w400),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: colors.onSurfaceVariant,
+              ),
             ),
           ],
         ),
       ),
       body: SafeArea(
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(context),
-                const SizedBox(height: 24),
-                _sectionTitle(
-                  context,
-                  'Basic Information',
-                  Icons.person_outline_rounded,
-                ),
-                const SizedBox(height: 12),
-                _buildTextField(
-                  controller: _nameController,
-                  label: 'Full Name',
-                  hint: 'Enter employee full name',
-                  icon: Icons.person_outline_rounded,
-                  textCapitalization: TextCapitalization.words,
-                  validator: _requiredValidator('Full name'),
-                ),
-                const SizedBox(height: 14),
-                _buildTextField(
-                  controller: _emailController,
-                  label: 'Email Address',
-                  hint: 'employee@company.com',
-                  icon: Icons.email_outlined,
-                  keyboardType: TextInputType.emailAddress,
-                  validator: _emailValidator,
-                ),
-                const SizedBox(height: 14),
-                _buildTextField(
-                  controller: _passwordController,
-                  label: 'Temporary Password',
-                  hint: 'Minimum 6 characters',
-                  icon: Icons.lock_outline_rounded,
-                  obscureText: _obscurePassword,
-                  suffixIcon: IconButton(
-                    tooltip: _obscurePassword
-                        ? 'Show password'
-                        : 'Hide password',
-                    onPressed: () {
-                      setState(() {
-                        _obscurePassword = !_obscurePassword;
-                      });
-                    },
-                    icon: Icon(
-                      _obscurePassword
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined,
+        child: Consumer<UserProvider>(
+          builder: (context, userProvider, _) {
+            return Form(
+              key: _formKey,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final horizontal = constraints.maxWidth < 400
+                      ? AppSpacing.md
+                      : AppSpacing.lg;
+
+                  return SingleChildScrollView(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontal,
+                      AppSpacing.lg,
+                      horizontal,
+                      AppSpacing.xl,
                     ),
-                  ),
-                  validator: _passwordValidator,
-                ),
-                const SizedBox(height: 28),
-                _sectionTitle(
-                  context,
-                  'Employee Information',
-                  Icons.badge_outlined,
-                ),
-                const SizedBox(height: 12),
-                _buildTextField(
-                  controller: _employeeIdController,
-                  label: 'Employee ID',
-                  hint: 'e.g. EMP-001',
-                  icon: Icons.badge_outlined,
-                  textCapitalization: TextCapitalization.characters,
-                  validator: _requiredValidator('Employee ID'),
-                ),
-                const SizedBox(height: 14),
-                _buildTextField(
-                  controller: _departmentController,
-                  label: 'Department',
-                  hint: 'e.g. Information Technology',
-                  icon: Icons.business_outlined,
-                  textCapitalization: TextCapitalization.words,
-                  validator: _requiredValidator('Department'),
-                ),
-                const SizedBox(height: 14),
-                _buildTextField(
-                  controller: _designationController,
-                  label: 'Designation',
-                  hint: 'e.g. IT Officer',
-                  icon: Icons.work_outline_rounded,
-                  textCapitalization: TextCapitalization.words,
-                  validator: _requiredValidator('Designation'),
-                ),
-                const SizedBox(height: 28),
-                _sectionTitle(
-                  context,
-                  'Access & Permissions',
-                  Icons.admin_panel_settings_outlined,
-                ),
-                const SizedBox(height: 12),
-                _buildRoleSelector(context),
-                const SizedBox(height: 14),
-                _buildStatusSelector(context),
-                const SizedBox(height: 28),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(15),
-                  decoration: BoxDecoration(
-                    color: colors.primaryContainer.withValues(alpha: 0.45),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: colors.primary.withValues(alpha: 0.12),
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.info_outline_rounded, color: colors.primary),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'The new user will be created in Firebase '
-                          'Authentication and a matching profile will '
-                          'be saved in Firestore. The current Super Admin '
-                          'will automatically be recorded as the creator.',
-                          style: TextStyle(
-                            color: colors.onSurfaceVariant,
-                            height: 1.45,
-                            fontSize: 12,
-                          ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 760),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _buildHeader(context),
+
+                            const SizedBox(height: AppSpacing.md),
+
+                            _sectionCard(
+                              context,
+                              title: 'Basic Information',
+                              icon: Icons.person_outline_rounded,
+                              children: [
+                                _buildTextField(
+                                  controller: _nameController,
+                                  label: 'Full Name',
+                                  hint: 'Enter employee full name',
+                                  icon: Icons.person_outline_rounded,
+                                  textCapitalization: TextCapitalization.words,
+                                  validator: _requiredValidator('Full name'),
+                                ),
+                                _buildTextField(
+                                  controller: _emailController,
+                                  label: 'Email Address',
+                                  hint: 'employee@company.com',
+                                  icon: Icons.email_outlined,
+                                  keyboardType: TextInputType.emailAddress,
+                                  validator: _emailValidator,
+                                ),
+                                _buildTextField(
+                                  controller: _passwordController,
+                                  label: 'Temporary Password',
+                                  hint: 'Minimum 6 characters',
+                                  icon: Icons.lock_outline_rounded,
+                                  obscureText: _obscurePassword,
+                                  suffixIcon: IconButton(
+                                    tooltip: _obscurePassword
+                                        ? 'Show password'
+                                        : 'Hide password',
+                                    onPressed: () {
+                                      setState(() {
+                                        _obscurePassword = !_obscurePassword;
+                                      });
+                                    },
+                                    icon: Icon(
+                                      _obscurePassword
+                                          ? Icons.visibility_outlined
+                                          : Icons.visibility_off_outlined,
+                                    ),
+                                  ),
+                                  validator: _passwordValidator,
+                                ),
+                              ],
+                            ),
+
+                            const SizedBox(height: AppSpacing.md),
+
+                            _sectionCard(
+                              context,
+                              title: 'Employee Information',
+                              icon: Icons.badge_outlined,
+                              children: [
+                                _buildTextField(
+                                  controller: _employeeIdController,
+                                  label: 'Employee ID',
+                                  hint: 'e.g. EMP-001',
+                                  icon: Icons.badge_outlined,
+                                  textCapitalization:
+                                      TextCapitalization.characters,
+                                  validator: _requiredValidator('Employee ID'),
+                                ),
+                                _buildTextField(
+                                  controller: _departmentController,
+                                  label: 'Department',
+                                  hint: 'e.g. Information Technology',
+                                  icon: Icons.business_outlined,
+                                  textCapitalization: TextCapitalization.words,
+                                  validator: _requiredValidator('Department'),
+                                ),
+                                _buildTextField(
+                                  controller: _designationController,
+                                  label: 'Designation',
+                                  hint: 'e.g. IT Officer',
+                                  icon: Icons.work_outline_rounded,
+                                  textCapitalization: TextCapitalization.words,
+                                  validator: _requiredValidator('Designation'),
+                                ),
+                              ],
+                            ),
+
+                            const SizedBox(height: AppSpacing.md),
+
+                            _sectionCard(
+                              context,
+                              title: 'Access & Permissions',
+                              icon: Icons.admin_panel_settings_outlined,
+                              children: [
+                                _buildRoleSelector(context, userProvider),
+                                if (userProvider.isSuperAdmin &&
+                                    _isUserRole(_selectedRole))
+                                  _buildAdminAssignmentSelector(
+                                    context,
+                                    userProvider,
+                                  ),
+                                _buildStatusSelector(context),
+                                _buildScopeInformation(context, userProvider),
+                              ],
+                            ),
+
+                            const SizedBox(height: AppSpacing.xl),
+
+                            AppActionButtonBox(
+                              height: 48,
+                              child: FilledButton.icon(
+                                onPressed: _isLoading ? null : _createUser,
+                                icon: _isLoading
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.2,
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.person_add_alt_1_rounded,
+                                        size: 19,
+                                      ),
+                                label: Text(
+                                  _isLoading
+                                      ? 'Creating User...'
+                                      : 'Create User',
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: FilledButton.icon(
-                    onPressed: _isLoading ? null : _createUser,
-                    icon: _isLoading
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2.2),
-                          )
-                        : const Icon(Icons.person_add_alt_1_rounded),
-                    label: Text(
-                      _isLoading ? 'Creating User...' : 'Create User',
                     ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+                  );
+                },
+              ),
+            );
+          },
         ),
       ),
     );
@@ -227,50 +268,86 @@ class _AddUserScreenState extends State<AddUserScreen> {
 
   Widget _buildHeader(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final brightness = Theme.of(context).brightness;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(22),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [colors.primaryContainer, colors.surfaceContainerHighest],
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: AppColors.tint(colors.primary, brightness),
+                borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+              ),
+              child: Icon(
+                Icons.person_add_alt_1_rounded,
+                color: colors.primary,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.md + 2),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Create New User',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Add an employee to the IT management system.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: colors.onSurfaceVariant,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
-      child: Row(
+    );
+  }
+
+  /// A titled card section with evenly spaced fields.
+  Widget _sectionCard(
+    BuildContext context, {
+    required String title,
+    required IconData icon,
+    required List<Widget> children,
+  }) {
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
-              color: colors.primary,
-              borderRadius: BorderRadius.circular(17),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.md + 2,
+              AppSpacing.lg,
+              AppSpacing.md,
             ),
-            child: Icon(
-              Icons.person_add_alt_1_rounded,
-              color: colors.onPrimary,
-              size: 29,
-            ),
+            child: _sectionTitle(context, title, icon),
           ),
-          const SizedBox(width: 15),
-          Expanded(
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.lg),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'Create New User',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  'Add an employee to the IT management system.',
-                  style: TextStyle(
-                    color: colors.onSurfaceVariant,
-                    height: 1.35,
-                  ),
-                ),
+                for (var i = 0; i < children.length; i++) ...[
+                  if (i > 0) const SizedBox(height: AppSpacing.md),
+                  children[i],
+                ],
               ],
             ),
           ),
@@ -281,14 +358,29 @@ class _AddUserScreenState extends State<AddUserScreen> {
 
   Widget _sectionTitle(BuildContext context, String title, IconData icon) {
     final colors = Theme.of(context).colorScheme;
+    final brightness = Theme.of(context).brightness;
 
     return Row(
       children: [
-        Icon(icon, size: 20, color: colors.primary),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: AppColors.tint(colors.primary, brightness),
+            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+          ),
+          child: Icon(icon, size: 18, color: colors.primary),
+        ),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontSize: 15),
+          ),
         ),
       ],
     );
@@ -317,42 +409,45 @@ class _AddUserScreenState extends State<AddUserScreen> {
         hintText: hint,
         prefixIcon: Icon(icon),
         suffixIcon: suffixIcon,
-        filled: true,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(15),
-          borderSide: BorderSide.none,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(15),
-          borderSide: BorderSide.none,
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(15),
-          borderSide: BorderSide(
-            color: Theme.of(context).colorScheme.primary,
-            width: 1.5,
-          ),
-        ),
       ),
     );
   }
 
-  Widget _buildRoleSelector(BuildContext context) {
+  Widget _buildRoleSelector(BuildContext context, UserProvider provider) {
+    final isSuperAdmin = provider.isSuperAdmin;
+
+    final availableRoles = <DropdownMenuItem<String>>[
+      const DropdownMenuItem(value: AppConstants.USER, child: Text('User')),
+    ];
+
+    if (isSuperAdmin) {
+      availableRoles.add(
+        const DropdownMenuItem(value: AppConstants.ADMIN, child: Text('Admin')),
+      );
+    }
+
+    final safeRole = availableRoles.any((item) => item.value == _selectedRole)
+        ? _selectedRole
+        : AppConstants.USER;
+
+    if (safeRole != _selectedRole) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+
+        setState(() {
+          _selectedRole = safeRole;
+        });
+      });
+    }
+
     return DropdownButtonFormField<String>(
-      initialValue: _selectedRole,
+      initialValue: safeRole,
+      isExpanded: true,
       decoration: InputDecoration(
         labelText: 'User Role',
         prefixIcon: const Icon(Icons.admin_panel_settings_outlined),
-        filled: true,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(15),
-          borderSide: BorderSide.none,
-        ),
       ),
-      items: const [
-        DropdownMenuItem(value: AppConstants.USER, child: Text('User')),
-        DropdownMenuItem(value: AppConstants.ADMIN, child: Text('Admin')),
-      ],
+      items: availableRoles,
       onChanged: _isLoading
           ? null
           : (value) {
@@ -360,22 +455,142 @@ class _AddUserScreenState extends State<AddUserScreen> {
 
               setState(() {
                 _selectedRole = value;
+
+                if (!_isUserRole(value)) {
+                  _selectedAdminUid = null;
+                }
               });
             },
+    );
+  }
+
+  Widget _buildAdminAssignmentSelector(
+    BuildContext context,
+    UserProvider provider,
+  ) {
+    final colors = Theme.of(context).colorScheme;
+
+    final admins = provider.users.where((user) {
+      final role = user.role.trim().toLowerCase();
+
+      return role == AppConstants.ADMIN.toLowerCase() &&
+          user.uid.trim().isNotEmpty &&
+          user.status.trim().toLowerCase() != 'blocked' &&
+          user.status.trim().toLowerCase() != 'disabled';
+    }).toList();
+
+    admins.sort(
+      (a, b) => a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase()),
+    );
+
+    final currentUid = provider.currentUserUid?.trim() ?? '';
+
+    /*
+     * If the current user is an Admin, automatically assign
+     * the new User to that Admin.
+     *
+     * For Super Admin, an Admin must be selected.
+     */
+    if (!provider.isSuperAdmin &&
+        currentUid.isNotEmpty &&
+        _selectedAdminUid != currentUid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+
+        setState(() {
+          _selectedAdminUid = currentUid;
+        });
+      });
+    }
+
+    final validSelectedAdmin =
+        admins.any((admin) => admin.uid == _selectedAdminUid)
+        ? _selectedAdminUid
+        : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DropdownButtonFormField<String>(
+          initialValue: validSelectedAdmin,
+          isExpanded: true,
+          decoration: InputDecoration(
+            labelText: 'Assign User to Admin',
+            hintText: admins.isEmpty
+                ? 'No active Admin available'
+                : 'Select an Admin',
+            prefixIcon: const Icon(Icons.supervisor_account_outlined),
+          ),
+          items: admins.map((admin) {
+            return DropdownMenuItem<String>(
+              value: admin.uid,
+              child: Text(
+                _adminDisplayName(admin),
+                overflow: TextOverflow.ellipsis,
+              ),
+            );
+          }).toList(),
+          validator: (value) {
+            if (!_isUserRole(_selectedRole)) {
+              return null;
+            }
+
+            if (provider.isSuperAdmin &&
+                (value == null || value.trim().isEmpty)) {
+              return 'Please select an Admin.';
+            }
+
+            return null;
+          },
+          onChanged: _isLoading || admins.isEmpty
+              ? null
+              : (value) {
+                  setState(() {
+                    _selectedAdminUid = value;
+                  });
+                },
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(
+                Icons.info_outline_rounded,
+                size: 16,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                provider.isSuperAdmin
+                    ? 'The selected Admin will become the User\'s '
+                          'inventory scope. This does not change the '
+                          'User role.'
+                    : 'Users created by an Admin are automatically '
+                          'assigned to that Admin.',
+                style: TextStyle(
+                  color: colors.onSurfaceVariant,
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
   Widget _buildStatusSelector(BuildContext context) {
     return DropdownButtonFormField<String>(
       initialValue: _selectedStatus,
+      isExpanded: true,
       decoration: InputDecoration(
         labelText: 'Account Status',
         prefixIcon: const Icon(Icons.verified_user_outlined),
-        filled: true,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(15),
-          borderSide: BorderSide.none,
-        ),
       ),
       items: const [
         DropdownMenuItem(value: 'active', child: Text('Active')),
@@ -390,6 +605,63 @@ class _AddUserScreenState extends State<AddUserScreen> {
                 _selectedStatus = value;
               });
             },
+    );
+  }
+
+  Widget _buildScopeInformation(BuildContext context, UserProvider provider) {
+    final colors = Theme.of(context).colorScheme;
+
+    final String message;
+
+    if (provider.isSuperAdmin) {
+      if (_isUserRole(_selectedRole)) {
+        message = _selectedAdminUid == null
+            ? 'Select an Admin to define this User\'s inventory '
+                  'and operational scope.'
+            : 'This User will be linked to the selected Admin. '
+                  'The User will only receive inventory belonging to '
+                  'that Admin scope.';
+      } else {
+        message =
+            'This Admin will be created under the '
+            'Super Admin and will have broad operational access.';
+      }
+    } else if (provider.isAdmin) {
+      message =
+          'This User will automatically be linked to your '
+          'Admin account and will receive inventory from your '
+          'operational scope.';
+    } else {
+      message = 'You are not authorized to create system users.';
+    }
+
+    final brightness = Theme.of(context).brightness;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.tint(colors.primary, brightness),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline_rounded, size: 20, color: colors.primary),
+          const SizedBox(width: AppSpacing.sm + 2),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: colors.onSurface,
+                height: 1.45,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -433,49 +705,140 @@ class _AddUserScreenState extends State<AddUserScreen> {
     return null;
   }
 
+  bool _isUserRole(String role) {
+    return role.trim().toLowerCase() == AppConstants.USER.trim().toLowerCase();
+  }
+
+  String _adminDisplayName(UserModel admin) {
+    final name = admin.fullName.trim();
+
+    if (name.isNotEmpty) {
+      return '$name (${admin.email})';
+    }
+
+    return admin.email;
+  }
+
   // ============================================================
   // CREATE USER
   // ============================================================
 
   Future<void> _createUser() async {
+    // Guard before the first await: a quick double tap previously started
+    // two account creations.
+    if (_isLoading) {
+      return;
+    }
+
     if (!_formKey.currentState!.validate()) {
       return;
     }
 
     final userProvider = context.read<UserProvider>();
 
-    // ----------------------------------------------------------
-    // Verify that the current account is actually Super Admin.
-    // ----------------------------------------------------------
+    setState(() {
+      _isLoading = true;
+    });
 
     await userProvider.loadCurrentUserProfile(forceRefresh: true);
 
     if (!mounted) return;
 
+    setState(() {
+      _isLoading = false;
+    });
+
     if (!userProvider.canCreateUsers) {
-      _showError('Only the Super Admin can create system users.');
+      _showError('You are not authorized to create system users.');
       return;
     }
 
     final currentAdmin = FirebaseAuth.instance.currentUser;
 
     if (currentAdmin == null) {
-      _showError('You must be logged in as Super Admin.');
+      _showError('You must be logged in to create a user.');
       return;
     }
 
-    final superAdminUid = currentAdmin.uid.trim();
+    final currentUid = currentAdmin.uid.trim();
 
-    final superAdminEmail = currentAdmin.email?.trim().toLowerCase() ?? '';
-
-    if (superAdminUid.isEmpty) {
-      _showError('Unable to determine the Super Admin UID.');
+    if (currentUid.isEmpty) {
+      _showError('Unable to determine the current account.');
       return;
     }
 
-    if (superAdminEmail.isEmpty) {
-      _showError('Unable to determine the Super Admin email.');
+    final currentEmail = currentAdmin.email?.trim().toLowerCase() ?? '';
+
+    if (currentEmail.isEmpty) {
+      _showError('Unable to determine the current account email.');
       return;
+    }
+
+    /*
+     * ----------------------------------------------------------
+     * ROLE SECURITY
+     * ----------------------------------------------------------
+     *
+     * Public/user accounts must never create Admin accounts.
+     * Only the actual Super Admin can create an Admin.
+     */
+    if (_selectedRole == AppConstants.ADMIN && !userProvider.isSuperAdmin) {
+      _showError('Only the Super Admin can create an Admin account.');
+      return;
+    }
+
+    /*
+     * ----------------------------------------------------------
+     * DETERMINE ADMIN SCOPE
+     * ----------------------------------------------------------
+     *
+     * User:
+     *   Super Admin -> selected Admin
+     *   Admin       -> current Admin
+     *
+     * Admin:
+     *   createdBy = current Super Admin
+     */
+    String createdBy = currentUid;
+    String createdByEmail = currentEmail;
+
+    if (_isUserRole(_selectedRole)) {
+      if (userProvider.isSuperAdmin) {
+        final selectedAdminUid = _selectedAdminUid?.trim() ?? '';
+
+        if (selectedAdminUid.isEmpty) {
+          _showError('Please select an Admin for this User.');
+          return;
+        }
+
+        final selectedAdmin = userProvider.users
+            .where((user) => user.uid == selectedAdminUid)
+            .cast<UserModel?>()
+            .firstWhere((user) => user != null, orElse: () => null);
+
+        if (selectedAdmin == null) {
+          _showError('The selected Admin could not be found.');
+          return;
+        }
+
+        if (!_isAdminRole(selectedAdmin.role)) {
+          _showError('The selected account is not an Admin.');
+          return;
+        }
+
+        final selectedStatus = selectedAdmin.status.trim().toLowerCase();
+
+        if (selectedStatus == 'blocked' || selectedStatus == 'disabled') {
+          _showError('A blocked or disabled Admin cannot be assigned.');
+          return;
+        }
+
+        createdBy = selectedAdmin.uid.trim();
+        createdByEmail = selectedAdmin.email.trim().toLowerCase();
+      } else if (userProvider.isAdmin) {
+        createdBy = currentUid;
+        createdByEmail = currentEmail;
+      }
     }
 
     final email = _emailController.text.trim().toLowerCase();
@@ -490,14 +853,15 @@ class _AddUserScreenState extends State<AddUserScreen> {
     UserCredential? credential;
 
     try {
-      // --------------------------------------------------------
-      // Create a SECONDARY Firebase app.
-      //
-      // This is important because creating the new account with
-      // FirebaseAuth.instance directly would replace the current
-      // Super Admin authentication session.
-      // --------------------------------------------------------
-
+      /*
+       * --------------------------------------------------------
+       * CREATE SECONDARY FIREBASE APP
+       * --------------------------------------------------------
+       *
+       * Never use FirebaseAuth.instance for this operation,
+       * otherwise the newly-created user would replace the
+       * current Admin/Super Admin authentication session.
+       */
       secondaryApp = await Firebase.initializeApp(
         name: 'add-user-${DateTime.now().microsecondsSinceEpoch}',
         options: Firebase.app().options,
@@ -505,10 +869,11 @@ class _AddUserScreenState extends State<AddUserScreen> {
 
       final secondaryAuth = FirebaseAuth.instanceFor(app: secondaryApp);
 
-      // --------------------------------------------------------
-      // Create Firebase Authentication account.
-      // --------------------------------------------------------
-
+      /*
+       * --------------------------------------------------------
+       * CREATE FIREBASE AUTH ACCOUNT
+       * --------------------------------------------------------
+       */
       credential = await secondaryAuth.createUserWithEmailAndPassword(
         email: email,
         password: password,
@@ -520,10 +885,11 @@ class _AddUserScreenState extends State<AddUserScreen> {
         throw Exception('Firebase did not return the newly created user.');
       }
 
-      // --------------------------------------------------------
-      // Build Firestore profile.
-      // --------------------------------------------------------
-
+      /*
+       * --------------------------------------------------------
+       * BUILD FIRESTORE PROFILE
+       * --------------------------------------------------------
+       */
       final userModel = UserModel(
         uid: newUser.uid,
         name: _nameController.text.trim(),
@@ -534,31 +900,52 @@ class _AddUserScreenState extends State<AddUserScreen> {
         department: _departmentController.text.trim(),
         designation: _designationController.text.trim(),
         createdAt: DateTime.now(),
-        createdBy: superAdminUid,
-        createdByEmail: superAdminEmail,
+        createdBy: createdBy,
+        createdByEmail: createdByEmail,
       );
 
-      // --------------------------------------------------------
-      // IMPORTANT:
-      // Use UserProvider/UserService flow instead of writing
-      // directly to Firestore from this screen.
-      //
-      // UserService also protects against accidentally creating
-      // another Super Admin.
-      // --------------------------------------------------------
-
+      /*
+       * UserProvider/UserService remains the single application
+       * flow for profile creation.
+       */
       await userProvider.createUser(userModel);
 
-      // --------------------------------------------------------
-      // Sign out the secondary authentication session only.
-      // The original Super Admin session remains untouched.
-      // --------------------------------------------------------
+      /*
+       * Login requires a verified email address. Without this email an
+       * account created here could never sign in.
+       */
+      var verificationSent = true;
 
+      try {
+        await newUser.sendEmailVerification();
+      } catch (_) {
+        verificationSent = false;
+      }
+
+      /*
+       * Sign out only the secondary authentication session.
+       * The original account remains logged in.
+       */
       await secondaryAuth.signOut();
 
       if (!mounted) return;
 
-      _showSuccess('User account created successfully.');
+      final accountLabel = _selectedRole == AppConstants.ADMIN
+          ? 'Admin'
+          : 'User';
+
+      if (verificationSent) {
+        _showSuccess(
+          '$accountLabel account created. A verification email was sent to '
+          '$email; the account can sign in after verifying it.',
+        );
+      } else {
+        _showError(
+          '$accountLabel account created, but the verification email could '
+          'not be sent now. A new verification email is sent automatically '
+          'when the account first tries to sign in.',
+        );
+      }
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 
@@ -566,12 +953,6 @@ class _AddUserScreenState extends State<AddUserScreen> {
 
       Navigator.of(context).pop(true);
     } on FirebaseAuthException catch (e) {
-      // --------------------------------------------------------
-      // If Firestore creation fails after Auth creation, remove
-      // the newly created Auth account so we do not leave an
-      // orphan Firebase Authentication account.
-      // --------------------------------------------------------
-
       if (credential?.user != null) {
         try {
           await credential!.user!.delete();
@@ -590,7 +971,11 @@ class _AddUserScreenState extends State<AddUserScreen> {
 
       if (!mounted) return;
 
-      _showError(e.message ?? 'Unable to create the user profile.');
+      _showError(
+        e.message?.trim().isNotEmpty == true
+            ? e.message!
+            : 'Unable to create the user profile.',
+      );
     } catch (e) {
       if (credential?.user != null) {
         try {
@@ -602,10 +987,6 @@ class _AddUserScreenState extends State<AddUserScreen> {
 
       _showError(_cleanError(e));
     } finally {
-      // --------------------------------------------------------
-      // Always delete the temporary Firebase app.
-      // --------------------------------------------------------
-
       if (secondaryApp != null) {
         try {
           await secondaryApp.delete();
@@ -618,6 +999,10 @@ class _AddUserScreenState extends State<AddUserScreen> {
         });
       }
     }
+  }
+
+  bool _isAdminRole(String role) {
+    return role.trim().toLowerCase() == AppConstants.ADMIN.trim().toLowerCase();
   }
 
   String _authErrorMessage(FirebaseAuthException e) {

@@ -1,13 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 class RequestModel {
   final String id;
-
   final String requestType;
-
-  /// Firestore document ID of the asset involved in this request.
   final String assetId;
-
   final String assetName;
   final String category;
   final String reason;
@@ -17,98 +11,110 @@ class RequestModel {
   final String requestedBy;
   final String requestedUserName;
 
-  final String status;
+  final String receiverId;
+  final String receiverName;
+  final String receiverContact;
 
+  final String status;
   final String adminRemarks;
 
-  final DateTime requestDate;
+  final DateTime? requestDate;
   final DateTime? approvedDate;
-
   final String approvedBy;
 
-  /// Proposed changes for Edit requests.
-  ///
-  /// These changes are NOT applied to the asset immediately.
-  /// They are stored inside the request and are applied only
-  /// after Super Admin approves the request.
+  final Map<String, dynamic>? previousAssetData;
   final Map<String, dynamic>? proposedAssetData;
 
-  RequestModel({
-    required this.id,
-    required this.requestType,
+  final String sourceLocation;
+  final String sourceBazaarId;
+  final String sourceBazaarName;
+  final String destinationBazaarId;
+  final String destinationBazaarName;
+  final int transferQuantity;
+  final String transferRemarks;
+
+  const RequestModel({
+    this.id = '',
+    this.requestType = '',
     this.assetId = '',
-    required this.assetName,
+    this.assetName = '',
     this.category = '',
-    required this.reason,
-    this.priority = 'Medium',
+    this.reason = '',
+    this.priority = 'Normal',
     this.attachmentUrl = '',
-    required this.requestedBy,
-    required this.requestedUserName,
+    this.requestedBy = '',
+    this.requestedUserName = '',
+    this.receiverId = '',
+    this.receiverName = '',
+    this.receiverContact = '',
     this.status = 'Pending',
     this.adminRemarks = '',
-    required this.requestDate,
+    this.requestDate,
     this.approvedDate,
     this.approvedBy = '',
+    this.previousAssetData,
     this.proposedAssetData,
+    this.sourceLocation = '',
+    this.sourceBazaarId = '',
+    this.sourceBazaarName = '',
+    this.destinationBazaarId = '',
+    this.destinationBazaarName = '',
+    this.transferQuantity = 0,
+    this.transferRemarks = '',
   });
 
-  // ============================================================
-  // FIRESTORE
-  // ============================================================
-
-  factory RequestModel.fromFirestore(
-    Map<String, dynamic> data,
-    String documentId,
-  ) {
-    return RequestModel.fromMap(data, documentId);
-  }
-
-  Map<String, dynamic> toFirestore() {
-    return toMap();
-  }
-
-  // ============================================================
-  // FROM MAP
-  // ============================================================
-
-  factory RequestModel.fromMap(Map<String, dynamic> map, String documentId) {
-    Map<String, dynamic>? proposedData;
-
-    final rawProposedData = map['proposedAssetData'];
-
-    if (rawProposedData is Map) {
-      proposedData = Map<String, dynamic>.from(rawProposedData);
-    }
-
+  factory RequestModel.fromMap(
+    Map<String, dynamic> map, {
+    String id = '',
+  }) {
     return RequestModel(
-      id: documentId,
-      requestType: _stringValue(map['requestType'], fallback: 'Edit'),
-      assetId: _stringValue(map['assetId']),
-      assetName: _stringValue(map['assetName']),
-      category: _stringValue(map['category']),
-      reason: _stringValue(map['reason']),
-      priority: _stringValue(map['priority'], fallback: 'Medium'),
-      attachmentUrl: _stringValue(map['attachmentUrl']),
-      requestedBy: _stringValue(map['requestedBy']),
-      requestedUserName: _stringValue(
-        map['requestedUserName'],
-        fallback: 'User',
+      id: id.isNotEmpty ? id : _readString(map['id']),
+      requestType: _readString(map['requestType']),
+      assetId: _readString(map['assetId']),
+      assetName: _readString(map['assetName']),
+      category: _readString(map['category']),
+      reason: _readString(map['reason']),
+      priority: _readString(
+        map['priority'],
+        fallback: 'Normal',
       ),
-      status: _stringValue(map['status'], fallback: 'Pending'),
-      adminRemarks: _stringValue(map['adminRemarks']),
-      requestDate: _dateValue(map['requestDate']) ?? DateTime.now(),
-      approvedDate: _dateValue(map['approvedDate']),
-      approvedBy: _stringValue(map['approvedBy']),
-      proposedAssetData: proposedData,
+      attachmentUrl: _readString(map['attachmentUrl']),
+      requestedBy: _readString(map['requestedBy']),
+      requestedUserName: _readString(map['requestedUserName']),
+
+      receiverId: _readString(map['receiverId']),
+      receiverName: _readString(map['receiverName']),
+      receiverContact: _readString(map['receiverContact']),
+
+      status: _readString(
+        map['status'],
+        fallback: 'Pending',
+      ),
+      adminRemarks: _readString(map['adminRemarks']),
+      requestDate: _readDateTime(map['requestDate']),
+      approvedDate: _readDateTime(map['approvedDate']),
+      approvedBy: _readString(map['approvedBy']),
+
+      previousAssetData: _readMap(map['previousAssetData']),
+      proposedAssetData: _readMap(map['proposedAssetData']),
+
+      sourceLocation: _readString(map['sourceLocation']),
+      sourceBazaarId: _readString(map['sourceBazaarId']),
+      sourceBazaarName: _readString(map['sourceBazaarName']),
+      destinationBazaarId: _readString(map['destinationBazaarId']),
+      destinationBazaarName: _readString(map['destinationBazaarName']),
+
+      transferQuantity: _readInt(
+        map['transferQuantity'] ?? map['quantity'],
+      ),
+
+      transferRemarks: _readString(map['transferRemarks']),
     );
   }
 
-  // ============================================================
-  // TO MAP
-  // ============================================================
-
   Map<String, dynamic> toMap() {
     return {
+      'id': id,
       'requestType': requestType,
       'assetId': assetId,
       'assetName': assetName,
@@ -118,22 +124,29 @@ class RequestModel {
       'attachmentUrl': attachmentUrl,
       'requestedBy': requestedBy,
       'requestedUserName': requestedUserName,
+
+      'receiverId': receiverId,
+      'receiverName': receiverName,
+      'receiverContact': receiverContact,
+
       'status': status,
       'adminRemarks': adminRemarks,
-      'requestDate': Timestamp.fromDate(requestDate),
-      'approvedDate': approvedDate != null
-          ? Timestamp.fromDate(approvedDate!)
-          : null,
+      'requestDate': requestDate,
+      'approvedDate': approvedDate,
       'approvedBy': approvedBy,
 
-      // Store proposed changes for Super Admin approval.
+      'previousAssetData': previousAssetData,
       'proposedAssetData': proposedAssetData,
+
+      'sourceLocation': sourceLocation,
+      'sourceBazaarId': sourceBazaarId,
+      'sourceBazaarName': sourceBazaarName,
+      'destinationBazaarId': destinationBazaarId,
+      'destinationBazaarName': destinationBazaarName,
+      'transferQuantity': transferQuantity,
+      'transferRemarks': transferRemarks,
     };
   }
-
-  // ============================================================
-  // COPY WITH
-  // ============================================================
 
   RequestModel copyWith({
     String? id,
@@ -146,14 +159,23 @@ class RequestModel {
     String? attachmentUrl,
     String? requestedBy,
     String? requestedUserName,
+    String? receiverId,
+    String? receiverName,
+    String? receiverContact,
     String? status,
     String? adminRemarks,
     DateTime? requestDate,
     DateTime? approvedDate,
     String? approvedBy,
+    Map<String, dynamic>? previousAssetData,
     Map<String, dynamic>? proposedAssetData,
-    bool clearApprovedDate = false,
-    bool clearProposedAssetData = false,
+    String? sourceLocation,
+    String? sourceBazaarId,
+    String? sourceBazaarName,
+    String? destinationBazaarId,
+    String? destinationBazaarName,
+    int? transferQuantity,
+    String? transferRemarks,
   }) {
     return RequestModel(
       id: id ?? this.id,
@@ -166,86 +188,142 @@ class RequestModel {
       attachmentUrl: attachmentUrl ?? this.attachmentUrl,
       requestedBy: requestedBy ?? this.requestedBy,
       requestedUserName: requestedUserName ?? this.requestedUserName,
+
+      receiverId: receiverId ?? this.receiverId,
+      receiverName: receiverName ?? this.receiverName,
+      receiverContact: receiverContact ?? this.receiverContact,
+
       status: status ?? this.status,
       adminRemarks: adminRemarks ?? this.adminRemarks,
       requestDate: requestDate ?? this.requestDate,
-      approvedDate: clearApprovedDate
-          ? null
-          : approvedDate ?? this.approvedDate,
+      approvedDate: approvedDate ?? this.approvedDate,
       approvedBy: approvedBy ?? this.approvedBy,
-      proposedAssetData: clearProposedAssetData
-          ? null
-          : proposedAssetData ?? this.proposedAssetData,
+
+      previousAssetData:
+          previousAssetData ?? this.previousAssetData,
+      proposedAssetData:
+          proposedAssetData ?? this.proposedAssetData,
+
+      sourceLocation: sourceLocation ?? this.sourceLocation,
+      sourceBazaarId:
+          sourceBazaarId ?? this.sourceBazaarId,
+      sourceBazaarName:
+          sourceBazaarName ?? this.sourceBazaarName,
+      destinationBazaarId:
+          destinationBazaarId ?? this.destinationBazaarId,
+      destinationBazaarName:
+          destinationBazaarName ?? this.destinationBazaarName,
+      transferQuantity:
+          transferQuantity ?? this.transferQuantity,
+      transferRemarks:
+          transferRemarks ?? this.transferRemarks,
     );
   }
 
-  // ============================================================
-  // STATUS HELPERS
-  // ============================================================
+  bool get isPending =>
+      status.trim().toLowerCase() == 'pending';
 
-  bool get isPending {
-    return status.trim().toLowerCase() == 'pending';
-  }
+  bool get isApproved =>
+      status.trim().toLowerCase() == 'approved';
 
-  bool get isApproved {
-    return status.trim().toLowerCase() == 'approved';
-  }
+  bool get isRejected =>
+      status.trim().toLowerCase() == 'rejected';
 
-  bool get isRejected {
-    return status.trim().toLowerCase() == 'rejected';
-  }
+  bool get isTransferRequest =>
+      requestType.trim().toLowerCase() == 'transfer';
 
-  // ============================================================
-  // REQUEST TYPE HELPERS
-  // ============================================================
+  bool get isEditRequest =>
+      requestType.trim().toLowerCase() == 'edit';
 
-  bool get isAddRequest {
-    return requestType.trim().toLowerCase() == 'add';
-  }
+  bool get isDeleteRequest =>
+      requestType.trim().toLowerCase() == 'delete';
 
-  bool get isEditRequest {
-    return requestType.trim().toLowerCase() == 'edit';
-  }
+  bool get hasReceiver =>
+      receiverId.trim().isNotEmpty ||
+      receiverName.trim().isNotEmpty ||
+      receiverContact.trim().isNotEmpty;
 
-  bool get isDeleteRequest {
-    return requestType.trim().toLowerCase() == 'delete';
-  }
+  bool get hasDestinationBazaar =>
+      destinationBazaarId.trim().isNotEmpty ||
+      destinationBazaarName.trim().isNotEmpty;
 
-  // ============================================================
-  // PROPOSED DATA HELPERS
-  // ============================================================
+  bool get hasTransferData =>
+      isTransferRequest &&
+      (
+        assetId.trim().isNotEmpty ||
+        sourceLocation.trim().isNotEmpty ||
+        sourceBazaarId.trim().isNotEmpty ||
+        destinationBazaarId.trim().isNotEmpty ||
+        destinationBazaarName.trim().isNotEmpty ||
+        transferQuantity > 0
+      );
 
-  bool get hasProposedAssetData {
-    return proposedAssetData != null && proposedAssetData!.isNotEmpty;
-  }
-
-  // ============================================================
-  // VALUE HELPERS
-  // ============================================================
-
-  static String _stringValue(dynamic value, {String fallback = ''}) {
+  static String _readString(
+    dynamic value, {
+    String fallback = '',
+  }) {
     if (value == null) {
       return fallback;
     }
 
-    return value.toString();
-  }
+    final result = value.toString().trim();
 
-  static DateTime? _dateValue(dynamic value) {
-    if (value == null) {
-      return null;
+    if (result.isEmpty) {
+      return fallback;
     }
 
-    if (value is Timestamp) {
-      return value.toDate();
+    return result;
+  }
+
+  static int _readInt(dynamic value) {
+    if (value == null) {
+      return 0;
+    }
+
+    if (value is int) {
+      return value;
+    }
+
+    if (value is num) {
+      return value.toInt();
+    }
+
+    return int.tryParse(value.toString()) ?? 0;
+  }
+
+  static DateTime? _readDateTime(dynamic value) {
+    if (value == null) {
+      return null;
     }
 
     if (value is DateTime) {
       return value;
     }
 
+    try {
+      final dynamic timestampDate = value.toDate();
+
+      if (timestampDate is DateTime) {
+        return timestampDate;
+      }
+    } catch (_) {
+      // Continue with string parsing.
+    }
+
     if (value is String) {
       return DateTime.tryParse(value);
+    }
+
+    return null;
+  }
+
+  static Map<String, dynamic>? _readMap(dynamic value) {
+    if (value is Map<String, dynamic>) {
+      return Map<String, dynamic>.from(value);
+    }
+
+    if (value is Map) {
+      return Map<String, dynamic>.from(value);
     }
 
     return null;

@@ -21,12 +21,18 @@ class UserProvider extends ChangeNotifier {
 
   bool _isLoading = false;
   bool _isLoadingCurrentUser = false;
+  bool _isTransferringSuperAdmin = false;
 
   String? _errorMessage;
   String? _currentUserError;
 
   StreamSubscription<List<UserModel>>? _usersSubscription;
   StreamSubscription<User?>? _authSubscription;
+  StreamSubscription<UserModel?>? _profileSubscription;
+
+  // True only when Firestore definitively reports that the signed-in account
+  // has no profile document (never set for network/permission failures).
+  bool _currentUserProfileNotFound = false;
 
   String? _activeAuthUid;
 
@@ -46,9 +52,12 @@ class UserProvider extends ChangeNotifier {
 
   int get totalUsers => _users.length;
 
+  bool get isTransferringSuperAdmin => _isTransferringSuperAdmin;
+
   int get activeUsers {
     return _users.where((user) {
       final status = user.status.trim().toLowerCase();
+
       return status == 'active' || status == 'approved';
     }).length;
   }
@@ -105,21 +114,23 @@ class UserProvider extends ChangeNotifier {
 
   bool get hasLoadedCurrentUser => _currentUserProfile != null;
 
+  bool get isCurrentUserProfileNotFound => _currentUserProfileNotFound;
+
   // ============================================================
   // ROLE-BASED PERMISSIONS
   // ============================================================
 
-  bool get canManageUsers => isSuperAdmin;
+  bool get canManageUsers => isSuperAdmin || isAdmin;
 
-  bool get canCreateUsers => isSuperAdmin;
+  bool get canCreateUsers => isSuperAdmin || isAdmin;
 
   bool get canManageRoles => isSuperAdmin;
 
   bool get canManageUserStatus => isSuperAdmin;
 
-  bool get canDeleteUsers => isSuperAdmin;
+  bool get canDeleteUsers => isSuperAdmin || isAdmin;
 
-  bool get canManageRequests => isSuperAdmin || isAdmin;
+  bool get canManageRequests => isSuperAdmin;
 
   bool get canCreateRequests => isSuperAdmin || isAdmin || isNormalUser;
 
@@ -136,16 +147,6 @@ class UserProvider extends ChangeNotifier {
 
     final initialUser = _firebaseAuth.currentUser;
 
-    /*
-     * IMPORTANT:
-     *
-     * Do NOT wait only for authStateChanges().
-     *
-     * FirebaseAuth.currentUser can already contain a signed-in
-     * account when this provider is created.
-     *
-     * Therefore we bootstrap the current account immediately.
-     */
     _activeAuthUid = initialUser?.uid;
 
     _authSubscription = _firebaseAuth.authStateChanges().listen(
@@ -171,11 +172,10 @@ class UserProvider extends ChangeNotifier {
     final newUid = firebaseUser?.uid;
     final previousUid = _activeAuthUid;
 
-    /*
-     * LOGOUT
-     *
-     * Always clear local state immediately.
-     */
+    // ----------------------------------------------------------
+    // LOGOUT
+    // ----------------------------------------------------------
+
     if (firebaseUser == null) {
       _authGeneration++;
 
@@ -188,40 +188,34 @@ class UserProvider extends ChangeNotifier {
 
       _isLoading = false;
       _isLoadingCurrentUser = false;
+      _isTransferringSuperAdmin = false;
 
       _errorMessage = null;
       _currentUserError = null;
 
       notifyListeners();
+
       return;
     }
 
-    /*
-     * SAME USER
-     *
-     * Firebase may emit an initial authStateChanges event for the
-     * same user that was already available through currentUser.
-     *
-     * If the profile is already loaded, there is nothing to reset.
-     *
-     * If it is NOT loaded, bootstrap it now.
-     */
+    // ----------------------------------------------------------
+    // SAME USER
+    // ----------------------------------------------------------
+
     if (newUid == previousUid) {
       if (_currentUserProfile?.uid == newUid) {
         return;
       }
 
       _startUserSession(firebaseUser);
+
       return;
     }
 
-    /*
-     * DIFFERENT USER
-     *
-     * User A -> logout -> User B
-     *
-     * Destroy every piece of User A state before loading User B.
-     */
+    // ----------------------------------------------------------
+    // DIFFERENT USER
+    // ----------------------------------------------------------
+
     _authGeneration++;
 
     _activeAuthUid = newUid;
@@ -233,6 +227,7 @@ class UserProvider extends ChangeNotifier {
 
     _isLoading = false;
     _isLoadingCurrentUser = false;
+    _isTransferringSuperAdmin = false;
 
     _errorMessage = null;
     _currentUserError = null;
@@ -253,15 +248,8 @@ class UserProvider extends ChangeNotifier {
       return;
     }
 
-    /*
-     * Make absolutely sure the session belongs to this UID.
-     */
     _activeAuthUid = uid;
 
-    /*
-     * New generation prevents old Firestore requests from writing
-     * data after logout/account switching.
-     */
     _authGeneration++;
 
     final generation = _authGeneration;
@@ -273,6 +261,7 @@ class UserProvider extends ChangeNotifier {
 
     _isLoading = false;
     _isLoadingCurrentUser = true;
+    _isTransferringSuperAdmin = false;
 
     _errorMessage = null;
     _currentUserError = null;
@@ -292,18 +281,13 @@ class UserProvider extends ChangeNotifier {
     try {
       final profile = await _userService.getUserById(uid);
 
-      /*
-       * CRITICAL RACE-CONDITION PROTECTION
-       *
-       * If the account changed while Firestore was loading,
-       * discard this response completely.
-       */
       if (!_isSessionValid(uid, generation)) {
         return;
       }
 
       if (profile == null) {
         _currentUserProfile = null;
+        _currentUserProfileNotFound = true;
 
         _currentUserError =
             'Your user profile could not be found in Firestore.';
@@ -311,12 +295,14 @@ class UserProvider extends ChangeNotifier {
         _isLoadingCurrentUser = false;
 
         notifyListeners();
+
+        // Keep watching: during signup the profile document is created a
+        // moment after the Firebase Auth account.
+        _startProfileListener(uid, generation);
+
         return;
       }
 
-      /*
-       * Extra protection against a malformed Firestore profile.
-       */
       if (profile.uid.trim() != uid.trim()) {
         _currentUserProfile = null;
 
@@ -326,24 +312,22 @@ class UserProvider extends ChangeNotifier {
         _isLoadingCurrentUser = false;
 
         notifyListeners();
+
         return;
       }
 
       _currentUserProfile = profile;
+      _currentUserProfileNotFound = false;
+
       _currentUserError = null;
+
       _isLoadingCurrentUser = false;
 
       notifyListeners();
 
-      /*
-       * Only start organization/user listeners AFTER the current
-       * user's profile is known.
-       *
-       * This prevents role-based queries from using User A's
-       * previous role/profile.
-       */
       if (_isSessionValid(uid, generation)) {
         _startUsersListenerForCurrentUser(uid, generation);
+        _startProfileListener(uid, generation);
       }
     } catch (e) {
       if (!_isSessionValid(uid, generation)) {
@@ -351,11 +335,78 @@ class UserProvider extends ChangeNotifier {
       }
 
       _currentUserProfile = null;
+
       _currentUserError = _cleanError(e);
+
       _isLoadingCurrentUser = false;
 
       notifyListeners();
     }
+  }
+
+  // ============================================================
+  // LIVE CURRENT PROFILE
+  //
+  // Status and role changes made by a Super Admin/Admin apply to an
+  // already signed-in account immediately (e.g. a disabled account
+  // is signed out, a removed role loses its permissions) instead of
+  // only after an app restart.
+  // ============================================================
+
+  void _startProfileListener(String uid, int generation) {
+    if (!_isSessionValid(uid, generation)) {
+      return;
+    }
+
+    _profileSubscription?.cancel();
+
+    _profileSubscription = _userService
+        .watchUserById(uid)
+        .listen(
+          (profile) {
+            if (!_isSessionValid(uid, generation)) {
+              return;
+            }
+
+            if (profile == null) {
+              _currentUserProfile = null;
+              _currentUserProfileNotFound = true;
+              _currentUserError =
+                  'Your user profile could not be found in Firestore.';
+
+              _usersSubscription?.cancel();
+              _usersSubscription = null;
+              _users = [];
+
+              notifyListeners();
+              return;
+            }
+
+            final previousRole = currentUserRole;
+            final hadProfile = _currentUserProfile != null;
+
+            _currentUserProfile = profile;
+            _currentUserProfileNotFound = false;
+            _currentUserError = null;
+            _isLoadingCurrentUser = false;
+
+            if (!hadProfile || _normalizeRole(profile.role) != previousRole) {
+              // Scope of visible users depends on the role.
+              _startUsersListenerForCurrentUser(uid, generation);
+            } else {
+              notifyListeners();
+            }
+          },
+          onError: (Object error) {
+            if (!_isSessionValid(uid, generation)) {
+              return;
+            }
+
+            _currentUserError = _cleanError(error);
+
+            notifyListeners();
+          },
+        );
   }
 
   // ============================================================
@@ -390,7 +441,11 @@ class UserProvider extends ChangeNotifier {
       return _userService.getUsers();
     }
 
-    return _userService.getUsersCreatedBy(superAdminUid: currentUser.uid);
+    if (isAdmin) {
+      return _userService.getUsersCreatedBy(adminUid: currentUser.uid);
+    }
+
+    return Stream.value(const <UserModel>[]);
   }
 
   // ============================================================
@@ -407,6 +462,7 @@ class UserProvider extends ChangeNotifier {
     }
 
     final uid = firebaseUser.uid;
+
     final generation = _authGeneration;
 
     if (!forceRefresh &&
@@ -417,6 +473,7 @@ class UserProvider extends ChangeNotifier {
     }
 
     _isLoadingCurrentUser = true;
+
     _currentUserError = null;
 
     notifyListeners();
@@ -430,9 +487,12 @@ class UserProvider extends ChangeNotifier {
 
       if (profile == null) {
         _currentUserProfile = null;
+        _currentUserProfileNotFound = true;
 
         _currentUserError =
             'Your user profile could not be found in Firestore.';
+
+        _startProfileListener(uid, generation);
 
         return null;
       }
@@ -447,7 +507,19 @@ class UserProvider extends ChangeNotifier {
       }
 
       _currentUserProfile = profile;
+      _currentUserProfileNotFound = false;
+
       _currentUserError = null;
+
+      // A profile obtained here (e.g. Retry after a failed first load) must
+      // still receive live status/role changes and the scoped users list.
+      if (_profileSubscription == null) {
+        _startProfileListener(uid, generation);
+      }
+
+      if (_usersSubscription == null) {
+        _startUsersListenerForCurrentUser(uid, generation);
+      }
 
       return profile;
     } catch (e) {
@@ -459,6 +531,7 @@ class UserProvider extends ChangeNotifier {
     } finally {
       if (generation == _authGeneration) {
         _isLoadingCurrentUser = false;
+
         notifyListeners();
       }
     }
@@ -474,10 +547,13 @@ class UserProvider extends ChangeNotifier {
     }
 
     _usersSubscription?.cancel();
+
     _usersSubscription = null;
 
     _users = [];
+
     _isLoading = true;
+
     _errorMessage = null;
 
     notifyListeners();
@@ -486,16 +562,30 @@ class UserProvider extends ChangeNotifier {
 
     if (profile == null) {
       _isLoading = false;
+
       notifyListeners();
+
       return;
     }
 
+    final role = _normalizeRole(profile.role);
+
     final Stream<List<UserModel>> stream;
 
-    if (_normalizeRole(profile.role) == 'super_admin') {
+    if (role == 'super_admin') {
+      stream = _userService.getUsers();
+    } else if (role == 'admin') {
+      // Admins see every account (the rules allow managers to read all
+      // profiles); what they may CHANGE is still limited per user.
       stream = _userService.getUsers();
     } else {
-      stream = _userService.getUsersCreatedBy(superAdminUid: uid);
+      _isLoading = false;
+
+      _users = [];
+
+      notifyListeners();
+
+      return;
     }
 
     _usersSubscription = stream.listen(
@@ -505,7 +595,9 @@ class UserProvider extends ChangeNotifier {
         }
 
         _users = List<UserModel>.from(data);
+
         _isLoading = false;
+
         _errorMessage = null;
 
         notifyListeners();
@@ -516,6 +608,7 @@ class UserProvider extends ChangeNotifier {
         }
 
         _isLoading = false;
+
         _errorMessage = _cleanError(error);
 
         notifyListeners();
@@ -532,11 +625,13 @@ class UserProvider extends ChangeNotifier {
 
     if (currentUser == null) {
       _clearUserSessionState(notify: true);
+
       return;
     }
 
     if (_currentUserProfile == null) {
       loadCurrentUserProfile(forceRefresh: true);
+
       return;
     }
 
@@ -548,19 +643,19 @@ class UserProvider extends ChangeNotifier {
   }
 
   // ============================================================
-  // LISTEN TO USERS CREATED BY SPECIFIC SUPER ADMIN
+  // LISTEN TO USERS CREATED BY ADMIN
   // ============================================================
 
-  void listenToUsersCreatedBy(
-    String superAdminUid, {
-    bool forceRestart = false,
-  }) {
-    final cleanUid = superAdminUid.trim();
+  void listenToUsersCreatedBy(String adminUid, {bool forceRestart = false}) {
+    final cleanUid = adminUid.trim();
 
     if (cleanUid.isEmpty) {
       _isLoading = false;
-      _errorMessage = 'Super Admin UID is required.';
+
+      _errorMessage = 'Admin UID is required.';
+
       notifyListeners();
+
       return;
     }
 
@@ -568,21 +663,15 @@ class UserProvider extends ChangeNotifier {
 
     if (currentUser == null) {
       _clearUserSessionState(notify: true);
+
       return;
     }
 
-    /*
-     * Security/UX protection:
-     *
-     * Do not allow an arbitrary screen to start a listener for
-     * another authenticated session.
-     *
-     * The requested Super Admin UID must belong to the current
-     * session unless the current user is the Super Admin itself.
-     */
-    if (!isSuperAdmin && cleanUid != currentUser.uid) {
+    if (!isSuperAdmin && (!isAdmin || cleanUid != currentUser.uid)) {
       _errorMessage = 'You are not authorized to access these users.';
+
       notifyListeners();
+
       return;
     }
 
@@ -591,19 +680,23 @@ class UserProvider extends ChangeNotifier {
     }
 
     _usersSubscription?.cancel();
+
     _usersSubscription = null;
 
     _users = [];
+
     _isLoading = true;
+
     _errorMessage = null;
 
     notifyListeners();
 
     final generation = _authGeneration;
+
     final authUid = currentUser.uid;
 
     _usersSubscription = _userService
-        .getUsersCreatedBy(superAdminUid: cleanUid)
+        .getUsersCreatedBy(adminUid: cleanUid)
         .listen(
           (data) {
             if (!_isSessionValid(authUid, generation)) {
@@ -611,7 +704,9 @@ class UserProvider extends ChangeNotifier {
             }
 
             _users = List<UserModel>.from(data);
+
             _isLoading = false;
+
             _errorMessage = null;
 
             notifyListeners();
@@ -622,6 +717,7 @@ class UserProvider extends ChangeNotifier {
             }
 
             _isLoading = false;
+
             _errorMessage = _cleanError(error);
 
             notifyListeners();
@@ -638,6 +734,7 @@ class UserProvider extends ChangeNotifier {
 
     if (currentUser == null) {
       _clearUserSessionState(notify: true);
+
       return;
     }
 
@@ -650,11 +747,13 @@ class UserProvider extends ChangeNotifier {
     }
 
     _isLoading = true;
+
     _errorMessage = null;
 
     notifyListeners();
 
     final uid = currentUser.uid;
+
     final generation = _authGeneration;
 
     try {
@@ -662,8 +761,16 @@ class UserProvider extends ChangeNotifier {
 
       if (isSuperAdmin) {
         stream = _userService.getUsers();
+      } else if (isAdmin) {
+        stream = _userService.getUsersCreatedBy(adminUid: uid);
       } else {
-        stream = _userService.getUsersCreatedBy(superAdminUid: uid);
+        _users = [];
+
+        _isLoading = false;
+
+        notifyListeners();
+
+        return;
       }
 
       await for (final data in stream) {
@@ -672,6 +779,7 @@ class UserProvider extends ChangeNotifier {
         }
 
         _users = List<UserModel>.from(data);
+
         break;
       }
 
@@ -685,6 +793,7 @@ class UserProvider extends ChangeNotifier {
     } finally {
       if (generation == _authGeneration) {
         _isLoading = false;
+
         notifyListeners();
       }
     }
@@ -702,7 +811,38 @@ class UserProvider extends ChangeNotifier {
     }
 
     try {
-      return await _userService.getUserById(cleanUid);
+      final target = await _userService.getUserById(cleanUid);
+
+      if (target == null) {
+        return null;
+      }
+
+      if (isSuperAdmin) {
+        return target;
+      }
+
+      if (isAdmin) {
+        if (target.uid == currentUserUid) {
+          return target;
+        }
+
+        final belongsToAdmin = await _userService.isUserCreatedByAdmin(
+          userUid: target.uid,
+          adminUid: currentUserUid ?? '',
+        );
+
+        if (belongsToAdmin) {
+          return target;
+        }
+
+        throw Exception('You are not authorized to access this user.');
+      }
+
+      if (isNormalUser && target.uid == currentUserUid) {
+        return target;
+      }
+
+      return null;
     } catch (e) {
       _errorMessage = _cleanError(e);
 
@@ -724,7 +864,38 @@ class UserProvider extends ChangeNotifier {
     }
 
     try {
-      return await _userService.getUserByEmail(cleanEmail);
+      final target = await _userService.getUserByEmail(cleanEmail);
+
+      if (target == null) {
+        return null;
+      }
+
+      if (isSuperAdmin) {
+        return target;
+      }
+
+      if (isAdmin) {
+        if (target.uid == currentUserUid) {
+          return target;
+        }
+
+        final belongsToAdmin = await _userService.isUserCreatedByAdmin(
+          userUid: target.uid,
+          adminUid: currentUserUid ?? '',
+        );
+
+        if (belongsToAdmin) {
+          return target;
+        }
+
+        throw Exception('You are not authorized to access this user.');
+      }
+
+      if (isNormalUser && target.uid == currentUserUid) {
+        return target;
+      }
+
+      return null;
     } catch (e) {
       _errorMessage = _cleanError(e);
 
@@ -745,29 +916,67 @@ class UserProvider extends ChangeNotifier {
       final currentUser = _firebaseAuth.currentUser;
 
       if (currentUser == null) {
-        throw Exception(
-          'You must be logged in as Super Admin to create users.',
-        );
+        throw Exception('You must be logged in to create users.');
       }
 
       final currentProfile = await _userService.getUserById(currentUser.uid);
 
-      if (currentProfile == null ||
-          _normalizeRole(currentProfile.role) != 'super_admin') {
-        throw Exception('Only the Super Admin can create system users.');
+      if (currentProfile == null) {
+        throw Exception('Your user profile could not be found.');
       }
+
+      final currentRole = _normalizeRole(currentProfile.role);
 
       final currentEmail = currentUser.email?.trim().toLowerCase() ?? '';
 
       if (currentEmail.isEmpty) {
-        throw Exception('Super Admin email could not be determined.');
+        throw Exception('Your account email could not be determined.');
       }
 
-      await _userService.createUserProfileForSuperAdmin(
-        user: user,
-        superAdminUid: currentUser.uid,
-        superAdminEmail: currentEmail,
-      );
+      // --------------------------------------------------------
+      // SUPER ADMIN CREATES ADMIN OR USER
+      // --------------------------------------------------------
+
+      if (currentRole == 'super_admin') {
+        final requestedRole = _normalizeRole(user.role);
+
+        String? selectedAdminUid;
+
+        if (requestedRole == 'user') {
+          final candidate = user.createdBy.trim();
+
+          if (candidate.isNotEmpty) {
+            selectedAdminUid = candidate;
+          }
+        }
+
+        await _userService.createUserProfileForSuperAdmin(
+          user: user,
+          superAdminUid: currentUser.uid,
+          superAdminEmail: currentEmail,
+          adminUid: selectedAdminUid,
+          adminName: null,
+        );
+
+        return;
+      }
+
+      // --------------------------------------------------------
+      // ADMIN CREATES USER
+      // --------------------------------------------------------
+
+      if (currentRole == 'admin') {
+        await _userService.createUserProfileForAdmin(
+          user: user,
+          adminUid: currentUser.uid,
+          adminEmail: currentEmail,
+          adminName: currentProfile.name,
+        );
+
+        return;
+      }
+
+      throw Exception('Only Admin or Super Admin can create users.');
     } catch (e) {
       _errorMessage = _cleanError(e);
 
@@ -788,17 +997,67 @@ class UserProvider extends ChangeNotifier {
       final currentUser = _firebaseAuth.currentUser;
 
       if (currentUser == null) {
-        throw Exception('You must be logged in.');
+        throw Exception('You must be logged in to create users.');
       }
 
       final currentProfile = await _userService.getUserById(currentUser.uid);
 
-      if (currentProfile == null ||
-          _normalizeRole(currentProfile.role) != 'super_admin') {
-        throw Exception('Only the Super Admin can create user profiles.');
+      if (currentProfile == null) {
+        throw Exception('Your user profile could not be found.');
       }
 
-      await _userService.createUserProfile(user);
+      final currentRole = _normalizeRole(currentProfile.role);
+
+      final currentEmail = currentUser.email?.trim().toLowerCase() ?? '';
+
+      if (currentEmail.isEmpty) {
+        throw Exception('Your account email could not be determined.');
+      }
+
+      // --------------------------------------------------------
+      // SUPER ADMIN CREATES ADMIN OR USER
+      // --------------------------------------------------------
+
+      if (currentRole == 'super_admin') {
+        final requestedRole = _normalizeRole(user.role);
+
+        String? selectedAdminUid;
+
+        if (requestedRole == 'user') {
+          final candidate = user.createdBy.trim();
+
+          if (candidate.isNotEmpty) {
+            selectedAdminUid = candidate;
+          }
+        }
+
+        await _userService.createUserProfileForSuperAdmin(
+          user: user,
+          superAdminUid: currentUser.uid,
+          superAdminEmail: currentEmail,
+          adminUid: selectedAdminUid,
+          adminName: null,
+        );
+
+        return;
+      }
+
+      // --------------------------------------------------------
+      // ADMIN CREATES USER
+      // --------------------------------------------------------
+
+      if (currentRole == 'admin') {
+        await _userService.createUserProfileForAdmin(
+          user: user,
+          adminUid: currentUser.uid,
+          adminEmail: currentEmail,
+          adminName: currentProfile.name,
+        );
+
+        return;
+      }
+
+      throw Exception('Only Admin or Super Admin can create user profiles.');
     } catch (e) {
       _errorMessage = _cleanError(e);
 
@@ -816,15 +1075,49 @@ class UserProvider extends ChangeNotifier {
     _errorMessage = null;
 
     try {
-      if (!isSuperAdmin) {
-        final profile = await loadCurrentUserProfile(forceRefresh: true);
+      final currentUser = _firebaseAuth.currentUser;
 
-        if (profile == null || _normalizeRole(profile.role) != 'super_admin') {
-          throw Exception('Only the Super Admin can update users.');
-        }
+      if (currentUser == null) {
+        throw Exception('You must be logged in.');
       }
 
-      await _userService.updateUser(user.uid, user.toMap());
+      if (isSuperAdmin) {
+        await _userService.updateUser(user.uid, _editableUserData(user));
+
+        return;
+      }
+
+      if (!isAdmin) {
+        throw Exception('Only Admin or Super Admin can update users.');
+      }
+
+      if (user.uid == currentUser.uid) {
+        throw Exception(
+          'Use your profile settings to update your own account.',
+        );
+      }
+
+      final target = await _userService.getUserById(user.uid);
+
+      if (target == null) {
+        throw Exception('User could not be found.');
+      }
+
+      final belongsToAdmin = await _userService.isUserCreatedByAdmin(
+        userUid: target.uid,
+        adminUid: currentUser.uid,
+      );
+
+      if (!belongsToAdmin) {
+        throw Exception('You can only update users assigned to you.');
+      }
+
+      final updateData = _editableUserData(user);
+
+      updateData.remove('role');
+      updateData.remove('roles');
+
+      await _userService.updateUser(user.uid, updateData);
     } catch (e) {
       _errorMessage = _cleanError(e);
 
@@ -832,6 +1125,18 @@ class UserProvider extends ChangeNotifier {
 
       rethrow;
     }
+  }
+
+  /// Descriptive fields a details edit may write. Role, status and ownership
+  /// have their own actions; writing them from an edit form would overwrite
+  /// a change made meanwhile (e.g. silently re-activating a blocked account).
+  Map<String, dynamic> _editableUserData(UserModel user) {
+    return <String, dynamic>{
+      'name': user.name.trim(),
+      'employeeId': user.employeeId.trim(),
+      'department': user.department.trim(),
+      'designation': user.designation.trim(),
+    };
   }
 
   // ============================================================
@@ -848,26 +1153,58 @@ class UserProvider extends ChangeNotifier {
     _errorMessage = null;
 
     try {
-      if (!isSuperAdmin) {
-        final profile = await loadCurrentUserProfile(forceRefresh: true);
+      final currentUser = _firebaseAuth.currentUser;
 
-        if (profile == null || _normalizeRole(profile.role) != 'super_admin') {
-          throw Exception('Only the Super Admin can delete users.');
-        }
+      if (currentUser == null) {
+        throw Exception('You must be logged in.');
       }
 
-      if (cleanUid == currentUserUid) {
-        throw Exception('The Super Admin cannot delete the current account.');
+      if (cleanUid == currentUser.uid) {
+        throw Exception(
+          'You cannot delete your own account from user management.',
+        );
       }
 
-      final targetUser = await _userService.getUserById(cleanUid);
+      final target = await _userService.getUserById(cleanUid);
 
-      if (targetUser != null &&
-          _normalizeRole(targetUser.role) == 'super_admin') {
+      if (target == null) {
+        throw Exception('User could not be found.');
+      }
+
+      if (_normalizeRole(target.role) == 'super_admin') {
         throw Exception('The Super Admin account cannot be deleted.');
       }
 
-      await _userService.deleteUser(cleanUid);
+      // --------------------------------------------------------
+      // SUPER ADMIN
+      // --------------------------------------------------------
+
+      if (isSuperAdmin) {
+        await _userService.deleteUser(cleanUid);
+
+        return;
+      }
+
+      // --------------------------------------------------------
+      // ADMIN
+      // --------------------------------------------------------
+
+      if (isAdmin) {
+        final belongsToAdmin = await _userService.isUserCreatedByAdmin(
+          userUid: target.uid,
+          adminUid: currentUser.uid,
+        );
+
+        if (!belongsToAdmin) {
+          throw Exception('You can only delete users assigned to you.');
+        }
+
+        await _userService.deleteUser(cleanUid);
+
+        return;
+      }
+
+      throw Exception('You are not authorized to delete users.');
     } catch (e) {
       _errorMessage = _cleanError(e);
 
@@ -883,6 +1220,7 @@ class UserProvider extends ChangeNotifier {
 
   Future<void> updateUserStatus(String uid, String status) async {
     final cleanUid = uid.trim();
+
     final cleanStatus = status.trim();
 
     if (cleanUid.isEmpty || cleanStatus.isEmpty) {
@@ -892,25 +1230,30 @@ class UserProvider extends ChangeNotifier {
     _errorMessage = null;
 
     try {
-      if (!isSuperAdmin) {
-        final profile = await loadCurrentUserProfile(forceRefresh: true);
+      final currentUser = _firebaseAuth.currentUser;
 
-        if (profile == null || _normalizeRole(profile.role) != 'super_admin') {
-          throw Exception('Only the Super Admin can change user status.');
-        }
+      if (currentUser == null) {
+        throw Exception('You must be logged in.');
       }
 
-      if (cleanUid == currentUserUid) {
+      if (cleanUid == currentUser.uid) {
         throw Exception(
           'You cannot deactivate your own account from user management.',
         );
       }
 
-      final targetUser = await _userService.getUserById(cleanUid);
+      final target = await _userService.getUserById(cleanUid);
 
-      if (targetUser != null &&
-          _normalizeRole(targetUser.role) == 'super_admin') {
+      if (target == null) {
+        throw Exception('User could not be found.');
+      }
+
+      if (_normalizeRole(target.role) == 'super_admin') {
         throw Exception('Super Admin account status cannot be changed.');
+      }
+
+      if (!isSuperAdmin) {
+        throw Exception('Only the Super Admin can change user account status.');
       }
 
       await _userService.changeUserStatus(cleanUid, cleanStatus);
@@ -929,6 +1272,7 @@ class UserProvider extends ChangeNotifier {
 
   Future<void> updateUserRole(String uid, String role) async {
     final cleanUid = uid.trim();
+
     final cleanRole = role.trim();
 
     if (cleanUid.isEmpty || cleanRole.isEmpty) {
@@ -939,33 +1283,32 @@ class UserProvider extends ChangeNotifier {
 
     try {
       if (!isSuperAdmin) {
-        final profile = await loadCurrentUserProfile(forceRefresh: true);
-
-        if (profile == null || _normalizeRole(profile.role) != 'super_admin') {
-          throw Exception('Only the Super Admin can change user roles.');
-        }
+        throw Exception('Only the Super Admin can change user roles.');
       }
 
       if (cleanUid == currentUserUid) {
-        throw Exception('The current Super Admin role cannot be changed here.');
+        throw Exception('The Super Admin role cannot be changed here.');
       }
 
       final normalizedRole = _normalizeRole(cleanRole);
 
-      if (normalizedRole == 'super_admin') {
+      if (normalizedRole != 'admin' && normalizedRole != 'user') {
         throw Exception(
-          'A new Super Admin cannot be assigned from user management.',
+          'Only the Admin or User role can be assigned through role management.',
         );
       }
 
       final targetUser = await _userService.getUserById(cleanUid);
 
-      if (targetUser != null &&
-          _normalizeRole(targetUser.role) == 'super_admin') {
+      if (targetUser == null) {
+        throw Exception('User could not be found.');
+      }
+
+      if (_normalizeRole(targetUser.role) == 'super_admin') {
         throw Exception('Super Admin role is protected.');
       }
 
-      await _userService.changeUserRole(cleanUid, cleanRole);
+      await _userService.changeUserRole(cleanUid, normalizedRole);
     } catch (e) {
       _errorMessage = _cleanError(e);
 
@@ -976,11 +1319,213 @@ class UserProvider extends ChangeNotifier {
   }
 
   // ============================================================
+  // TRANSFER SUPER ADMIN
+  // ============================================================
+
+  Future<void> transferSuperAdmin(String targetAdminUid) async {
+    final cleanTargetUid = targetAdminUid.trim();
+
+    if (cleanTargetUid.isEmpty) {
+      throw ArgumentError('Target Admin UID is required.');
+    }
+
+    final currentUser = _firebaseAuth.currentUser;
+
+    if (currentUser == null) {
+      throw Exception('You must be logged in.');
+    }
+
+    final currentUid = currentUser.uid.trim();
+
+    if (currentUid.isEmpty) {
+      throw Exception('Current user UID could not be determined.');
+    }
+
+    if (cleanTargetUid == currentUid) {
+      throw Exception(
+        'The current Super Admin cannot transfer the role to itself.',
+      );
+    }
+
+    _errorMessage = null;
+    _isTransferringSuperAdmin = true;
+
+    notifyListeners();
+
+    try {
+      if (!isSuperAdmin) {
+        throw Exception(
+          'Only the current Super Admin can transfer Super Admin ownership.',
+        );
+      }
+
+      final targetUser = await _userService.getUserById(cleanTargetUid);
+
+      if (targetUser == null) {
+        throw Exception('Target Admin account could not be found.');
+      }
+
+      final targetRole = _normalizeRole(targetUser.role);
+
+      if (targetRole != 'admin') {
+        throw Exception(
+          'Super Admin can only be transferred to an existing Admin account.',
+        );
+      }
+
+      final targetStatus = targetUser.status.trim().toLowerCase();
+
+      if (targetStatus != 'active' && targetStatus != 'approved') {
+        throw Exception(
+          'The selected Admin account must be active before becoming Super Admin.',
+        );
+      }
+
+      await _userService.transferSuperAdmin(
+        currentSuperAdminUid: currentUid,
+        targetAdminUid: cleanTargetUid,
+      );
+
+      final refreshedProfile = await loadCurrentUserProfile(forceRefresh: true);
+
+      if (refreshedProfile == null) {
+        throw Exception(
+          'Super Admin transfer completed, but your updated profile could not be refreshed.',
+        );
+      }
+
+      final refreshedUid = currentUser.uid;
+
+      _startUsersListenerForCurrentUser(refreshedUid, _authGeneration);
+
+      _errorMessage = null;
+    } catch (e) {
+      _errorMessage = _cleanError(e);
+
+      notifyListeners();
+
+      rethrow;
+    } finally {
+      _isTransferringSuperAdmin = false;
+
+      notifyListeners();
+    }
+  }
+
+  // ============================================================
+  // ASSIGNED ADMIN (inventory scope of a User account)
+  // ============================================================
+
+  /// Sets which Admin's inventory a User account works with. Pass an empty
+  /// [adminUid] to unassign. Super Admin only: ownership decides which
+  /// inventory the account can read.
+  Future<void> updateAssignedAdmin(String uid, String adminUid) async {
+    final cleanUid = uid.trim();
+    final cleanAdminUid = adminUid.trim();
+
+    if (cleanUid.isEmpty) {
+      throw Exception('User UID is required.');
+    }
+
+    _errorMessage = null;
+
+    try {
+      if (!isSuperAdmin) {
+        throw Exception('Only a Super Admin can change the assigned Admin.');
+      }
+
+      if (cleanUid == currentUserUid) {
+        throw Exception('You cannot assign your own account to an Admin.');
+      }
+
+      final target = await _userService.getUserById(cleanUid);
+
+      if (target == null) {
+        throw Exception('User could not be found.');
+      }
+
+      if (_normalizeRole(target.role) != 'user') {
+        throw Exception('Only a User account can be assigned to an Admin.');
+      }
+
+      if (cleanAdminUid.isEmpty) {
+        await _userService.removeUserFromAdmin(cleanUid);
+      } else {
+        await _userService.assignUserToAdmin(
+          userUid: cleanUid,
+          adminUid: cleanAdminUid,
+        );
+      }
+    } catch (e) {
+      _errorMessage = _cleanError(e);
+
+      notifyListeners();
+
+      rethrow;
+    }
+  }
+
+  // ============================================================
+  // APPOINT / REMOVE ADDITIONAL SUPER ADMIN
+  // ============================================================
+
+  /// Appoints an active Admin as an additional Super Admin (the current
+  /// Super Admin keeps the role). Recorded in the audit log.
+  Future<void> promoteToSuperAdmin(String targetUid) {
+    return _runSuperAdminChange(
+      (actorUid) => _userService.promoteToSuperAdmin(
+        actorUid: actorUid,
+        targetUid: targetUid,
+      ),
+    );
+  }
+
+  /// Removes the Super Admin role from ANOTHER Super Admin (who becomes
+  /// Admin). A Super Admin steps down only via [transferSuperAdmin].
+  Future<void> removeSuperAdmin(String targetUid) {
+    return _runSuperAdminChange(
+      (actorUid) => _userService.demoteSuperAdmin(
+        actorUid: actorUid,
+        targetUid: targetUid,
+      ),
+    );
+  }
+
+  Future<void> _runSuperAdminChange(
+    Future<void> Function(String actorUid) change,
+  ) async {
+    final currentUser = _firebaseAuth.currentUser;
+
+    if (currentUser == null) {
+      throw Exception('You must be logged in.');
+    }
+
+    if (!isSuperAdmin) {
+      throw Exception('Only a Super Admin can change Super Admin roles.');
+    }
+
+    _errorMessage = null;
+    _isTransferringSuperAdmin = true;
+    notifyListeners();
+
+    try {
+      await change(currentUser.uid);
+    } catch (e) {
+      _errorMessage = _cleanError(e);
+      rethrow;
+    } finally {
+      _isTransferringSuperAdmin = false;
+      notifyListeners();
+    }
+  }
+
+  // ============================================================
   // CHECK USER OWNERSHIP
   // ============================================================
 
   Future<bool> isUserCreatedByCurrentSuperAdmin(String userUid) async {
     final currentUser = _firebaseAuth.currentUser;
+
     final cleanUid = userUid.trim();
 
     if (currentUser == null || cleanUid.isEmpty) {
@@ -988,9 +1533,36 @@ class UserProvider extends ChangeNotifier {
     }
 
     try {
-      return await _userService.isUserCreatedBySuperAdmin(
+      return await _userService.isUserCreatedByAdmin(
         userUid: cleanUid,
-        superAdminUid: currentUser.uid,
+        adminUid: currentUser.uid,
+      );
+    } catch (e) {
+      _errorMessage = _cleanError(e);
+
+      notifyListeners();
+
+      return false;
+    }
+  }
+
+  // ============================================================
+  // CHECK CURRENT ADMIN OWNERSHIP
+  // ============================================================
+
+  Future<bool> isUserCreatedByCurrentAdmin(String userUid) async {
+    final currentUser = _firebaseAuth.currentUser;
+
+    final cleanUid = userUid.trim();
+
+    if (currentUser == null || cleanUid.isEmpty || !isAdmin) {
+      return false;
+    }
+
+    try {
+      return await _userService.isUserCreatedByAdmin(
+        userUid: cleanUid,
+        adminUid: currentUser.uid,
       );
     } catch (e) {
       _errorMessage = _cleanError(e);
@@ -1031,6 +1603,7 @@ class UserProvider extends ChangeNotifier {
 
   void clearError() {
     _errorMessage = null;
+
     notifyListeners();
   }
 
@@ -1050,6 +1623,7 @@ class UserProvider extends ChangeNotifier {
 
   void clearCurrentUserProfile() {
     _currentUserProfile = null;
+
     _currentUserError = null;
 
     notifyListeners();
@@ -1065,12 +1639,17 @@ class UserProvider extends ChangeNotifier {
     _cancelUserListeners();
 
     _users = [];
+
     _currentUserProfile = null;
 
     _isLoading = false;
+
     _isLoadingCurrentUser = false;
 
+    _isTransferringSuperAdmin = false;
+
     _errorMessage = null;
+
     _currentUserError = null;
 
     _activeAuthUid = _firebaseAuth.currentUser?.uid;
@@ -1090,12 +1669,17 @@ class UserProvider extends ChangeNotifier {
     _cancelUserListeners();
 
     _users = [];
+
     _currentUserProfile = null;
 
     _isLoading = false;
+
     _isLoadingCurrentUser = false;
 
+    _isTransferringSuperAdmin = false;
+
     _errorMessage = null;
+
     _currentUserError = null;
 
     if (notify) {
@@ -1109,7 +1693,14 @@ class UserProvider extends ChangeNotifier {
 
   void _cancelUserListeners() {
     _usersSubscription?.cancel();
+
     _usersSubscription = null;
+
+    _profileSubscription?.cancel();
+
+    _profileSubscription = null;
+
+    _currentUserProfileNotFound = false;
   }
 
   // ============================================================
@@ -1164,6 +1755,7 @@ class UserProvider extends ChangeNotifier {
     _cancelUserListeners();
 
     _authSubscription?.cancel();
+
     _authSubscription = null;
 
     super.dispose();

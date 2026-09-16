@@ -6,6 +6,9 @@ import '../../../models/asset_model.dart';
 import '../../../models/request_model.dart';
 import '../../providers/asset_provider.dart';
 import '../../providers/request_provider.dart';
+import '../../providers/user_provider.dart';
+import '../../theme/app_theme.dart';
+import '../../theme/colors.dart';
 
 class AddAssetScreen extends StatefulWidget {
   final AssetModel? asset;
@@ -71,6 +74,36 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     'Damaged',
   ];
 
+  // Dropdown items for this form. A stored value that is not in the default
+  // list (e.g. an imported category) is added so editing never silently
+  // changes it.
+  late final List<String> _categoryItems = _withValue(
+    categories,
+    widget.asset?.category,
+  );
+  late final List<String> _statusItems = _withValue(
+    statuses,
+    widget.asset?.status,
+  );
+  late final List<String> _conditionItems = _withValue(
+    conditions,
+    widget.asset?.condition,
+  );
+
+  // Inventory owner selected by a Super Admin when registering an asset.
+  // Users see only the inventory of the Admin they belong to.
+  String? _selectedOwnerUid;
+
+  static List<String> _withValue(List<String> items, String? value) {
+    final clean = value?.trim() ?? '';
+
+    if (clean.isEmpty || items.contains(clean)) {
+      return List<String>.from(items);
+    }
+
+    return [...items, clean];
+  }
+
   @override
   void initState() {
     super.initState();
@@ -89,16 +122,16 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       locationController.text = asset.location;
       notesController.text = asset.notes;
 
-      if (categories.contains(asset.category)) {
-        selectedCategory = asset.category;
+      if (asset.category.trim().isNotEmpty) {
+        selectedCategory = asset.category.trim();
       }
 
-      if (statuses.contains(asset.status)) {
-        selectedStatus = asset.status;
+      if (asset.status.trim().isNotEmpty) {
+        selectedStatus = asset.status.trim();
       }
 
-      if (conditions.contains(asset.condition)) {
-        selectedCondition = asset.condition;
+      if (asset.condition.trim().isNotEmpty) {
+        selectedCondition = asset.condition.trim();
       }
 
       purchaseDate = asset.purchaseDate;
@@ -148,63 +181,60 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
         ),
         centerTitle: false,
       ),
+      bottomNavigationBar: _buildActionBar(theme),
       body: SafeArea(
+        bottom: false,
         child: Form(
           key: _formKey,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final isWide = constraints.maxWidth >= 850;
+              final isWide = constraints.maxWidth >= 600;
 
               return SingleChildScrollView(
                 padding: EdgeInsets.symmetric(
-                  horizontal: isWide ? 40 : 20,
-                  vertical: 24,
+                  horizontal: isWide ? AppSpacing.xl : AppSpacing.lg,
+                  vertical: isWide ? AppSpacing.xl : AppSpacing.lg,
                 ),
                 child: Center(
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1100),
+                    constraints: const BoxConstraints(maxWidth: 960),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _buildHeader(theme),
-
-                        const SizedBox(height: 28),
-
+                        const SizedBox(height: AppSpacing.xl),
                         _buildSectionCard(
                           title: 'Basic Information',
                           icon: Icons.inventory_2_outlined,
+                          isWide: isWide,
                           child: _buildBasicInformation(isWide),
                         ),
-
-                        const SizedBox(height: 20),
-
+                        const SizedBox(height: AppSpacing.lg),
                         _buildSectionCard(
                           title: 'Asset Details',
                           icon: Icons.devices_other_outlined,
+                          isWide: isWide,
                           child: _buildAssetDetails(isWide),
                         ),
-
-                        const SizedBox(height: 20),
-
+                        const SizedBox(height: AppSpacing.lg),
                         _buildSectionCard(
                           title: 'Purchase & Warranty',
                           icon: Icons.receipt_long_outlined,
+                          isWide: isWide,
                           child: _buildPurchaseInformation(isWide),
                         ),
-
-                        const SizedBox(height: 20),
-
+                        const SizedBox(height: AppSpacing.lg),
                         _buildSectionCard(
                           title: 'Location & Condition',
                           icon: Icons.location_on_outlined,
+                          isWide: isWide,
                           child: _buildLocationInformation(isWide),
                         ),
-
-                        const SizedBox(height: 20),
-
+                        const SizedBox(height: AppSpacing.lg),
                         _buildSectionCard(
                           title: 'Notes',
                           icon: Icons.notes_outlined,
+                          isWide: isWide,
                           child: TextFormField(
                             controller: notesController,
                             maxLines: 5,
@@ -216,12 +246,7 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
                             ),
                           ),
                         ),
-
-                        const SizedBox(height: 30),
-
-                        _buildSaveButton(),
-
-                        const SizedBox(height: 20),
+                        const SizedBox(height: AppSpacing.sm),
                       ],
                     ),
                   ),
@@ -234,42 +259,85 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     );
   }
 
+  Widget _buildActionBar(ThemeData theme) {
+    final colors = theme.colorScheme;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        border: Border(top: BorderSide(color: colors.outlineVariant)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.md,
+            AppSpacing.lg,
+            AppSpacing.md,
+          ),
+          child: Center(
+            heightFactor: 1,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 960),
+              // Compact action instead of a bar-wide button.
+              child: AppActionButtonBox(child: _buildSaveButton()),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader(ThemeData theme) {
+    final colors = theme.colorScheme;
+
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          width: 54,
-          height: 54,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
-            color: theme.colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(16),
+            color: AppColors.tint(colors.primary, theme.brightness),
+            borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
           ),
           child: Icon(
             isEditMode ? Icons.edit_outlined : Icons.add_box_outlined,
-            color: theme.colorScheme.primary,
-            size: 28,
+            color: colors.primary,
+            size: 22,
           ),
         ),
-        const SizedBox(width: 16),
+        const SizedBox(width: AppSpacing.md),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                isEditMode ? 'Request Asset Update' : 'Register New Asset',
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
+                !isEditMode
+                    ? 'Register New Asset'
+                    : context.watch<UserProvider>().isSuperAdmin
+                    ? 'Update Asset'
+                    : 'Request Asset Update',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                  color: colors.onSurface,
                 ),
               ),
-              const SizedBox(height: 5),
+              const SizedBox(height: AppSpacing.xs),
               Text(
-                isEditMode
-                    ? 'Submit your changes for Super Admin approval.'
-                    : 'Enter complete information to register an IT asset.',
+                !isEditMode
+                    ? 'Enter complete information to register an IT asset.'
+                    : context.watch<UserProvider>().isSuperAdmin
+                    ? 'Changes are applied immediately. Stock at Bazaars and '
+                          'assigned stock is preserved.'
+                    : 'Submit your changes for Super Admin approval.',
                 style: TextStyle(
-                  fontSize: 14,
-                  color: theme.colorScheme.onSurfaceVariant,
+                  fontSize: 13.5,
+                  height: 1.4,
+                  color: colors.onSurfaceVariant,
                 ),
               ),
             ],
@@ -283,38 +351,50 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     required String title,
     required IconData icon,
     required Widget child,
+    bool isWide = false,
   }) {
     final theme = Theme.of(context);
+    final colors = theme.colorScheme;
 
     return Card(
-      elevation: 0,
       margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: theme.colorScheme.outlineVariant),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              isWide ? 20 : AppSpacing.lg,
+              AppSpacing.md,
+              isWide ? 20 : AppSpacing.lg,
+              AppSpacing.md,
+            ),
+            child: Row(
               children: [
-                Icon(icon, size: 21, color: theme.colorScheme.primary),
-                const SizedBox(width: 10),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
+                Icon(icon, size: 20, color: colors.primary),
+                const SizedBox(width: AppSpacing.sm + 2),
+                Expanded(
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                      color: colors.onSurface,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 20),
-            child,
-          ],
-        ),
+          ),
+          Divider(height: 1, color: colors.outlineVariant),
+          Padding(
+            padding: EdgeInsets.all(isWide ? 20 : AppSpacing.lg),
+            child: child,
+          ),
+        ],
       ),
     );
   }
@@ -339,7 +419,7 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
         label: 'Category',
         icon: Icons.category_outlined,
         value: selectedCategory,
-        items: categories,
+        items: _categoryItems,
         onChanged: (value) {
           if (value != null) {
             setState(() {
@@ -352,7 +432,7 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
         label: 'Status',
         icon: Icons.circle_outlined,
         value: selectedStatus,
-        items: statuses,
+        items: _statusItems,
         onChanged: (value) {
           if (value != null) {
             setState(() {
@@ -361,7 +441,63 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
           }
         },
       ),
+      if (!isEditMode && context.watch<UserProvider>().isSuperAdmin)
+        _buildOwnerField(),
     ]);
+  }
+
+  Widget _buildOwnerField() {
+    final userProvider = context.watch<UserProvider>();
+    final currentUid = userProvider.currentUserUid ?? '';
+
+    // One entry per account: a duplicate value (e.g. the signed-in account
+    // also listed as an Admin) would break the dropdown and with it the whole
+    // form.
+    final seenUids = <String>{currentUid};
+
+    final admins = userProvider.users
+        .where(
+          (user) =>
+              user.isAdmin && user.isActive && seenUids.add(user.uid.trim()),
+        )
+        .toList();
+
+    final items = <DropdownMenuItem<String>>[
+      DropdownMenuItem<String>(
+        value: currentUid,
+        child: const Text('Super Admin (me)', overflow: TextOverflow.ellipsis),
+      ),
+      for (final admin in admins)
+        DropdownMenuItem<String>(
+          value: admin.uid.trim(),
+          child: Text(
+            admin.name.trim().isNotEmpty ? admin.name.trim() : admin.email,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+    ];
+
+    final selected = items.any((item) => item.value == _selectedOwnerUid)
+        ? _selectedOwnerUid
+        : currentUid;
+
+    return DropdownButtonFormField<String>(
+      initialValue: selected,
+      isExpanded: true,
+      decoration: _inputDecoration(
+        label: 'Inventory Owner (Admin)',
+        hint: '',
+        icon: Icons.admin_panel_settings_outlined,
+      ),
+      items: items,
+      onChanged: _isSaving
+          ? null
+          : (value) {
+              setState(() {
+                _selectedOwnerUid = value;
+              });
+            },
+    );
   }
 
   Widget _buildAssetDetails(bool isWide) {
@@ -422,14 +558,14 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       _textField(
         controller: locationController,
         label: 'Location',
-        hint: 'e.g. IT Department',
+        hint: 'e.g. Head Office',
         icon: Icons.location_on_outlined,
       ),
       _dropdownField(
         label: 'Condition',
         icon: Icons.health_and_safety_outlined,
         value: selectedCondition,
-        items: conditions,
+        items: _conditionItems,
         onChanged: (value) {
           if (value != null) {
             setState(() {
@@ -444,28 +580,45 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
   Widget _responsiveGrid(bool isWide, List<Widget> children) {
     if (!isWide) {
       return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (int i = 0; i < children.length; i++) ...[
             children[i],
-            if (i != children.length - 1) const SizedBox(height: 16),
+            if (i != children.length - 1) const SizedBox(height: AppSpacing.lg),
           ],
         ],
       );
     }
 
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: children.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: 4.2,
-      ),
-      itemBuilder: (context, index) {
-        return children[index];
-      },
+    // Two columns; rows size to their content so validation messages are
+    // never clipped.
+    final rows = <Widget>[];
+
+    for (int i = 0; i < children.length; i += 2) {
+      rows.add(
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: children[i]),
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(
+              child: i + 1 < children.length
+                  ? children[i + 1]
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (int i = 0; i < rows.length; i++) ...[
+          rows[i],
+          if (i != rows.length - 1) const SizedBox(height: AppSpacing.lg),
+        ],
+      ],
     );
   }
 
@@ -512,7 +665,7 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
 
   Widget _buildPurchaseDateField() {
     return InkWell(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
       onTap: _isSaving ? null : _selectPurchaseDate,
       child: InputDecorator(
         decoration: _inputDecoration(
@@ -524,6 +677,8 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
           purchaseDate == null
               ? 'Select purchase date'
               : _formatDate(purchaseDate!),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: purchaseDate == null
                 ? Theme.of(context).colorScheme.onSurfaceVariant
@@ -542,20 +697,22 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     final total = price * quantity;
 
     final theme = Theme.of(context);
+    final colors = theme.colorScheme;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: 10,
+      ),
       decoration: BoxDecoration(
-        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: theme.colorScheme.primary.withValues(alpha: 0.2),
-        ),
+        color: AppColors.tint(colors.primary, theme.brightness),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
       ),
       child: Row(
         children: [
-          Icon(Icons.calculate_outlined, color: theme.colorScheme.primary),
-          const SizedBox(width: 12),
+          Icon(Icons.calculate_outlined, color: colors.primary, size: 22),
+          const SizedBox(width: AppSpacing.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -564,16 +721,21 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
                   'Total Asset Value',
                   style: TextStyle(
                     fontSize: 12,
-                    color: theme.colorScheme.onSurfaceVariant,
+                    color: colors.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  'Rs. ${total.toStringAsFixed(2)}',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: theme.colorScheme.primary,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Rs. ${total.toStringAsFixed(2)}',
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.onTint(colors.primary, theme.brightness),
+                    ),
                   ),
                 ),
               ],
@@ -593,28 +755,12 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       labelText: label,
       hintText: hint,
       prefixIcon: Icon(icon),
-      filled: true,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(
-          color: Theme.of(context).colorScheme.outlineVariant,
-        ),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(
-          color: Theme.of(context).colorScheme.primary,
-          width: 1.5,
-        ),
-      ),
     );
   }
 
   Widget _buildSaveButton() {
     return SizedBox(
-      width: double.infinity,
-      height: 56,
+      height: 48,
       child: FilledButton.icon(
         onPressed: _isSaving ? null : _saveAsset,
         icon: _isSaving
@@ -627,10 +773,14 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
         label: Text(
           _isSaving
               ? 'Saving...'
-              : isEditMode
-              ? 'Submit Update Request'
-              : 'Save Asset',
-          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+              : !isEditMode
+              ? 'Save Asset'
+              : context.watch<UserProvider>().isSuperAdmin
+              ? 'Save Changes'
+              : 'Submit Update Request',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
         ),
       ),
     );
@@ -694,16 +844,19 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     final assetId = assetIdController.text.trim();
     final serial = serialNumberController.text.trim();
 
+    final assetProvider = context.read<AssetProvider>();
+    final requestProvider = context.read<RequestProvider>();
+    final userProvider = context.read<UserProvider>();
+    final isSuperAdmin = userProvider.isSuperAdmin;
+
     setState(() {
       _isSaving = true;
     });
 
     try {
-      final assetProvider = context.read<AssetProvider>();
-
-      // ==========================================================
+      // ========================================================
       // DUPLICATE ASSET ID CHECK
-      // ==========================================================
+      // ========================================================
 
       final duplicateAssetId = await assetProvider.checkDuplicateAssetId(
         assetId,
@@ -711,16 +864,16 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       );
 
       if (duplicateAssetId) {
-        if (!mounted) return;
-
-        _showMessage('This Asset ID already exists.', isError: true);
+        if (mounted) {
+          _showMessage('This Asset ID already exists.', isError: true);
+        }
 
         return;
       }
 
-      // ==========================================================
+      // ========================================================
       // DUPLICATE SERIAL NUMBER CHECK
-      // ==========================================================
+      // ========================================================
 
       if (serial.isNotEmpty) {
         final duplicateSerial = await assetProvider.checkDuplicateSerial(
@@ -729,24 +882,179 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
         );
 
         if (duplicateSerial) {
-          if (!mounted) return;
-
-          _showMessage('This Serial Number already exists.', isError: true);
+          if (mounted) {
+            _showMessage('This Serial Number already exists.', isError: true);
+          }
 
           return;
         }
       }
 
-      // ==========================================================
+      // ========================================================
       // EDIT ASSET
       //
       // IMPORTANT:
-      // Do NOT update Firestore directly.
-      // Create a Pending request instead.
-      // ==========================================================
+      // Never update Firestore directly from this screen.
+      //
+      // The changes are placed inside a Pending request.
+      // Super Admin approval performs the real update.
+      //
+      // STOCK RULE:
+      // Existing assigned/deployed quantities are preserved.
+      //
+      // If quantity is increased:
+      //   Extra quantity goes to Head Office stock.
+      //
+      // If quantity is decreased:
+      //   The new quantity cannot be smaller than the quantity
+      //   already assigned/deployed.
+      // ========================================================
+
+      // ========================================================
+      // SUPER ADMIN EDIT: applied directly.
+      //
+      // A Super Admin cannot approve their own request, and no
+      // other account may approve a Super Admin's changes, so
+      // routing these edits through a request left them stuck
+      // forever. Firestore rules give Super Admin full inventory
+      // control. The service applies the edit in a transaction
+      // on top of the CURRENT stored stock distribution.
+      // ========================================================
+
+      if (isEditMode && isSuperAdmin) {
+        final oldAsset = widget.asset!;
+
+        await assetProvider.updateAsset(
+          oldAsset.id,
+          oldAsset.copyWith(
+            assetId: assetId,
+            name: nameController.text.trim(),
+            category: selectedCategory,
+            status: selectedStatus,
+            quantity: quantity,
+            serialNumber: serial,
+            brand: brandController.text.trim(),
+            model: modelController.text.trim(),
+            purchasePrice: purchasePrice,
+            purchaseDate: purchaseDate,
+            clearPurchaseDate: purchaseDate == null,
+            warrantyMonths: warranty,
+            location: locationController.text.trim().isEmpty
+                ? oldAsset.location
+                : locationController.text.trim(),
+            condition: selectedCondition,
+            notes: notesController.text.trim(),
+          ),
+        );
+
+        if (!mounted) {
+          return;
+        }
+
+        _showMessage('Asset updated successfully.');
+
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+
+        if (!mounted) {
+          return;
+        }
+
+        Navigator.pop(context, true);
+
+        return;
+      }
 
       if (isEditMode) {
         final oldAsset = widget.asset!;
+
+        final oldTotalQuantity = oldAsset.quantity < 0 ? 0 : oldAsset.quantity;
+
+        final oldAssignedQuantity =
+            oldAsset.assignedQuantity != null && oldAsset.assignedQuantity! >= 0
+            ? oldAsset.assignedQuantity!.clamp(0, oldTotalQuantity)
+            : oldAsset.isAssigned && !oldAsset.isDeployedToBazaar
+            ? oldTotalQuantity
+            : 0;
+
+        final oldDeployedQuantity =
+            oldAsset.deployedQuantity != null && oldAsset.deployedQuantity! >= 0
+            ? oldAsset.deployedQuantity!.clamp(0, oldTotalQuantity)
+            : oldAsset.isDeployedToBazaar
+            ? oldTotalQuantity
+            : 0;
+
+        final oldHeadOfficeQuantity =
+            oldAsset.headOfficeQuantity != null &&
+                oldAsset.headOfficeQuantity! >= 0
+            ? oldAsset.headOfficeQuantity!.clamp(0, oldTotalQuantity)
+            : _calculateLegacyHeadOfficeQuantity(
+                oldAsset,
+                oldTotalQuantity,
+                oldAssignedQuantity,
+                oldDeployedQuantity,
+              );
+
+        final allocatedQuantity = oldAssignedQuantity + oldDeployedQuantity;
+
+        if (quantity < allocatedQuantity) {
+          _showMessage(
+            'Quantity cannot be reduced below the currently assigned/deployed stock '
+            '($allocatedQuantity units).',
+            isError: true,
+          );
+
+          return;
+        }
+
+        final quantityDifference = quantity - oldTotalQuantity;
+
+        final proposedAssignedQuantity = oldAssignedQuantity.clamp(0, quantity);
+
+        final proposedDeployedQuantity = oldDeployedQuantity.clamp(0, quantity);
+
+        int proposedHeadOfficeQuantity;
+
+        if (quantityDifference >= 0) {
+          proposedHeadOfficeQuantity =
+              oldHeadOfficeQuantity + quantityDifference;
+        } else {
+          final reducedQuantity = oldTotalQuantity - quantity;
+
+          proposedHeadOfficeQuantity = oldHeadOfficeQuantity - reducedQuantity;
+        }
+
+        final calculatedDistributedQuantity =
+            proposedAssignedQuantity + proposedDeployedQuantity;
+
+        final maximumHeadOfficeQuantity =
+            quantity - calculatedDistributedQuantity;
+
+        if (proposedHeadOfficeQuantity < 0) {
+          proposedHeadOfficeQuantity = 0;
+        }
+
+        if (proposedHeadOfficeQuantity > maximumHeadOfficeQuantity) {
+          proposedHeadOfficeQuantity = maximumHeadOfficeQuantity;
+        }
+
+        // Final consistency check.
+        //
+        // All physical quantity must belong to one of these
+        // stock buckets.
+        final finalStockTotal =
+            proposedHeadOfficeQuantity +
+            proposedAssignedQuantity +
+            proposedDeployedQuantity;
+
+        if (finalStockTotal != quantity) {
+          _showMessage(
+            'Unable to prepare a consistent stock distribution. '
+            'Please try again.',
+            isError: true,
+          );
+
+          return;
+        }
 
         final proposedAssetData = <String, dynamic>{
           'assetId': assetId,
@@ -754,16 +1062,75 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
           'category': selectedCategory,
           'status': selectedStatus,
           'quantity': quantity,
+
+          'assignedTo': oldAsset.assignedTo,
+
           'serialNumber': serial,
           'brand': brandController.text.trim(),
           'model': modelController.text.trim(),
+
           'purchasePrice': purchasePrice,
           'purchaseDate': purchaseDate,
           'warrantyMonths': warranty,
+
           'location': locationController.text.trim(),
           'condition': selectedCondition,
           'notes': notesController.text.trim(),
+
+          // ====================================================
+          // PRESERVE / UPDATE STOCK DISTRIBUTION
+          // ====================================================
+          'headOfficeQuantity': proposedHeadOfficeQuantity,
+          'assignedQuantity': proposedAssignedQuantity,
+          'deployedQuantity': proposedDeployedQuantity,
+
+          'currentBazaarId': oldAsset.currentBazaarId,
+          'currentBazaarName': oldAsset.currentBazaarName,
+          'deploymentStatus': oldAsset.deploymentStatus,
         };
+
+        final previousAssetData = <String, dynamic>{
+          'assetId': oldAsset.assetId,
+          'name': oldAsset.name,
+          'category': oldAsset.category,
+          'status': oldAsset.status,
+          'quantity': oldAsset.quantity,
+
+          'assignedTo': oldAsset.assignedTo,
+
+          'serialNumber': oldAsset.serialNumber,
+          'brand': oldAsset.brand,
+          'model': oldAsset.model,
+
+          'purchasePrice': oldAsset.purchasePrice,
+          'purchaseDate': oldAsset.purchaseDate,
+          'warrantyMonths': oldAsset.warrantyMonths,
+
+          'location': oldAsset.location,
+          'condition': oldAsset.condition,
+          'notes': oldAsset.notes,
+
+          // Existing stock state is also recorded in the
+          // request so approval has the complete before/after
+          // picture.
+          'headOfficeQuantity': oldHeadOfficeQuantity,
+          'assignedQuantity': oldAssignedQuantity,
+          'deployedQuantity': oldDeployedQuantity,
+
+          'currentBazaarId': oldAsset.currentBazaarId,
+          'currentBazaarName': oldAsset.currentBazaarName,
+          'deploymentStatus': oldAsset.deploymentStatus,
+        };
+
+        final profileName = userProvider.currentUserProfile?.name.trim() ?? '';
+
+        final requestedUserName = profileName.isNotEmpty
+            ? profileName
+            : user.displayName?.trim().isNotEmpty == true
+            ? user.displayName!.trim()
+            : (user.email?.trim().isNotEmpty == true
+                  ? user.email!.trim()
+                  : 'User');
 
         final request = RequestModel(
           id: '',
@@ -775,64 +1142,144 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
           priority: 'Medium',
           attachmentUrl: '',
           requestedBy: user.uid,
-          requestedUserName: user.displayName?.trim().isNotEmpty == true
-              ? user.displayName!.trim()
-              : (user.email ?? 'User'),
+          requestedUserName: requestedUserName,
           status: 'Pending',
           adminRemarks: '',
           requestDate: DateTime.now(),
           approvedDate: null,
           approvedBy: '',
+          previousAssetData: previousAssetData,
           proposedAssetData: proposedAssetData,
         );
 
-        await context.read<RequestProvider>().createRequest(request);
+        await requestProvider.createRequest(request);
 
-        if (!mounted) return;
+        if (!mounted) {
+          return;
+        }
 
         _showMessage('Update request submitted for Super Admin approval.');
+
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+
+        if (!mounted) {
+          return;
+        }
+
+        Navigator.pop(context, true);
+
+        return;
       }
-      // ==========================================================
-      // CREATE NEW ASSET
+
+      // ========================================================
+      // ADD NEW ASSET
       //
-      // Add Asset is still direct Firestore save.
-      // ==========================================================
-      else {
-        final newAsset = AssetModel(
-          id: '',
-          assetId: assetId,
-          name: nameController.text.trim(),
-          category: selectedCategory,
-          status: selectedStatus,
-          quantity: quantity,
-          assignedTo: null,
-          serialNumber: serial,
-          brand: brandController.text.trim(),
-          model: modelController.text.trim(),
-          purchasePrice: purchasePrice,
-          purchaseDate: purchaseDate,
-          warrantyMonths: warranty,
-          location: locationController.text.trim(),
-          condition: selectedCondition,
-          notes: notesController.text.trim(),
-          createdAt: DateTime.now(),
-          lastUpdated: DateTime.now(),
-        );
+      // ADD DOES NOT REQUIRE APPROVAL.
+      //
+      // A newly registered asset starts in Head Office.
+      //
+      // Therefore the initial stock distribution is explicitly:
+      //
+      //   Total Quantity       = quantity
+      //   Head Office Quantity = quantity
+      //   Assigned Quantity    = 0
+      //   Deployed Quantity    = 0
+      //
+      // This prevents the provider from having to guess the
+      // initial stock state through legacy fallback logic.
+      // ========================================================
 
-        await assetProvider.addAsset(newAsset);
+      const initialAssignedQuantity = 0;
+      const initialDeployedQuantity = 0;
 
-        if (!mounted) return;
+      final initialHeadOfficeQuantity = quantity;
 
-        _showMessage('Asset added successfully.');
+      final newAsset = AssetModel(
+        id: '',
+        assetId: assetId,
+        name: nameController.text.trim(),
+        category: selectedCategory,
+        status: selectedStatus,
+        quantity: quantity,
+
+        assignedTo: null,
+
+        serialNumber: serial,
+        brand: brandController.text.trim(),
+        model: modelController.text.trim(),
+
+        purchasePrice: purchasePrice,
+        purchaseDate: purchaseDate,
+        warrantyMonths: warranty,
+
+        location: locationController.text.trim().isEmpty
+            ? 'Head Office'
+            : locationController.text.trim(),
+
+        condition: selectedCondition,
+        notes: notesController.text.trim(),
+
+        createdAt: DateTime.now(),
+        lastUpdated: DateTime.now(),
+
+        // ======================================================
+        // INITIAL STOCK STATE
+        // ======================================================
+        headOfficeQuantity: initialHeadOfficeQuantity,
+        assignedQuantity: initialAssignedQuantity,
+        deployedQuantity: initialDeployedQuantity,
+
+        currentBazaarId: null,
+        currentBazaarName: null,
+        deploymentStatus: null,
+      );
+
+      // Every asset must have an owning Admin: Firestore rules require an
+      // Admin to create assets under their own UID, and Users only see the
+      // inventory of the Admin they belong to.
+
+      final ownerUid = userProvider.isSuperAdmin
+          ? (_selectedOwnerUid?.trim().isNotEmpty == true
+                ? _selectedOwnerUid!.trim()
+                : user.uid)
+          : user.uid;
+
+      String ownerName = userProvider.currentUserProfile?.name.trim() ?? '';
+
+      if (ownerUid != user.uid) {
+        for (final candidate in userProvider.users) {
+          if (candidate.uid == ownerUid) {
+            ownerName = candidate.name.trim().isNotEmpty
+                ? candidate.name.trim()
+                : candidate.email;
+            break;
+          }
+        }
       }
+
+      await assetProvider.addAssetForAdmin(
+        asset: newAsset,
+        adminId: ownerUid,
+        adminName: ownerName,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage('Asset added successfully.');
 
       await Future<void>.delayed(const Duration(milliseconds: 250));
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       Navigator.pop(context, true);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       _showMessage(_cleanErrorMessage(e), isError: true);
     } finally {
@@ -842,6 +1289,28 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
         });
       }
     }
+  }
+
+  // ===========================================================================
+  // LEGACY STOCK CALCULATION
+  //
+  // Used only when an old Firestore document does not have explicit
+  // headOfficeQuantity.
+  // ===========================================================================
+
+  int _calculateLegacyHeadOfficeQuantity(
+    AssetModel asset,
+    int totalQuantity,
+    int assignedQuantity,
+    int deployedQuantity,
+  ) {
+    final calculated = totalQuantity - assignedQuantity - deployedQuantity;
+
+    if (calculated <= 0) {
+      return 0;
+    }
+
+    return calculated;
   }
 
   String _cleanErrorMessage(Object error) {
@@ -863,13 +1332,17 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
   }
 
   void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) {
+      return;
+    }
+
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
           content: Text(message),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: isError ? Colors.red.shade700 : null,
+          backgroundColor: isError ? AppColors.error : null,
         ),
       );
   }

@@ -4,42 +4,167 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // ============================================================
-    // HELPER FUNCTIONS
+    // BASIC HELPERS
     // ============================================================
 
     function isSignedIn() {
       return request.auth != null;
     }
 
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function requestPath(requestId) {
+      return /databases/$(database)/documents/requests/$(requestId);
+    }
+
+    function assetPath(assetId) {
+      return /databases/$(database)/documents/assets/$(assetId);
+    }
+
     function currentUserExists() {
-      return isSignedIn()
-        && exists(
-          /databases/$(database)/documents/users/$(request.auth.uid)
-        );
+      return isSignedIn() && exists(userPath(request.auth.uid));
     }
 
     function currentUser() {
-      return get(
-        /databases/$(database)/documents/users/$(request.auth.uid)
-      ).data;
+      return get(userPath(request.auth.uid)).data;
+    }
+
+    // Only these statuses may use the system. 'blocked', 'disabled',
+    // 'inactive' and 'deleted' are all denied.
+    function isActiveStatus(data) {
+      return data.get('status', '') in ['active', 'Active', 'approved', 'Approved'];
+    }
+
+    // Login refuses unverified email addresses; enforced here too so a
+    // restored session or a direct API call cannot skip that check.
+    function isActiveUser() {
+      return currentUserExists()
+        && request.auth.token.email_verified == true
+        && isActiveStatus(currentUser());
+    }
+
+    function currentRole() {
+      return currentUser().get('role', '');
     }
 
     function isSuperAdmin() {
-      return currentUserExists()
-        && currentUser().role == 'super_admin';
+      return isActiveUser() && currentRole() == 'super_admin';
     }
 
     function isAdmin() {
-      return currentUserExists()
-        && currentUser().role == 'admin';
+      return isActiveUser() && currentRole() == 'admin';
     }
 
-    function isActiveUser() {
-      return currentUserExists()
-        && (
-          currentUser().status == 'active'
-          || currentUser().status == 'approved'
+    function isUser() {
+      return isActiveUser() && currentRole() == 'user';
+    }
+
+    function isManager() {
+      return isSuperAdmin() || isAdmin();
+    }
+
+    // ============================================================
+    // USER -> ADMIN RELATIONSHIP
+    // ============================================================
+    //
+    // users/{userId}.createdBy == UID of the Admin (or Super Admin)
+    // whose inventory the User works with.
+    // ============================================================
+
+    function currentUserAdminUid() {
+      return currentUser().get('createdBy', '');
+    }
+
+    function currentUserHasAdmin() {
+      return isUser() && currentUserAdminUid() != '';
+    }
+
+    function isActiveAdminUid(uid) {
+      return uid is string
+        && uid != ''
+        && exists(userPath(uid))
+        && get(userPath(uid)).data.get('role', '') == 'admin'
+        && isActiveStatus(get(userPath(uid)).data);
+    }
+
+    // `roles` (when present) must mirror the single primary `role`.
+    // Prevents injecting e.g. roles: ['super_admin'] next to role: 'user'.
+    function validRoles(data) {
+      return !data.keys().hasAny(['roles'])
+        || data.roles.hasOnly([data.role]);
+    }
+
+    // ============================================================
+    // ASSET HELPERS
+    // ============================================================
+
+    function assetBelongsToCurrentUserAdmin(assetId) {
+      return currentUserHasAdmin()
+        && exists(assetPath(assetId))
+        && get(assetPath(assetId)).data.get('adminId', '') == currentUserAdminUid();
+    }
+
+    // Owner UID of an asset or movement record; missing or null -> ''.
+    function ownerOf(data) {
+      return data.get('adminId', null) == null ? '' : data.adminId;
+    }
+
+    function hasStockFields(data) {
+      return data.keys().hasAll([
+        'quantity',
+        'headOfficeQuantity',
+        'assignedQuantity',
+        'deployedQuantity'
+      ]);
+    }
+
+    // INVENTORY INVARIANT:
+    // quantity = headOfficeQuantity + assignedQuantity + deployedQuantity
+    function stockConsistent(data) {
+      return hasStockFields(data)
+        && data.quantity is int
+        && data.headOfficeQuantity is int
+        && data.assignedQuantity is int
+        && data.deployedQuantity is int
+        && data.quantity >= 0
+        && data.headOfficeQuantity >= 0
+        && data.assignedQuantity >= 0
+        && data.deployedQuantity >= 0
+        && data.headOfficeQuantity
+          + data.assignedQuantity
+          + data.deployedQuantity == data.quantity;
+    }
+
+    // Legacy assets without an owner may be claimed by the Admin
+    // editing/moving them. Existing ownership can never change.
+    function adminOwnershipPreserved() {
+      return request.resource.data.get('adminId', null) == resource.data.get('adminId', null)
+        || (
+          resource.data.get('adminId', null) in [null, '']
+          && request.resource.data.get('adminId', null) == request.auth.uid
         );
+    }
+
+    // ============================================================
+    // SUPER ADMIN HANDOVER
+    // ============================================================
+
+    function handoverKeys() {
+      return [
+        'role', 'roles', 'designation',
+        'superAdminTransferredAt', 'superAdminTransferredTo',
+        'superAdminTransferredFrom'
+      ];
+    }
+
+    function validSuperAdminHandoverTarget(targetUid) {
+      return isSuperAdmin()
+        && targetUid != request.auth.uid
+        && isActiveAdminUid(targetUid)
+        && getAfter(userPath(request.auth.uid)).data.role == 'admin'
+        && getAfter(userPath(targetUid)).data.role == 'super_admin';
     }
 
     // ============================================================
@@ -48,31 +173,238 @@ service cloud.firestore {
 
     match /users/{userId} {
 
-      // User can read own profile.
-      // Admin and Super Admin can read users.
-      allow read: if isSignedIn()
+      // ----------------------------------------------------------
+      // READ
+      // ----------------------------------------------------------
+      //
+      // Every signed-in account can read its OWN profile regardless
+      // of status, so a blocked/disabled account is shown the real
+      // reason instead of a permission error.
+      //
+      // Super Admin / Admin: all users.
+      // ----------------------------------------------------------
+
+      allow read: if isSignedIn() && userId == request.auth.uid;
+
+      allow read: if isManager();
+
+      // ----------------------------------------------------------
+      // PUBLIC SIGNUP
+      // ----------------------------------------------------------
+      //
+      // A newly authenticated account may create ONLY its own
+      // profile as an active, unassigned User.
+      // ----------------------------------------------------------
+
+      allow create: if isSignedIn()
+        && userId == request.auth.uid
+        && !currentUserExists()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.role == 'user'
+        && validRoles(request.resource.data)
+        && request.resource.data.status == 'active'
+        && request.resource.data.createdBy == ''
+        && request.resource.data.get('createdByEmail', '') == ''
+        && request.resource.data.get('adminId', '') == ''
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.keys().hasOnly([
+          'uid',
+          'name',
+          'email',
+          'role',
+          'roles',
+          'status',
+          'employeeId',
+          'department',
+          'designation',
+          'phone',
+          'phoneNumber',
+          'createdBy',
+          'createdByEmail',
+          'organizationId',
+          'createdAt'
+        ]);
+
+      // ----------------------------------------------------------
+      // SUPER ADMIN CREATE
+      // ----------------------------------------------------------
+      //
+      // Admin: createdBy = Super Admin.
+      // User:  createdBy = Super Admin, or an existing active Admin
+      //        the User is assigned to.
+      //
+      // A Super Admin can never be created directly.
+      // ----------------------------------------------------------
+
+      allow create: if isSuperAdmin()
+        && userId != request.auth.uid
+        && request.resource.data.uid == userId
+        && validRoles(request.resource.data)
         && (
-          userId == request.auth.uid
-          || isSuperAdmin()
-          || isAdmin()
+          (
+            request.resource.data.role == 'admin'
+            && request.resource.data.createdBy == request.auth.uid
+          )
+          ||
+          (
+            request.resource.data.role == 'user'
+            && (
+              request.resource.data.createdBy == request.auth.uid
+              || isActiveAdminUid(request.resource.data.createdBy)
+            )
+          )
         );
 
-      // Only Super Admin can create users.
-      // Another Super Admin cannot be created.
-      allow create: if isSuperAdmin()
-        && request.resource.data.role != 'super_admin'
+      // ----------------------------------------------------------
+      // ADMIN CREATE
+      // ----------------------------------------------------------
+
+      allow create: if isAdmin()
+        && userId != request.auth.uid
+        && request.resource.data.uid == userId
+        && request.resource.data.role == 'user'
+        && validRoles(request.resource.data)
+        && isActiveStatus(request.resource.data)
         && request.resource.data.createdBy == request.auth.uid;
 
-      // Only Super Admin can update other users.
-      // Another Super Admin cannot be created.
+      // ----------------------------------------------------------
+      // SUPER ADMIN UPDATE
+      // ----------------------------------------------------------
+      //
+      // Any other non-Super-Admin account. Cannot promote anyone to
+      // Super Admin (handover has its own rule below).
+      // ----------------------------------------------------------
+
       allow update: if isSuperAdmin()
         && userId != request.auth.uid
-        && request.resource.data.role != 'super_admin';
+        && resource.data.get('role', '') != 'super_admin'
+        && request.resource.data.role in ['admin', 'user']
+        && validRoles(request.resource.data)
+        // The profile always stays bound to its Firebase Auth account.
+        && request.resource.data.uid == userId
+        && request.resource.data.email == resource.data.email;
 
-      // Only Super Admin can delete users.
-      // Super Admin cannot delete own profile.
-      allow delete: if isSuperAdmin()
-        && userId != request.auth.uid;
+      // ----------------------------------------------------------
+      // ADMIN UPDATE
+      // ----------------------------------------------------------
+      //
+      // Only Users managed by this Admin; role and ownership are
+      // immutable for an Admin.
+      // ----------------------------------------------------------
+
+      // Descriptive details, plus the soft delete (status -> 'deleted').
+      // Status changes are otherwise reserved for the Super Admin.
+      allow update: if isAdmin()
+        && userId != request.auth.uid
+        && resource.data.get('role', '') == 'user'
+        && resource.data.get('createdBy', '') in [request.auth.uid, '']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'employeeId',
+          'department',
+          'designation',
+          'phone',
+          'phoneNumber',
+          'updatedAt',
+          'lastUpdated',
+          'status',
+          'deletedAt'
+        ])
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status'])
+          || request.resource.data.status == 'deleted'
+        );
+
+      // ----------------------------------------------------------
+      // SELF PROFILE UPDATE
+      // ----------------------------------------------------------
+      //
+      // An active account may edit its own descriptive fields only.
+      // Role, roles, status, ownership and email are NOT editable.
+      // ----------------------------------------------------------
+
+      allow update: if isActiveUser()
+        && userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'department',
+          'designation',
+          'phone',
+          'phoneNumber',
+          'updatedAt',
+          'lastUpdated'
+        ]);
+
+      // ----------------------------------------------------------
+      // SUPER ADMIN HANDOVER: current Super Admin -> Admin
+      // ----------------------------------------------------------
+
+      allow update: if userId == request.auth.uid
+        && request.resource.data.keys().hasAny(['superAdminTransferredTo'])
+        && validSuperAdminHandoverTarget(
+          request.resource.data.superAdminTransferredTo
+        )
+        && request.resource.data.role == 'admin'
+        && validRoles(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(handoverKeys());
+
+      // ----------------------------------------------------------
+      // SUPER ADMIN HANDOVER: target Admin -> Super Admin
+      // ----------------------------------------------------------
+
+      allow update: if userId != request.auth.uid
+        && request.resource.data.role == 'super_admin'
+        && validRoles(request.resource.data)
+        && validSuperAdminHandoverTarget(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(handoverKeys());
+
+      // ----------------------------------------------------------
+      // APPOINT ADDITIONAL SUPER ADMIN (active Admin -> Super Admin)
+      // ----------------------------------------------------------
+      //
+      // Several Super Admins may exist, so the system never depends on
+      // a single person's account. No account is hard-coded.
+      // ----------------------------------------------------------
+
+      allow update: if isSuperAdmin()
+        && userId != request.auth.uid
+        && resource.data.get('role', '') == 'admin'
+        && isActiveStatus(resource.data)
+        && request.resource.data.role == 'super_admin'
+        && validRoles(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'role', 'roles', 'designation',
+          'promotedToSuperAdminBy', 'promotedToSuperAdminAt'
+        ]);
+
+      // ----------------------------------------------------------
+      // REMOVE ANOTHER SUPER ADMIN (Super Admin -> Admin)
+      // ----------------------------------------------------------
+      //
+      // Never one's own account: the acting Super Admin remains, so at
+      // least one Super Admin always exists. Stepping down is only
+      // possible through the handover above.
+      // ----------------------------------------------------------
+
+      allow update: if isSuperAdmin()
+        && userId != request.auth.uid
+        && resource.data.get('role', '') == 'super_admin'
+        && request.resource.data.role == 'admin'
+        && validRoles(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'role', 'roles', 'designation',
+          'demotedFromSuperAdminBy', 'demotedFromSuperAdminAt'
+        ]);
+
+      // ----------------------------------------------------------
+      // DELETE
+      // ----------------------------------------------------------
+
+      // Profiles are never hard-deleted: the Firebase Auth account survives a
+      // document delete and could then re-create itself as a new active
+      // account through the public signup rule above. UserService.deleteUser
+      // soft-deletes instead (status 'deleted' + deletedAt).
+      allow delete: if false;
     }
 
     // ============================================================
@@ -81,28 +413,79 @@ service cloud.firestore {
 
     match /requests/{requestId} {
 
-      // Super Admin and Admin can see all requests.
-      // Other active users can see only their own requests.
-      allow read: if isActiveUser()
+      function canActOnRequest() {
+        return isSuperAdmin()
+          || (
+            isAdmin()
+            && (
+              resource.data.get('receiverId', '') == request.auth.uid
+              || resource.data.get('assetAdminId', '') == request.auth.uid
+              || (
+                resource.data.get('assetId', '') != ''
+                && exists(assetPath(resource.data.assetId))
+                && get(assetPath(resource.data.assetId)).data.get('adminId', '') == request.auth.uid
+              )
+            )
+          );
+      }
+
+      // ----------------------------------------------------------
+      // READ
+      // ----------------------------------------------------------
+
+      allow read: if isManager();
+
+      allow read: if isUser()
         && (
-          isSuperAdmin()
-          || isAdmin()
-          || resource.data.requestedBy == request.auth.uid
+          resource.data.requestedBy == request.auth.uid
+          || resource.data.get('receiverId', '') == request.auth.uid
         );
 
-      // Active users can create their own requests.
+      // ----------------------------------------------------------
+      // CREATE
+      // ----------------------------------------------------------
+      //
+      // Every account creates only its own, Pending, unprocessed
+      // request. A User may only reference inventory of their Admin.
+      // ----------------------------------------------------------
+
       allow create: if isActiveUser()
         && request.resource.data.requestedBy == request.auth.uid
-        && request.resource.data.status == 'Pending';
-
-      // Only Admin and Super Admin can update requests.
-      allow update: if isActiveUser()
+        && request.resource.data.status == 'Pending'
+        && request.resource.data.get('approvedBy', '') == ''
         && (
-          isSuperAdmin()
-          || isAdmin()
+          isManager()
+          ||
+          (
+            isUser()
+            && (
+              request.resource.data.get('assetId', '') == ''
+              || assetBelongsToCurrentUserAdmin(request.resource.data.assetId)
+            )
+            // A User's request is routed only to the User's own Admin.
+            && request.resource.data.get('receiverId', '') in ['', currentUserAdminUid()]
+          )
         );
 
-      // Only Super Admin can delete requests.
+      // ----------------------------------------------------------
+      // UPDATE (approve / reject)
+      // ----------------------------------------------------------
+      //
+      // - Only a Pending request can be processed (exactly once).
+      // - Nobody can process their own request.
+      // - The requester and the requested change are immutable.
+      // ----------------------------------------------------------
+
+      allow update: if canActOnRequest()
+        && resource.data.status == 'Pending'
+        && request.resource.data.status in ['Approved', 'Rejected']
+        && resource.data.requestedBy != request.auth.uid
+        && request.resource.data.requestedBy == resource.data.requestedBy
+        && request.resource.data.get('requestType', '') == resource.data.get('requestType', '')
+        && request.resource.data.get('assetId', '') == resource.data.get('assetId', '')
+        && request.resource.data.get('transferQuantity', 0) == resource.data.get('transferQuantity', 0)
+        && request.resource.data.get('proposedAssetData', null) == resource.data.get('proposedAssetData', null);
+
       allow delete: if isSuperAdmin();
     }
 
@@ -112,29 +495,174 @@ service cloud.firestore {
 
     match /assets/{assetId} {
 
-      // All active authenticated users can view assets.
+      // ----------------------------------------------------------
+      // READ
+      // ----------------------------------------------------------
+      //
+      // Super Admin / Admin: all inventory.
+      // User: only inventory owned by the Admin the User belongs to.
+      // (Uses resource.data so scoped list queries are allowed.)
+      // ----------------------------------------------------------
+
+      allow read: if isManager();
+
+      allow read: if currentUserHasAdmin()
+        && resource.data.adminId == currentUserAdminUid();
+
+      // ----------------------------------------------------------
+      // CREATE
+      // ----------------------------------------------------------
+
+      allow create: if stockConsistent(request.resource.data)
+        && (
+          isSuperAdmin()
+          ||
+          (
+            isAdmin()
+            && request.resource.data.get('adminId', '') == request.auth.uid
+          )
+        );
+
+      // ----------------------------------------------------------
+      // UPDATE
+      // ----------------------------------------------------------
+      //
+      // A write may never turn a consistent stock record into an
+      // inconsistent one.
+      // ----------------------------------------------------------
+
+      allow update: if (
+          isSuperAdmin()
+          || (isAdmin() && adminOwnershipPreserved())
+        )
+        && (
+          !stockConsistent(resource.data)
+          || stockConsistent(request.resource.data)
+        );
+
+      // ----------------------------------------------------------
+      // DELETE
+      // ----------------------------------------------------------
+
+      allow delete: if isManager();
+    }
+
+    // ============================================================
+    // BAZAARS (master data)
+    // ============================================================
+
+    match /bazaars/{bazaarId} {
+
       allow read: if isActiveUser();
 
-      // Admin and Super Admin can create assets directly.
+      allow create, update: if isSuperAdmin()
+        && request.resource.data.name is string
+        && request.resource.data.name.trim().size() > 0;
+
+      // Bazaars are disabled, never deleted, so historical movement
+      // records always keep their reference.
+      allow delete: if false;
+    }
+
+    // ============================================================
+    // DEPLOYMENTS (movement history)
+    // ============================================================
+
+    match /deployments/{deploymentId} {
+
+      // A User sees only movements of their own Admin's inventory.
+      allow read: if isManager()
+        || (
+          currentUserHasAdmin()
+          && resource.data.get('adminId', '') == currentUserAdminUid()
+        );
+
+      // adminId must name the owner of the moved asset.
+      allow create: if isManager()
+        && request.resource.data.get('assetDocumentId', '') != ''
+        && request.resource.data.quantity is int
+        && request.resource.data.quantity > 0
+        && ownerOf(request.resource.data)
+          == ownerOf(getAfter(assetPath(request.resource.data.assetDocumentId)).data);
+
+      // A movement record can only give up stock, never gain it, and a
+      // closed record (Transferred / Returned) can never become Active again.
+      // adminId may only be filled in (legacy records) with the asset owner.
+      allow update: if isManager()
+        && request.resource.data.assetDocumentId == resource.data.assetDocumentId
+        && request.resource.data.quantity is int
+        && request.resource.data.quantity >= 0
+        && request.resource.data.quantity <= resource.data.quantity
+        && (
+          request.resource.data.get('status', '') != 'Active'
+          || resource.data.get('status', '') == 'Active'
+        )
+        && (
+          ownerOf(request.resource.data) == ownerOf(resource.data)
+          || (
+            !resource.data.keys().hasAny(['adminId'])
+            && ownerOf(request.resource.data)
+              == ownerOf(get(assetPath(resource.data.assetDocumentId)).data)
+          )
+        );
+
+      // Movement history is permanent.
+      allow delete: if false;
+    }
+
+    // ============================================================
+    // NOTIFICATIONS
+    // ============================================================
+
+    match /notifications/{notificationId} {
+
+      allow read: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+
+      // Request notifications are written by the requester together
+      // with the request (batch), or by an Admin/Super Admin when a
+      // request is processed.
       allow create: if isActiveUser()
+        && request.resource.data.userId is string
+        && request.resource.data.userId != ''
+        && request.resource.data.isRead == false
+        && request.resource.data.get('requestId', '') != ''
         && (
-          isSuperAdmin()
-          || isAdmin()
+          isManager()
+          || (
+            existsAfter(requestPath(request.resource.data.requestId))
+            && getAfter(requestPath(request.resource.data.requestId)).data.requestedBy == request.auth.uid
+            // Only to the requester or the request's routed receiver.
+            && request.resource.data.userId in [
+              request.auth.uid,
+              getAfter(requestPath(request.resource.data.requestId)).data.get('receiverId', '')
+            ]
+          )
         );
 
-      // Admin and Super Admin can update assets.
-      allow update: if isActiveUser()
-        && (
-          isSuperAdmin()
-          || isAdmin()
-        );
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt']);
 
-      // Admin and Super Admin can delete assets.
-      allow delete: if isActiveUser()
-        && (
-          isSuperAdmin()
-          || isAdmin()
-        );
+      allow delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // ============================================================
+    // ACTIVITY LOGS
+    // ============================================================
+
+    match /logs/{logId} {
+
+      allow read: if isManager();
+
+      // Audit entries are written in the name of the signed-in account,
+      // stamped with the server time, and can never be edited or deleted.
+      allow create: if isManager()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+
+      allow update, delete: if false;
     }
 
     // ============================================================
@@ -144,3 +672,5 @@ service cloud.firestore {
     match /{document=**} {
       allow read, write: if false;
     }
+  }
+}

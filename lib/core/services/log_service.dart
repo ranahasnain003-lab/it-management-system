@@ -11,7 +11,11 @@ class LogService {
   }
 
   Future<void> createLog(ActivityModel activity) async {
-    await _logCollection.add(activity.toMap());
+    // Audit entries carry the server time (required by the Security Rules,
+    // so a client clock can never back-date an entry).
+    await _logCollection.add(
+      activity.toMap()..['createdAt'] = FieldValue.serverTimestamp(),
+    );
   }
 
   Stream<List<ActivityModel>> getLogs() {

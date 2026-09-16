@@ -1,6 +1,10 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+
+import '../../providers/auth_provider.dart';
+import '../../theme/colors.dart';
 
 class SecurityScreen extends StatefulWidget {
   const SecurityScreen({super.key});
@@ -33,10 +37,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
           },
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: const Text(
-          'Security Center',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
+        title: const Text('Security Center'),
         actions: [
           IconButton(
             tooltip: 'Refresh security status',
@@ -49,7 +50,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                   )
                 : const Icon(Icons.refresh_rounded),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: AppSpacing.sm),
         ],
       ),
       body: SafeArea(
@@ -59,80 +60,100 @@ class _SecurityScreenState extends State<SecurityScreen> {
             physics: const AlwaysScrollableScrollPhysics(
               parent: BouncingScrollPhysics(),
             ),
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 32),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildSecurityHeader(context, emailVerified),
-                const SizedBox(height: 24),
-                _buildSectionTitle(
-                  context,
-                  'Account Security',
-                  'Review the security status of your account',
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 900),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildSecurityHeader(context, emailVerified),
+                    const SizedBox(height: AppSpacing.xl),
+                    _buildSectionTitle(
+                      context,
+                      'Account Security',
+                      'Review the security status of your account',
+                    ),
+                    const SizedBox(height: AppSpacing.sm + 2),
+                    _buildSecurityStatusCard(
+                      context,
+                      emailVerified: emailVerified,
+                      hasEmail: hasEmail,
+                    ),
+                    const SizedBox(height: AppSpacing.xl),
+                    _buildSectionTitle(
+                      context,
+                      'Security Actions',
+                      'Manage important account security settings',
+                    ),
+                    const SizedBox(height: AppSpacing.sm + 2),
+                    _buildActionCard(
+                      context,
+                      icon: Icons.lock_outline_rounded,
+                      title: 'Change Password',
+                      subtitle: 'Update your account password securely',
+                      onTap: () {
+                        context.push('/change-password');
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    _buildActionCard(
+                      context,
+                      icon: Icons.mark_email_read_outlined,
+                      title: 'Email Verification',
+                      subtitle: emailVerified
+                          ? 'Your email address has been verified'
+                          : 'Verify your email address',
+                      trailing: emailVerified
+                          ? _buildStatusBadge(
+                              context,
+                              'Verified',
+                              AppColors.success,
+                            )
+                          : FilledButton.tonal(
+                              style: FilledButton.styleFrom(
+                                minimumSize: const Size(0, 40),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                ),
+                              ),
+                              onPressed: hasEmail
+                                  ? _sendVerificationEmail
+                                  : null,
+                              child: const Text('Verify'),
+                            ),
+                      onTap: emailVerified
+                          ? null
+                          : hasEmail
+                          ? _sendVerificationEmail
+                          : null,
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    _buildActionCard(
+                      context,
+                      icon: Icons.logout_rounded,
+                      title: 'Sign Out',
+                      subtitle: 'Sign out from this account on this device',
+                      iconBackground: AppColors.tint(
+                        colors.error,
+                        colors.brightness,
+                      ),
+                      iconColor: colors.error,
+                      onTap: _showSignOutDialog,
+                    ),
+                    const SizedBox(height: AppSpacing.xl),
+                    _buildSectionTitle(
+                      context,
+                      'Account Details',
+                      'Authentication information from Firebase',
+                    ),
+                    const SizedBox(height: AppSpacing.sm + 2),
+                    _buildAccountDetailsCard(context, user),
+                    const SizedBox(height: AppSpacing.xl),
+                    _buildSecurityTipsCard(context),
+                  ],
                 ),
-                const SizedBox(height: 12),
-                _buildSecurityStatusCard(
-                  context,
-                  emailVerified: emailVerified,
-                  hasEmail: hasEmail,
-                ),
-                const SizedBox(height: 24),
-                _buildSectionTitle(
-                  context,
-                  'Security Actions',
-                  'Manage important account security settings',
-                ),
-                const SizedBox(height: 12),
-                _buildActionCard(
-                  context,
-                  icon: Icons.lock_outline_rounded,
-                  title: 'Change Password',
-                  subtitle: 'Update your account password securely',
-                  onTap: () {
-                    context.push('/change-password');
-                  },
-                ),
-                const SizedBox(height: 10),
-                _buildActionCard(
-                  context,
-                  icon: Icons.mark_email_read_outlined,
-                  title: 'Email Verification',
-                  subtitle: emailVerified
-                      ? 'Your email address has been verified'
-                      : 'Verify your email address',
-                  trailing: emailVerified
-                      ? _buildStatusBadge(context, 'Verified', colors.primary)
-                      : FilledButton.tonal(
-                          onPressed: hasEmail ? _sendVerificationEmail : null,
-                          child: const Text('Verify'),
-                        ),
-                  onTap: emailVerified
-                      ? null
-                      : hasEmail
-                      ? _sendVerificationEmail
-                      : null,
-                ),
-                const SizedBox(height: 10),
-                _buildActionCard(
-                  context,
-                  icon: Icons.logout_rounded,
-                  title: 'Sign Out',
-                  subtitle: 'Sign out from this account on this device',
-                  iconBackground: colors.errorContainer,
-                  iconColor: colors.onErrorContainer,
-                  onTap: _showSignOutDialog,
-                ),
-                const SizedBox(height: 24),
-                _buildSectionTitle(
-                  context,
-                  'Account Details',
-                  'Authentication information from Firebase',
-                ),
-                const SizedBox(height: 12),
-                _buildAccountDetailsCard(context, user),
-                const SizedBox(height: 24),
-                _buildSecurityTipsCard(context),
-              ],
+              ),
             ),
           ),
         ),
@@ -140,75 +161,79 @@ class _SecurityScreenState extends State<SecurityScreen> {
     );
   }
 
-  Widget _buildSecurityHeader(BuildContext context, bool emailVerified) {
+  Widget _buildIconTile(
+    BuildContext context,
+    IconData icon, {
+    Color? background,
+    Color? foreground,
+  }) {
     final colors = Theme.of(context).colorScheme;
 
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
+      width: 40,
+      height: 40,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [colors.primary, colors.primary.withValues(alpha: 0.76)],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: colors.primary.withValues(alpha: 0.18),
-            blurRadius: 26,
-            offset: const Offset(0, 12),
-          ),
-        ],
+        color: background ?? AppColors.tint(colors.primary, colors.brightness),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 66,
-            height: 66,
-            decoration: BoxDecoration(
-              color: colors.onPrimary.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: colors.onPrimary.withValues(alpha: 0.18),
+      child: Icon(icon, size: 20, color: foreground ?? colors.primary),
+    );
+  }
+
+  Widget _buildSecurityHeader(BuildContext context, bool emailVerified) {
+    final colors = Theme.of(context).colorScheme;
+    final tone = emailVerified ? AppColors.success : AppColors.warning;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg + 2),
+        child: Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: AppColors.tint(tone, colors.brightness),
+                borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+              ),
+              child: Icon(
+                emailVerified
+                    ? Icons.verified_user_rounded
+                    : Icons.security_rounded,
+                size: 26,
+                color: AppColors.onTint(tone, colors.brightness),
               ),
             ),
-            child: Icon(
-              emailVerified
-                  ? Icons.verified_user_rounded
-                  : Icons.security_rounded,
-              size: 34,
-              color: colors.onPrimary,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Security Center',
-                  style: TextStyle(
-                    color: colors.onPrimary,
-                    fontSize: 21,
-                    fontWeight: FontWeight.w800,
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Security Center',
+                    style: TextStyle(
+                      color: colors.onSurface,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  emailVerified
-                      ? 'Your account security is in good standing.'
-                      : 'Review your account security and verification.',
-                  style: TextStyle(
-                    color: colors.onPrimary.withValues(alpha: 0.82),
-                    fontSize: 12,
-                    height: 1.4,
+                  const SizedBox(height: 2),
+                  Text(
+                    emailVerified
+                        ? 'Your account security is in good standing.'
+                        : 'Review your account security and verification.',
+                    style: TextStyle(
+                      color: colors.onSurfaceVariant,
+                      fontSize: 13,
+                      height: 1.4,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -220,19 +245,27 @@ class _SecurityScreenState extends State<SecurityScreen> {
   ) {
     final colors = Theme.of(context).colorScheme;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          subtitle,
-          style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: colors.onSurface,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.2,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 12.5, color: colors.onSurfaceVariant),
+          ),
+        ],
+      ),
     );
   }
 
@@ -241,8 +274,6 @@ class _SecurityScreenState extends State<SecurityScreen> {
     required bool emailVerified,
     required bool hasEmail,
   }) {
-    final colors = Theme.of(context).colorScheme;
-
     final checks = [
       _SecurityCheck(
         title: 'Firebase Authentication',
@@ -268,75 +299,72 @@ class _SecurityScreenState extends State<SecurityScreen> {
       ),
     ];
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(17),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.outline.withValues(alpha: 0.10)),
-      ),
-      child: Column(
-        children: [
-          for (int index = 0; index < checks.length; index++) ...[
-            _buildSecurityCheck(context, checks[index]),
-            if (index != checks.length - 1)
-              Divider(
-                height: 24,
-                color: colors.outline.withValues(alpha: 0.08),
-              ),
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+        child: Column(
+          children: [
+            for (int index = 0; index < checks.length; index++) ...[
+              _buildSecurityCheck(context, checks[index]),
+              if (index != checks.length - 1) const Divider(height: 1),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildSecurityCheck(BuildContext context, _SecurityCheck check) {
     final colors = Theme.of(context).colorScheme;
-    final statusColor = check.healthy ? colors.primary : colors.error;
+    final statusColor = check.healthy ? AppColors.success : colors.error;
 
-    return Row(
-      children: [
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: colors.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Icon(check.icon, size: 22, color: colors.primary),
-        ),
-        const SizedBox(width: 13),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                check.title,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.md + 2),
+      child: Row(
+        children: [
+          _buildIconTile(context, check.icon),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  check.title,
+                  style: TextStyle(
+                    color: colors.onSurface,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                check.subtitle,
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.35,
-                  color: colors.onSurfaceVariant,
+                const SizedBox(height: 2),
+                Text(
+                  check.subtitle,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.35,
+                    color: colors.onSurfaceVariant,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(width: 10),
-        Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
-        ),
-      ],
+          const SizedBox(width: AppSpacing.md),
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: statusColor,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: statusColor.withValues(alpha: 0.25),
+                  spreadRadius: 3,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -352,64 +380,61 @@ class _SecurityScreenState extends State<SecurityScreen> {
   }) {
     final colors = Theme.of(context).colorScheme;
 
-    return Material(
-      color: colors.surface,
-      borderRadius: BorderRadius.circular(18),
+    return Card(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          padding: const EdgeInsets.all(15),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: colors.outline.withValues(alpha: 0.10)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: iconBackground ?? colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(14),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 64),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.md,
+            ),
+            child: Row(
+              children: [
+                _buildIconTile(
+                  context,
+                  icon,
+                  background: iconBackground,
+                  foreground: iconColor,
                 ),
-                child: Icon(icon, size: 23, color: iconColor ?? colors.primary),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          color: colors.onSurface,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.35,
-                        color: colors.onSurfaceVariant,
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.35,
+                          color: colors.onSurfaceVariant,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              if (trailing != null)
-                trailing
-              else
-                Icon(
-                  Icons.chevron_right_rounded,
-                  color: colors.onSurfaceVariant,
-                ),
-            ],
+                const SizedBox(width: AppSpacing.sm),
+                if (trailing != null)
+                  trailing
+                else
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: colors.onSurfaceVariant,
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -417,68 +442,64 @@ class _SecurityScreenState extends State<SecurityScreen> {
   }
 
   Widget _buildStatusBadge(BuildContext context, String text, Color color) {
+    final brightness = Theme.of(context).colorScheme.brightness;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
+        color: AppColors.tint(color, brightness),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
       ),
       child: Text(
         text,
         style: TextStyle(
-          color: color,
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
+          color: AppColors.onTint(color, brightness),
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
   }
 
   Widget _buildAccountDetailsCard(BuildContext context, User? user) {
-    final colors = Theme.of(context).colorScheme;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.outline.withValues(alpha: 0.10)),
-      ),
-      child: Column(
-        children: [
-          _buildDetailRow(
-            context,
-            icon: Icons.email_outlined,
-            title: 'Email',
-            value: user?.email ?? 'Not available',
-          ),
-          Divider(height: 1, color: colors.outline.withValues(alpha: 0.08)),
-          _buildDetailRow(
-            context,
-            icon: Icons.fingerprint_rounded,
-            title: 'User ID',
-            value: user?.uid ?? 'Not available',
-          ),
-          Divider(height: 1, color: colors.outline.withValues(alpha: 0.08)),
-          _buildDetailRow(
-            context,
-            icon: Icons.calendar_today_outlined,
-            title: 'Account Created',
-            value: user?.metadata.creationTime == null
-                ? 'Not available'
-                : _formatDate(user!.metadata.creationTime!),
-          ),
-          Divider(height: 1, color: colors.outline.withValues(alpha: 0.08)),
-          _buildDetailRow(
-            context,
-            icon: Icons.login_outlined,
-            title: 'Last Sign In',
-            value: user?.metadata.lastSignInTime == null
-                ? 'Not available'
-                : _formatDate(user!.metadata.lastSignInTime!),
-          ),
-        ],
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+        child: Column(
+          children: [
+            _buildDetailRow(
+              context,
+              icon: Icons.email_outlined,
+              title: 'Email',
+              value: user?.email ?? 'Not available',
+            ),
+            const Divider(height: 1),
+            _buildDetailRow(
+              context,
+              icon: Icons.fingerprint_rounded,
+              title: 'User ID',
+              value: user?.uid ?? 'Not available',
+            ),
+            const Divider(height: 1),
+            _buildDetailRow(
+              context,
+              icon: Icons.calendar_today_outlined,
+              title: 'Account Created',
+              value: user?.metadata.creationTime == null
+                  ? 'Not available'
+                  : _formatDate(user!.metadata.creationTime!),
+            ),
+            const Divider(height: 1),
+            _buildDetailRow(
+              context,
+              icon: Icons.login_outlined,
+              title: 'Last Sign In',
+              value: user?.metadata.lastSignInTime == null
+                  ? 'Not available'
+                  : _formatDate(user!.metadata.lastSignInTime!),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -492,19 +513,11 @@ class _SecurityScreenState extends State<SecurityScreen> {
     final colors = Theme.of(context).colorScheme;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 15),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.md + 2),
       child: Row(
         children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: colors.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: Icon(icon, size: 20, color: colors.primary),
-          ),
-          const SizedBox(width: 13),
+          _buildIconTile(context, icon),
+          const SizedBox(width: AppSpacing.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -512,19 +525,20 @@ class _SecurityScreenState extends State<SecurityScreen> {
                 Text(
                   title,
                   style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                     color: colors.onSurfaceVariant,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   value,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+                  style: TextStyle(
+                    color: colors.onSurface,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -547,44 +561,54 @@ class _SecurityScreenState extends State<SecurityScreen> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(AppSpacing.lg),
       decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.outline.withValues(alpha: 0.08)),
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+        border: Border.all(color: colors.outlineVariant),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.lightbulb_outline_rounded, color: colors.primary),
-              const SizedBox(width: 10),
-              const Text(
-                'Security Recommendations',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+              const Icon(
+                Icons.lightbulb_outline_rounded,
+                color: AppColors.warning,
+                size: 20,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  'Security Recommendations',
+                  style: TextStyle(
+                    color: colors.onSurface,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: AppSpacing.md),
           for (final tip in tips) ...[
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 5),
+                const Padding(
+                  padding: EdgeInsets.only(top: 2),
                   child: Icon(
                     Icons.check_circle_outline_rounded,
                     size: 16,
-                    color: colors.primary,
+                    color: AppColors.success,
                   ),
                 ),
-                const SizedBox(width: 9),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
                     tip,
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 13,
                       height: 1.4,
                       color: colors.onSurfaceVariant,
                     ),
@@ -592,7 +616,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                 ),
               ],
             ),
-            if (tip != tips.last) const SizedBox(height: 9),
+            if (tip != tips.last) const SizedBox(height: AppSpacing.sm),
           ],
         ],
       ),
@@ -686,10 +710,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
 
         return AlertDialog(
           icon: Icon(Icons.logout_rounded, color: colors.error, size: 32),
-          title: const Text(
-            'Sign Out?',
-            style: TextStyle(fontWeight: FontWeight.w800),
-          ),
+          title: const Text('Sign Out?'),
           content: const Text(
             'Are you sure you want to sign out from this account?',
           ),
@@ -720,7 +741,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
     }
 
     try {
-      await FirebaseAuth.instance.signOut();
+      // Clears the session through AuthProvider; account-specific provider
+      // state is cleared by the App session watcher.
+      await context.read<AuthProvider>().logout();
 
       if (!mounted) {
         return;

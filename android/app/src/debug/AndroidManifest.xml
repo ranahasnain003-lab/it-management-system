@@ -4,4 +4,9 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- DEBUG BUILDS ONLY: allows the Firebase Local Emulator Suite on the
+         development machine (10.0.2.2 from the Android emulator) to be used by
+         integration_test/. Release builds keep the default policy. -->
+    <application android:networkSecurityConfig="@xml/network_security_config_debug"/>
 </manifest>

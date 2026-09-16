@@ -2,9 +2,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 class AuthService {
   AuthService({FirebaseAuth? firebaseAuth})
-    : _firebaseAuth = firebaseAuth ?? FirebaseAuth.instance;
+    : _firebaseAuthOverride = firebaseAuth;
 
-  final FirebaseAuth _firebaseAuth;
+  final FirebaseAuth? _firebaseAuthOverride;
+
+  // Resolved lazily so constructing the service never touches Firebase.
+  FirebaseAuth get _firebaseAuth =>
+      _firebaseAuthOverride ?? FirebaseAuth.instance;
 
   // ============================================================
   // CURRENT USER
@@ -35,11 +39,17 @@ class AuthService {
     final cleanEmail = email.trim().toLowerCase();
 
     if (cleanEmail.isEmpty) {
-      throw Exception('Please enter your email address.');
+      throw const AuthException(
+        'Please enter your email address.',
+        code: 'missing-email',
+      );
     }
 
     if (password.isEmpty) {
-      throw Exception('Please enter your password.');
+      throw const AuthException(
+        'Please enter your password.',
+        code: 'missing-password',
+      );
     }
 
     try {
@@ -48,21 +58,17 @@ class AuthService {
         password: password,
       );
 
-      final user = credential.user;
-
-      if (user == null) {
-        throw Exception('Unable to login. Please try again.');
+      if (credential.user == null) {
+        throw const AuthException('Unable to sign in. Please try again.');
       }
 
       return credential;
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
-    } catch (e) {
-      if (e is Exception) {
-        rethrow;
-      }
-
-      throw Exception('Unable to login. Please try again.');
+      throw AuthException.fromFirebase(e);
+    } on AuthException {
+      rethrow;
+    } catch (_) {
+      throw const AuthException('Unable to sign in. Please try again.');
     }
   }
 
@@ -72,11 +78,8 @@ class AuthService {
 
   /// Creates a Firebase Authentication account.
   ///
-  /// New self-registered accounts are normal users.
-  /// Their Firestore profile will be created by AuthProvider
-  /// after successful account creation.
-  ///
-  /// Email verification is sent immediately after signup.
+  /// New self-registered accounts are normal users. Their Firestore profile
+  /// is created by AuthProvider after successful account creation.
   Future<UserCredential> signup({
     String? name,
     required String email,
@@ -85,15 +88,16 @@ class AuthService {
     final cleanEmail = email.trim().toLowerCase();
 
     if (cleanEmail.isEmpty) {
-      throw Exception('Please enter your email address.');
+      throw const AuthException(
+        'Please enter your email address.',
+        code: 'missing-email',
+      );
     }
 
-    if (password.isEmpty) {
-      throw Exception('Please enter a password.');
-    }
+    final passwordError = AuthException.validateNewPassword(password);
 
-    if (password.length < 6) {
-      throw Exception('Password must be at least 6 characters.');
+    if (passwordError != null) {
+      throw AuthException(passwordError, code: 'weak-password');
     }
 
     try {
@@ -105,30 +109,28 @@ class AuthService {
       final user = credential.user;
 
       if (user == null) {
-        throw Exception('Unable to create your account.');
+        throw const AuthException('Unable to create your account.');
       }
 
-      // Save user's display name in Firebase Authentication.
       final cleanName = name?.trim() ?? '';
 
       if (cleanName.isNotEmpty) {
         await user.updateDisplayName(cleanName);
       }
 
-      // Send email verification immediately.
       if (!user.emailVerified) {
         await user.sendEmailVerification();
       }
 
       return credential;
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
-    } catch (e) {
-      if (e is Exception) {
-        rethrow;
-      }
-
-      throw Exception('Unable to create your account. Please try again.');
+      throw AuthException.fromFirebase(e);
+    } on AuthException {
+      rethrow;
+    } catch (_) {
+      throw const AuthException(
+        'Unable to create your account. Please try again.',
+      );
     }
   }
 
@@ -140,7 +142,10 @@ class AuthService {
     final User? user = _firebaseAuth.currentUser;
 
     if (user == null) {
-      throw Exception('No logged-in user found.');
+      throw const AuthException(
+        'Please sign in again to request a verification email.',
+        code: 'no-current-user',
+      );
     }
 
     if (user.emailVerified) {
@@ -150,9 +155,11 @@ class AuthService {
     try {
       await user.sendEmailVerification();
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
+      throw AuthException.fromFirebase(e);
     } catch (_) {
-      throw Exception('Unable to send verification email. Please try again.');
+      throw const AuthException(
+        'Unable to send the verification email. Please try again.',
+      );
     }
   }
 
@@ -180,13 +187,13 @@ class AuthService {
     try {
       await user.reload();
 
-      final User? refreshedUser = _firebaseAuth.currentUser;
-
-      return refreshedUser?.emailVerified ?? false;
+      return _firebaseAuth.currentUser?.emailVerified ?? false;
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
+      throw AuthException.fromFirebase(e);
     } catch (_) {
-      throw Exception('Unable to check email verification status.');
+      throw const AuthException(
+        'Unable to check your email verification status.',
+      );
     }
   }
 
@@ -203,15 +210,20 @@ class AuthService {
     final String cleanEmail = email.trim().toLowerCase();
 
     if (cleanEmail.isEmpty) {
-      throw Exception('Please enter your email address.');
+      throw const AuthException(
+        'Please enter your email address.',
+        code: 'missing-email',
+      );
     }
 
     try {
       await _firebaseAuth.sendPasswordResetEmail(email: cleanEmail);
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
+      throw AuthException.fromFirebase(e);
     } catch (_) {
-      throw Exception('Unable to send password reset email. Please try again.');
+      throw const AuthException(
+        'Unable to send the password reset email. Please try again.',
+      );
     }
   }
 
@@ -223,9 +235,9 @@ class AuthService {
     try {
       await _firebaseAuth.signOut();
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
+      throw AuthException.fromFirebase(e);
     } catch (_) {
-      throw Exception('Unable to logout. Please try again.');
+      throw const AuthException('Unable to sign out. Please try again.');
     }
   }
 
@@ -237,72 +249,130 @@ class AuthService {
     final User? user = _firebaseAuth.currentUser;
 
     if (user == null) {
-      throw Exception('No logged-in user found.');
+      throw const AuthException(
+        'No signed-in account was found.',
+        code: 'no-current-user',
+      );
     }
 
     try {
       await user.delete();
     } on FirebaseAuthException catch (e) {
-      throw _handleAuthException(e);
+      throw AuthException.fromFirebase(e);
     } catch (_) {
-      throw Exception('Unable to delete the account. Please try again.');
+      throw const AuthException(
+        'Unable to delete the account. Please try again.',
+      );
     }
   }
+}
 
-  // ============================================================
-  // ERROR HANDLING
-  // ============================================================
+/// Authentication error with a stable [code] and a user-facing [message].
+///
+/// [toString] returns only the message, so UI never shows "Exception:".
+class AuthException implements Exception {
+  const AuthException(this.message, {this.code = 'unknown'});
 
-  Exception _handleAuthException(FirebaseAuthException e) {
-    switch (e.code) {
+  factory AuthException.fromFirebase(FirebaseAuthException e) {
+    final code = normalizeCode(e.code, e.message);
+    return AuthException(friendlyMessage(code), code: code);
+  }
+
+  final String code;
+  final String message;
+
+  /// Minimum length for passwords chosen in this app.
+  static const int minPasswordLength = 8;
+
+  /// Returns a helpful message when [password] does not meet the password
+  /// rules for new accounts, or null when it is acceptable.
+  static String? validateNewPassword(String password) {
+    if (password.isEmpty) {
+      return 'Please enter a password.';
+    }
+
+    if (password.length < minPasswordLength) {
+      return 'Password must be at least $minPasswordLength characters.';
+    }
+
+    if (!RegExp(r'[A-Za-z]').hasMatch(password)) {
+      return 'Password must include at least one letter.';
+    }
+
+    if (!RegExp(r'[0-9]').hasMatch(password)) {
+      return 'Password must include at least one number.';
+    }
+
+    return null;
+  }
+
+  /// Firebase reports some errors with different codes per platform (the web
+  /// SDK can wrap "INVALID_LOGIN_CREDENTIALS" in an internal-error).
+  static String normalizeCode(String code, [String? rawMessage]) {
+    final value = code.trim().toLowerCase().replaceFirst('auth/', '');
+    final raw = (rawMessage ?? '').toUpperCase();
+
+    if (value == 'invalid-login-credentials' ||
+        raw.contains('INVALID_LOGIN_CREDENTIALS') ||
+        raw.contains('INVALID_PASSWORD')) {
+      return 'invalid-credential';
+    }
+
+    if (raw.contains('TOO_MANY_ATTEMPTS_TRY_LATER')) {
+      return 'too-many-requests';
+    }
+
+    if (value == 'internal-error' && raw.contains('EMAIL_NOT_FOUND')) {
+      return 'user-not-found';
+    }
+
+    return value;
+  }
+
+  static String friendlyMessage(String code) {
+    switch (code) {
       case 'invalid-email':
-        return Exception('Please enter a valid email address.');
+      case 'missing-email':
+        return 'Please enter a valid email address.';
 
       case 'user-not-found':
-        return Exception('No account was found with this email address.');
-
       case 'wrong-password':
       case 'invalid-credential':
-        return Exception('Email or password is incorrect.');
+        return 'Incorrect email or password. Please try again.';
 
       case 'email-already-in-use':
-        return Exception('An account already exists with this email address.');
+        return 'An account already exists with this email address. '
+            'Try signing in or resetting your password.';
 
       case 'weak-password':
-        return Exception(
-          'Password is too weak. Please use a stronger password.',
-        );
+        return 'This password is too weak. Use at least $minPasswordLength '
+            'characters with letters and numbers.';
 
       case 'user-disabled':
-        return Exception('This account has been disabled.');
+        return 'This account has been disabled. '
+            'Please contact your administrator.';
 
       case 'too-many-requests':
-        return Exception('Too many attempts. Please try again later.');
+        return 'Too many attempts. Please wait a few minutes and try again.';
 
       case 'network-request-failed':
-        return Exception(
-          'Network error. Please check your internet connection.',
-        );
+        return 'Network error. Check your internet connection and try again.';
 
       case 'operation-not-allowed':
-        return Exception(
-          'This authentication method is not enabled in Firebase.',
-        );
+        return 'Email and password sign-in is not enabled for this app.';
 
       case 'requires-recent-login':
-        return Exception('Please login again and retry this operation.');
+        return 'For your security, please sign in again and retry.';
 
       case 'user-token-expired':
-        return Exception('Your session has expired. Please login again.');
+      case 'invalid-user-token':
+        return 'Your session has expired. Please sign in again.';
 
       default:
-        final String? message = e.message;
-
-        if (message != null && message.trim().isNotEmpty) {
-          return Exception(message);
-        }
-
-        return Exception('Authentication failed. Please try again.');
+        return 'Something went wrong. Please try again.';
     }
   }
+
+  @override
+  String toString() => message;
 }

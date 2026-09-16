@@ -1,7 +1,8 @@
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+
+import '../../../theme/colors.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -44,8 +45,14 @@ class _SplashScreenState extends State<SplashScreen> {
         return;
       }
 
-      // Email verification is temporarily bypassed.
-      // Any authenticated Firebase user can continue to Dashboard.
+      if (!refreshedUser.emailVerified) {
+        await FirebaseAuth.instance.signOut();
+
+        if (!mounted) return;
+        context.go('/login');
+        return;
+      }
+
       if (!mounted) return;
       context.go('/dashboard');
     } catch (e) {
@@ -56,74 +63,66 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final colors = Theme.of(context).colorScheme;
 
     return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 92,
-                height: 92,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(26),
-                  boxShadow: [
-                    BoxShadow(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.12),
-                      blurRadius: 24,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(AppSpacing.xxl),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 76,
+                  height: 76,
+                  decoration: BoxDecoration(
+                    color: colors.primary,
+                    borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
+                  ),
+                  child: Icon(
+                    Icons.inventory_2_rounded,
+                    size: 38,
+                    color: colors.onPrimary,
+                  ),
                 ),
-                child: Icon(
-                  Icons.inventory_2_rounded,
-                  size: 48,
-                  color: theme.colorScheme.primary,
+                const SizedBox(height: AppSpacing.xl),
+                Text(
+                  'IT Management System',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.4,
+                    color: colors.onSurface,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 28),
-              Text(
-                'IT Management System',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                  color: theme.colorScheme.onSurface,
+                const SizedBox(height: AppSpacing.xs + 2),
+                Text(
+                  'Enterprise IT Inventory Management',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: colors.onSurfaceVariant,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Enterprise IT Inventory Management',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: theme.colorScheme.onSurfaceVariant,
+                const SizedBox(height: AppSpacing.xxl),
+                const SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(strokeWidth: 2.6),
                 ),
-              ),
-              const SizedBox(height: 34),
-              SizedBox(
-                width: 32,
-                height: 32,
-                child: CircularProgressIndicator(
-                  strokeWidth: 3,
-                  color: theme.colorScheme.primary,
+                const SizedBox(height: AppSpacing.md + 2),
+                Text(
+                  'Loading...',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: colors.onSurfaceVariant,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                'Loading...',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

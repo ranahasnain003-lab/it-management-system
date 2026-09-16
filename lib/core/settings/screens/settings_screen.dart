@@ -1,5 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+
+import '../../providers/theme_provider.dart';
+import '../../providers/user_provider.dart';
+import '../../theme/colors.dart';
+import '../../users/screens/add_user_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -14,11 +20,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _securityAlerts = true;
   bool _biometricEnabled = false;
 
-  String _selectedTheme = 'System Default';
-
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final themeProvider = context.watch<ThemeProvider>();
+    final userProvider = context.watch<UserProvider>();
+    final isSuperAdmin = userProvider.isSuperAdmin;
+    final isManager = isSuperAdmin || userProvider.isAdmin;
 
     return Scaffold(
       appBar: AppBar(
@@ -33,238 +41,240 @@ class _SettingsScreenState extends State<SettingsScreen> {
           },
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: const Text(
-          'Settings',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
+        title: const Text('Settings'),
         actions: [
           IconButton(
             tooltip: 'Reset Settings',
             onPressed: _showResetSettingsDialog,
             icon: const Icon(Icons.restart_alt_rounded),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: AppSpacing.sm),
         ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
           physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildHeader(context),
-              const SizedBox(height: 24),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 900),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildHeader(context),
+                  const SizedBox(height: AppSpacing.xl),
 
-              // =====================================================
-              // ADMINISTRATION
-              // =====================================================
-              _buildSectionTitle(
-                context,
-                'Administration',
-                'Manage organization users and requests',
+                  _buildSectionTitle(
+                    context,
+                    'Administration',
+                    'Manage organization users, locations and requests',
+                  ),
+                  const SizedBox(height: AppSpacing.sm + 2),
+
+                  // User management is limited to Admin / Super Admin (the
+                  // /users route is guarded as well).
+                  if (isManager) ...[
+                    _buildSettingsCard(
+                      context,
+                      icon: Icons.person_add_alt_1_rounded,
+                      title: 'Add User',
+                      subtitle: 'Create a new organization user account',
+                      tone: colors.primary,
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const AddUserScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+
+                    _buildSettingsCard(
+                      context,
+                      icon: Icons.people_alt_outlined,
+                      title: 'User Management',
+                      subtitle: 'Manage users, roles, status and permissions',
+                      tone: AppColors.assigned,
+                      onTap: () {
+                        context.push('/users');
+                      },
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                  ],
+
+                  _buildSettingsCard(
+                    context,
+                    icon: Icons.location_city_rounded,
+                    title: 'Bazaar Master',
+                    subtitle: isSuperAdmin
+                        ? 'Manage Sahulat Bazaars and operational locations'
+                        : 'View Sahulat Bazaars and operational locations',
+                    tone: AppColors.bazaar,
+                    onTap: () {
+                      context.push('/locations');
+                    },
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+
+                  _buildSettingsCard(
+                    context,
+                    icon: Icons.assignment_outlined,
+                    title: 'Requests',
+                    subtitle: 'Review and manage asset requests',
+                    tone: AppColors.pending,
+                    onTap: () {
+                      context.push('/requests');
+                    },
+                  ),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildSectionTitle(
+                    context,
+                    'Appearance',
+                    'Customize your application experience',
+                  ),
+                  const SizedBox(height: AppSpacing.sm + 2),
+
+                  _buildAppearanceCard(context, themeProvider),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildSectionTitle(
+                    context,
+                    'Notifications',
+                    'Control alerts and notification preferences',
+                  ),
+                  const SizedBox(height: AppSpacing.sm + 2),
+
+                  _buildNotificationCard(context),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildSectionTitle(
+                    context,
+                    'Security',
+                    'Protect your account and application access',
+                  ),
+                  const SizedBox(height: AppSpacing.sm + 2),
+
+                  _buildSettingsCard(
+                    context,
+                    icon: Icons.lock_outline_rounded,
+                    title: 'Change Password',
+                    subtitle: 'Update your account password securely',
+                    onTap: () {
+                      if (_routeExists(context, '/change-password')) {
+                        context.push('/change-password');
+                      } else {
+                        _showMessage(
+                          'Change Password screen is not available yet.',
+                        );
+                      }
+                    },
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+
+                  _buildSwitchCard(
+                    context,
+                    icon: Icons.fingerprint_rounded,
+                    title: 'Biometric Login',
+                    subtitle: 'Use biometric authentication when available',
+                    value: _biometricEnabled,
+                    onChanged: (value) {
+                      setState(() {
+                        _biometricEnabled = value;
+                      });
+
+                      _showMessage(
+                        value
+                            ? 'Biometric login enabled.'
+                            : 'Biometric login disabled.',
+                      );
+                    },
+                  ),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildSectionTitle(
+                    context,
+                    'Application Data',
+                    'Manage temporary local application data',
+                  ),
+                  const SizedBox(height: AppSpacing.sm + 2),
+
+                  _buildSettingsCard(
+                    context,
+                    icon: Icons.cleaning_services_outlined,
+                    title: 'Clear Cache',
+                    subtitle: 'Remove temporary image and application cache',
+                    onTap: _showClearCacheDialog,
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+
+                  _buildSettingsCard(
+                    context,
+                    icon: Icons.storage_outlined,
+                    title: 'Storage',
+                    subtitle: 'View application storage information',
+                    onTap: () {
+                      _showStorageInfo(context);
+                    },
+                  ),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildSectionTitle(
+                    context,
+                    'Application',
+                    'Information and application services',
+                  ),
+                  const SizedBox(height: AppSpacing.sm + 2),
+
+                  _buildSettingsCard(
+                    context,
+                    icon: Icons.info_outline_rounded,
+                    title: 'About Application',
+                    subtitle: 'Version, features and system information',
+                    onTap: () {
+                      _showAboutApplication(context);
+                    },
+                  ),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildVersionCard(context),
+                ],
               ),
-              const SizedBox(height: 12),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.person_add_alt_1_rounded,
-                title: 'Add User',
-                subtitle: 'Create a new organization user account',
-                iconBackground: colors.primaryContainer,
-                iconColor: colors.onPrimaryContainer,
-                onTap: () {
-                  context.push('/users');
-                },
-              ),
-              const SizedBox(height: 10),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.people_alt_outlined,
-                title: 'User Management',
-                subtitle: 'Manage users, roles, status and permissions',
-                iconBackground: colors.secondaryContainer,
-                iconColor: colors.onSecondaryContainer,
-                onTap: () {
-                  context.push('/users');
-                },
-              ),
-              const SizedBox(height: 10),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.assignment_outlined,
-                title: 'Requests',
-                subtitle: 'Review and manage asset requests',
-                iconBackground: colors.tertiaryContainer,
-                iconColor: colors.onTertiaryContainer,
-                onTap: () {
-                  context.push('/requests');
-                },
-              ),
-
-              const SizedBox(height: 24),
-
-              // =====================================================
-              // APPEARANCE
-              // =====================================================
-              _buildSectionTitle(
-                context,
-                'Appearance',
-                'Customize your application experience',
-              ),
-              const SizedBox(height: 12),
-
-              _buildAppearanceCard(context),
-
-              const SizedBox(height: 24),
-
-              // =====================================================
-              // NOTIFICATIONS
-              // =====================================================
-              _buildSectionTitle(
-                context,
-                'Notifications',
-                'Control alerts and notification preferences',
-              ),
-              const SizedBox(height: 12),
-
-              _buildNotificationCard(context),
-
-              const SizedBox(height: 24),
-
-              // =====================================================
-              // SECURITY
-              // =====================================================
-              _buildSectionTitle(
-                context,
-                'Security',
-                'Protect your account and application access',
-              ),
-              const SizedBox(height: 12),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.lock_outline_rounded,
-                title: 'Change Password',
-                subtitle: 'Update your account password securely',
-                onTap: () {
-                  if (_routeExists(context, '/change-password')) {
-                    context.push('/change-password');
-                  } else {
-                    _showMessage(
-                      'Change Password screen is not available yet.',
-                    );
-                  }
-                },
-              ),
-              const SizedBox(height: 10),
-
-              _buildSwitchCard(
-                context,
-                icon: Icons.fingerprint_rounded,
-                title: 'Biometric Login',
-                subtitle: 'Use biometric authentication when available',
-                value: _biometricEnabled,
-                onChanged: (value) {
-                  setState(() {
-                    _biometricEnabled = value;
-                  });
-
-                  _showMessage(
-                    value
-                        ? 'Biometric login enabled.'
-                        : 'Biometric login disabled.',
-                  );
-                },
-              ),
-              const SizedBox(height: 10),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.security_outlined,
-                title: 'Security Center',
-                subtitle: 'Review your account security settings',
-                onTap: () {
-                  if (_routeExists(context, '/security')) {
-                    context.push('/security');
-                  } else {
-                    _showMessage('Security Center is not available yet.');
-                  }
-                },
-              ),
-
-              const SizedBox(height: 24),
-
-              // =====================================================
-              // APPLICATION DATA
-              // =====================================================
-              _buildSectionTitle(
-                context,
-                'Application Data',
-                'Manage temporary local application data',
-              ),
-              const SizedBox(height: 12),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.cleaning_services_outlined,
-                title: 'Clear Cache',
-                subtitle: 'Remove temporary image and application cache',
-                onTap: _showClearCacheDialog,
-              ),
-              const SizedBox(height: 10),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.storage_outlined,
-                title: 'Storage',
-                subtitle: 'View application storage information',
-                onTap: () {
-                  _showStorageInfo(context);
-                },
-              ),
-
-              const SizedBox(height: 24),
-
-              // =====================================================
-              // APPLICATION
-              // =====================================================
-              _buildSectionTitle(
-                context,
-                'Application',
-                'Information and application services',
-              ),
-              const SizedBox(height: 12),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.notifications_none_rounded,
-                title: 'Notifications',
-                subtitle: 'View your application notifications',
-                onTap: () {
-                  context.push('/notifications');
-                },
-              ),
-              const SizedBox(height: 10),
-
-              _buildSettingsCard(
-                context,
-                icon: Icons.info_outline_rounded,
-                title: 'About Application',
-                subtitle: 'Version, features and system information',
-                onTap: () {
-                  _showAboutApplication(context);
-                },
-              ),
-
-              const SizedBox(height: 24),
-
-              _buildVersionCard(context),
-            ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+
+  // ================================================================
+  // SHARED ICON TILE
+  // ================================================================
+
+  Widget _buildIconTile(BuildContext context, IconData icon, {Color? tone}) {
+    final colors = Theme.of(context).colorScheme;
+    final color = tone ?? colors.primary;
+
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: AppColors.tint(color, colors.brightness),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+      ),
+      child: Icon(
+        icon,
+        size: 20,
+        color: tone == null
+            ? colors.primary
+            : AppColors.onTint(color, colors.brightness),
       ),
     );
   }
@@ -276,65 +286,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _buildHeader(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [colors.primary, colors.primary.withValues(alpha: 0.76)],
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg + 2),
+        child: Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: colors.primary,
+                borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+              ),
+              child: Icon(
+                Icons.settings_rounded,
+                size: 26,
+                color: colors.onPrimary,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Application Settings',
+                    style: TextStyle(
+                      color: colors.onSurface,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Configure your IT Management System experience.',
+                    style: TextStyle(
+                      color: colors.onSurfaceVariant,
+                      fontSize: 13,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
-        boxShadow: [
-          BoxShadow(
-            color: colors.primary.withValues(alpha: 0.18),
-            blurRadius: 26,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
-              color: colors.onPrimary.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(17),
-            ),
-            child: Icon(
-              Icons.settings_rounded,
-              size: 30,
-              color: colors.onPrimary,
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Application Settings',
-                  style: TextStyle(
-                    color: colors.onPrimary,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  'Configure your IT Management System experience.',
-                  style: TextStyle(
-                    color: colors.onPrimary.withValues(alpha: 0.82),
-                    fontSize: 12,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -350,17 +347,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ) {
     final colors = Theme.of(context).colorScheme;
 
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: colors.onSurface,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.2,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 12.5, color: colors.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ================================================================
+  // ROW CONTENT
+  // ================================================================
+
+  Widget _buildRowText(BuildContext context, String title, String subtitle) {
+    final colors = Theme.of(context).colorScheme;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           title,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          style: TextStyle(
+            color: colors.onSurface,
+            fontSize: 14.5,
+            fontWeight: FontWeight.w600,
+          ),
         ),
-        const SizedBox(height: 3),
+        const SizedBox(height: 2),
         Text(
           subtitle,
-          style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 12.5,
+            height: 1.35,
+            color: colors.onSurfaceVariant,
+          ),
         ),
       ],
     );
@@ -376,63 +414,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String title,
     required String subtitle,
     required VoidCallback onTap,
-    Color? iconBackground,
-    Color? iconColor,
+    Color? tone,
   }) {
     final colors = Theme.of(context).colorScheme;
 
-    return Material(
-      color: colors.surface,
-      borderRadius: BorderRadius.circular(18),
+    return Card(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          padding: const EdgeInsets.all(15),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: colors.outline.withValues(alpha: 0.10)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: iconBackground ?? colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(14),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 64),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.md,
+            ),
+            child: Row(
+              children: [
+                _buildIconTile(context, icon, tone: tone),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(child: _buildRowText(context, title, subtitle)),
+                const SizedBox(width: AppSpacing.sm),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: colors.onSurfaceVariant,
                 ),
-                child: Icon(icon, size: 23, color: iconColor ?? colors.primary),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.35,
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Icon(Icons.chevron_right_rounded, color: colors.onSurfaceVariant),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -451,55 +458,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required bool value,
     required ValueChanged<bool> onChanged,
   }) {
-    final colors = Theme.of(context).colorScheme;
-
-    return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: colors.outline.withValues(alpha: 0.10)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: colors.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(icon, color: colors.primary, size: 23),
+    return Card(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 64),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.md,
+            AppSpacing.md,
+            AppSpacing.md,
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.35,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
+          child: Row(
+            children: [
+              _buildIconTile(context, icon),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(child: _buildRowText(context, title, subtitle)),
+              const SizedBox(width: AppSpacing.sm),
+              Switch(value: value, onChanged: onChanged),
+            ],
           ),
-          const SizedBox(width: 8),
-          Switch(value: value, onChanged: onChanged),
-        ],
+        ),
       ),
     );
   }
@@ -508,95 +486,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // APPEARANCE
   // ================================================================
 
-  Widget _buildAppearanceCard(BuildContext context) {
+  Widget _buildAppearanceCard(
+    BuildContext context,
+    ThemeProvider themeProvider,
+  ) {
     final colors = Theme.of(context).colorScheme;
+    final selectedTheme = themeProvider.selectedTheme;
 
-    return Container(
-      padding: const EdgeInsets.all(17),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.outline.withValues(alpha: 0.10)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: colors.primaryContainer,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  Icons.palette_outlined,
-                  color: colors.onPrimaryContainer,
-                  size: 23,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Theme',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Choose your preferred application appearance',
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.35,
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              color: colors.surfaceContainerHighest.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: _selectedTheme,
-                isExpanded: true,
-                icon: const Icon(Icons.keyboard_arrow_down_rounded),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'System Default',
-                    child: Text('System Default'),
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                _buildIconTile(context, Icons.palette_outlined),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: _buildRowText(
+                    context,
+                    'Theme',
+                    'Choose your preferred application appearance',
                   ),
-                  DropdownMenuItem(value: 'Light', child: Text('Light')),
-                  DropdownMenuItem(value: 'Dark', child: Text('Dark')),
-                ],
-                onChanged: (value) {
-                  if (value == null) {
-                    return;
-                  }
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md + 2),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                border: Border.all(color: colors.outlineVariant),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: selectedTheme,
+                  isExpanded: true,
+                  borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                  dropdownColor: colors.surface,
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'System Default',
+                      child: Text('System Default'),
+                    ),
+                    DropdownMenuItem(value: 'Light', child: Text('Light')),
+                    DropdownMenuItem(value: 'Dark', child: Text('Dark')),
+                  ],
+                  onChanged: (value) async {
+                    if (value == null) {
+                      return;
+                    }
 
-                  setState(() {
-                    _selectedTheme = value;
-                  });
+                    try {
+                      await context.read<ThemeProvider>().setTheme(value);
 
-                  _showMessage('Theme preference set to $value.');
-                },
+                      if (!mounted) {
+                        return;
+                      }
+
+                      _showMessage('Theme changed to $value.');
+                    } catch (_) {
+                      if (!mounted) {
+                        return;
+                      }
+
+                      _showMessage('Unable to save theme preference.');
+                    }
+                  },
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -629,7 +593,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             );
           },
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: AppSpacing.sm),
         AnimatedOpacity(
           duration: const Duration(milliseconds: 200),
           opacity: _notificationsEnabled ? 1 : 0.5,
@@ -655,7 +619,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: AppSpacing.sm),
         AnimatedOpacity(
           duration: const Duration(milliseconds: 200),
           opacity: _notificationsEnabled ? 1 : 0.5,
@@ -694,40 +658,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(AppSpacing.lg + 2),
       decoration: BoxDecoration(
-        color: colors.surfaceContainerHighest.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.outline.withValues(alpha: 0.08)),
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+        border: Border.all(color: colors.outlineVariant),
       ),
       child: Column(
         children: [
-          Icon(Icons.business_center_outlined, size: 32, color: colors.primary),
-          const SizedBox(height: 10),
-          const Text(
+          Icon(Icons.business_center_outlined, size: 28, color: colors.primary),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
             'IT Management System',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+            style: TextStyle(
+              color: colors.onSurface,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             'Enterprise IT Inventory Management',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
+            style: TextStyle(fontSize: 12.5, color: colors.onSurfaceVariant),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: AppSpacing.sm + 2),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm + 2,
+              vertical: AppSpacing.xs,
+            ),
             decoration: BoxDecoration(
-              color: colors.primaryContainer,
-              borderRadius: BorderRadius.circular(20),
+              color: AppColors.tint(colors.primary, colors.brightness),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
             ),
             child: Text(
               'Version 1.0.0',
               style: TextStyle(
-                color: colors.onPrimaryContainer,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
+                color: colors.primary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -754,7 +725,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           title: const Text(
             'Clear Cache?',
-            style: TextStyle(fontWeight: FontWeight.w800),
           ),
           content: const Text(
             'Temporary image and Flutter application cache will be '
@@ -804,7 +774,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icon(Icons.storage_outlined, color: colors.primary),
           title: const Text(
             'Storage',
-            style: TextStyle(fontWeight: FontWeight.w800),
           ),
           content: const Text(
             'Your IT Management System uses Firebase for secure '
@@ -844,18 +813,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             width: 58,
             height: 58,
             decoration: BoxDecoration(
-              color: colors.primaryContainer,
-              borderRadius: BorderRadius.circular(17),
+              color: AppColors.tint(colors.primary, colors.brightness),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
             ),
             child: Icon(
               Icons.business_center_outlined,
-              color: colors.onPrimaryContainer,
+              color: colors.primary,
             ),
           ),
           title: const Text(
             'IT Management System',
             textAlign: TextAlign.center,
-            style: TextStyle(fontWeight: FontWeight.w800),
           ),
           content: const Text(
             'A professional enterprise IT inventory management '
@@ -895,7 +863,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           title: const Text(
             'Reset Settings?',
-            style: TextStyle(fontWeight: FontWeight.w800),
           ),
           content: const Text(
             'This will restore notification, security and '
@@ -924,15 +891,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
-    setState(() {
-      _notificationsEnabled = true;
-      _emailNotifications = true;
-      _securityAlerts = true;
-      _biometricEnabled = false;
-      _selectedTheme = 'System Default';
-    });
+    try {
+      await context.read<ThemeProvider>().setTheme('System Default');
 
-    _showMessage('Settings restored to default.');
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _notificationsEnabled = true;
+        _emailNotifications = true;
+        _securityAlerts = true;
+        _biometricEnabled = false;
+      });
+
+      _showMessage('Settings restored to default.');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage('Unable to reset theme preference.');
+    }
   }
 
   // ================================================================

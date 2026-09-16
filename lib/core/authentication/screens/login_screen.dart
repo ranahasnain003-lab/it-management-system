@@ -1,23 +1,64 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
+import '../widgets/auth_widgets.dart';
 
-class LoginScreen extends StatefulWidget {
+/// Android sign-in screen.
+class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: AuthScrollBody(
+          child: AuthSignInForm(onSignedIn: () => context.go('/dashboard')),
+        ),
+      ),
+    );
+  }
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+/// Sign-in form shared by the Android screen and the web login page.
+///
+/// Handles validation, loading state, friendly errors, the session message
+/// set by app.dart, unverified email (with resend) and links to the
+/// forgot-password and signup pages.
+class AuthSignInForm extends StatefulWidget {
+  const AuthSignInForm({
+    super.key,
+    required this.onSignedIn,
+    this.title = 'Welcome back',
+    this.subtitle = 'Sign in to your IT Management System account.',
+    this.centeredHeader = true,
+  });
+
+  final VoidCallback onSignedIn;
+  final String title;
+  final String subtitle;
+  final bool centeredHeader;
+
+  @override
+  State<AuthSignInForm> createState() => _AuthSignInFormState();
+}
+
+class _AuthSignInFormState extends State<AuthSignInForm> {
   final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
 
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
+  String? _sessionMessage;
+  String? _errorMessage;
+  String? _successMessage;
 
-  bool _obscurePassword = true;
+  // Set when sign-in was refused because the email is not verified.
+  String? _unverifiedEmail;
+  String? _resendError;
+
+  bool _sessionMessageCheckScheduled = false;
 
   @override
   void dispose() {
@@ -26,121 +67,138 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  /// Picks up the explanation app.dart leaves when it ends a session. It can
+  /// arrive before or after this page is built, so it is checked on every
+  /// provider change.
+  void _scheduleSessionMessageCheck() {
+    if (_sessionMessageCheckScheduled) return;
+    _sessionMessageCheckScheduled = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _sessionMessageCheckScheduled = false;
+      if (!mounted) return;
+
+      final message = context.read<AuthProvider>().consumeSessionMessage();
+
+      if (message != null) {
+        setState(() {
+          _sessionMessage = message;
+          _errorMessage = null;
+          _successMessage = null;
+        });
+      }
+    });
+  }
+
+  String get _cleanEmail => _emailController.text.trim().toLowerCase();
+
   // ============================================================
-  // LOGIN
+  // SIGN IN
   // ============================================================
 
-  Future<void> _login() async {
+  Future<void> _signIn() async {
+    final auth = context.read<AuthProvider>();
+
+    if (auth.isLoading) return;
+
     FocusScope.of(context).unfocus();
 
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    setState(() {
+      _sessionMessage = null;
+      _errorMessage = null;
+      _successMessage = null;
+      _unverifiedEmail = null;
+      _resendError = null;
+    });
 
-    final authProvider = context.read<AuthProvider>();
+    if (!_formKey.currentState!.validate()) return;
 
-    if (authProvider.isLoading) {
-      return;
-    }
+    final email = _cleanEmail;
 
     try {
-      await authProvider.login(
-        email: _emailController.text.trim(),
+      await auth.login(email: email, password: _passwordController.text);
+
+      if (!mounted) return;
+
+      TextInput.finishAutofillContext();
+      widget.onSignedIn();
+    } catch (e) {
+      if (!mounted) return;
+
+      final code = e is AuthException ? e.code : null;
+
+      if (code == AuthProvider.busyCode) return;
+
+      setState(() {
+        _errorMessage = AuthProvider.describeError(e);
+        _unverifiedEmail = code == AuthProvider.emailNotVerifiedCode
+            ? email
+            : null;
+      });
+    }
+  }
+
+  // ============================================================
+  // RESEND VERIFICATION
+  // ============================================================
+
+  Future<void> _resendVerification() async {
+    final auth = context.read<AuthProvider>();
+    final email = _unverifiedEmail;
+
+    if (email == null || auth.isLoading) return;
+
+    if (_passwordController.text.isEmpty) {
+      setState(() {
+        _resendError = 'Enter your password above, then tap resend.';
+      });
+      return;
+    }
+
+    setState(() {
+      _resendError = null;
+      _successMessage = null;
+    });
+
+    try {
+      final result = await auth.resendVerificationFor(
+        email: email,
         password: _passwordController.text,
       );
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
-      context.go('/dashboard');
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
+      setState(() {
+        if (result == VerificationEmailResult.alreadyVerified) {
+          _unverifiedEmail = null;
+          _errorMessage = null;
+          _successMessage =
+              'Your email address is already verified. You can sign in now.';
+        } else {
+          _successMessage =
+              'A new verification link was sent to $email. Check your inbox '
+              'and spam folder, then sign in.';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
 
-      final message =
-          context.read<AuthProvider>().errorMessage ??
-          'Unable to sign in. Please try again.';
+      final code = e is AuthException ? e.code : null;
 
-      _showMessage(message, isError: true);
+      if (code == AuthProvider.busyCode) return;
+
+      setState(() => _resendError = AuthProvider.describeError(e));
     }
   }
 
-  // ============================================================
-  // SHOW MESSAGE
-  // ============================================================
+  void _openForgotPassword() {
+    final email = _cleanEmail;
 
-  void _showMessage(String message, {required bool isError}) {
-    if (!mounted) {
-      return;
-    }
+    final query = AuthProvider.emailPattern.hasMatch(email)
+        ? '?email=${Uri.encodeQueryComponent(email)}'
+        : '';
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              Icon(
-                isError
-                    ? Icons.error_outline_rounded
-                    : Icons.check_circle_outline_rounded,
-                color: Colors.white,
-              ),
-              const SizedBox(width: 10),
-              Expanded(child: Text(message)),
-            ],
-          ),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 4),
-        ),
-      );
-  }
-
-  // ============================================================
-  // FORGOT PASSWORD
-  // ============================================================
-
-  Future<void> _forgotPassword() async {
-    final email = _emailController.text.trim();
-
-    if (email.isEmpty) {
-      _showMessage('Please enter your email address first.', isError: true);
-      return;
-    }
-
-    final emailRegex = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
-
-    if (!emailRegex.hasMatch(email)) {
-      _showMessage('Please enter a valid email address.', isError: true);
-      return;
-    }
-
-    final authProvider = context.read<AuthProvider>();
-
-    try {
-      await authProvider.resetPassword(email);
-
-      if (!mounted) {
-        return;
-      }
-
-      _showMessage(
-        'Password reset email has been sent. Please check your inbox.',
-        isError: false,
-      );
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-
-      final message =
-          context.read<AuthProvider>().errorMessage ??
-          'Unable to send password reset email.';
-
-      _showMessage(message, isError: true);
-    }
+    context.push('/forgot-password$query');
   }
 
   // ============================================================
@@ -149,290 +207,144 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final busy = auth.isLoading;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 440),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+    if (auth.hasSessionMessage) {
+      _scheduleSessionMessageCheck();
+    }
+
+    return Form(
+      key: _formKey,
+      child: AutofillGroup(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            AuthHeader(
+              icon: Icons.admin_panel_settings_rounded,
+              title: widget.title,
+              subtitle: widget.subtitle,
+              centered: widget.centeredHeader,
+            ),
+            const SizedBox(height: 28),
+
+            if (_sessionMessage != null) ...[
+              AuthNotice(
+                title: 'You have been signed out',
+                message: _sessionMessage!,
+                type: AuthNoticeType.warning,
+                onDismiss: () => setState(() => _sessionMessage = null),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            if (_successMessage != null) ...[
+              AuthNotice(
+                message: _successMessage!,
+                type: AuthNoticeType.success,
+                onDismiss: () => setState(() => _successMessage = null),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            if (_errorMessage != null && _unverifiedEmail != null) ...[
+              AuthNotice(
+                title: 'Verify your email',
+                message: _errorMessage!,
+                type: AuthNoticeType.warning,
+                action: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // ======================================================
-                    // LOGO / ICON
-                    // ======================================================
-                    Center(
-                      child: Container(
-                        width: 82,
-                        height: 82,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: colors.primaryContainer,
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: Icon(
-                          Icons.admin_panel_settings_rounded,
-                          size: 44,
-                          color: colors.onPrimaryContainer,
-                        ),
-                      ),
+                    ResendEmailButton(
+                      label: 'Resend verification email',
+                      foreground: colors.onTertiaryContainer,
+                      loading:
+                          auth.activeAction == AuthAction.resendVerification,
+                      remaining: () =>
+                          auth.verificationCooldownFor(_unverifiedEmail!),
+                      onPressed: busy ? null : _resendVerification,
                     ),
-
-                    const SizedBox(height: 24),
-
-                    // ======================================================
-                    // TITLE
-                    // ======================================================
-                    Text(
-                      'Welcome Back',
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    Text(
-                      'Sign in to your IT Management System',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: colors.onSurfaceVariant,
-                        fontSize: 14,
-                      ),
-                    ),
-
-                    const SizedBox(height: 32),
-
-                    // ======================================================
-                    // EMAIL
-                    // ======================================================
-                    TextFormField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      decoration: InputDecoration(
-                        labelText: 'Email Address',
-                        hintText: 'Enter your email',
-                        prefixIcon: const Icon(Icons.email_outlined),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      validator: (value) {
-                        final email = value?.trim() ?? '';
-
-                        if (email.isEmpty) {
-                          return 'Please enter your email.';
-                        }
-
-                        final emailRegex = RegExp(
-                          r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-                        );
-
-                        if (!emailRegex.hasMatch(email)) {
-                          return 'Please enter a valid email address.';
-                        }
-
-                        return null;
-                      },
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // ======================================================
-                    // PASSWORD
-                    // ======================================================
-                    TextFormField(
-                      controller: _passwordController,
-                      obscureText: _obscurePassword,
-                      textInputAction: TextInputAction.done,
-                      onFieldSubmitted: (_) {
-                        if (!context.read<AuthProvider>().isLoading) {
-                          _login();
-                        }
-                      },
-                      decoration: InputDecoration(
-                        labelText: 'Password',
-                        hintText: 'Enter your password',
-                        prefixIcon: const Icon(Icons.lock_outline_rounded),
-                        suffixIcon: IconButton(
-                          tooltip: _obscurePassword
-                              ? 'Show password'
-                              : 'Hide password',
-                          onPressed: () {
-                            setState(() {
-                              _obscurePassword = !_obscurePassword;
-                            });
-                          },
-                          icon: Icon(
-                            _obscurePassword
-                                ? Icons.visibility_outlined
-                                : Icons.visibility_off_outlined,
+                    if (_resendError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8, top: 2),
+                        child: Text(
+                          _resendError!,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.error,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
                       ),
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please enter your password.';
-                        }
-
-                        if (value.length < 6) {
-                          return 'Password must be at least 6 characters.';
-                        }
-
-                        return null;
-                      },
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    // ======================================================
-                    // FORGOT PASSWORD
-                    // ======================================================
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: context.watch<AuthProvider>().isLoading
-                            ? null
-                            : _forgotPassword,
-                        child: const Text(
-                          'Forgot Password?',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // ======================================================
-                    // SIGN IN BUTTON
-                    // ======================================================
-                    Consumer<AuthProvider>(
-                      builder: (context, provider, child) {
-                        return SizedBox(
-                          height: 54,
-                          child: FilledButton(
-                            onPressed: provider.isLoading ? null : _login,
-                            style: FilledButton.styleFrom(
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                            ),
-                            child: provider.isLoading
-                                ? const SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2.5,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.login_rounded),
-                                      SizedBox(width: 10),
-                                      Text(
-                                        'Sign In',
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                          ),
-                        );
-                      },
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    // ======================================================
-                    // SIGNUP
-                    // ======================================================
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          "Don't have an account?",
-                          style: TextStyle(color: colors.onSurfaceVariant),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            context.push('/signup');
-                          },
-                          child: const Text(
-                            'Create Account',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // ======================================================
-                    // SECURITY INFO
-                    // ======================================================
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: colors.surfaceContainerHighest.withValues(
-                          alpha: 0.45,
-                        ),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.security_outlined,
-                            size: 20,
-                            color: colors.primary,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'Only verified and approved accounts '
-                              'can access the IT Management System.',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                height: 1.4,
-                                color: colors.onSurfaceVariant,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 18),
-
-                    Text(
-                      'Account access is managed by your organization\'s '
-                      'IT administration system.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: colors.onSurfaceVariant,
-                      ),
-                    ),
                   ],
                 ),
               ),
+              const SizedBox(height: 16),
+            ] else if (_errorMessage != null) ...[
+              AuthNotice(
+                message: _errorMessage!,
+                onDismiss: () => setState(() => _errorMessage = null),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            AuthEmailField(controller: _emailController, enabled: !busy),
+            const SizedBox(height: 16),
+            AuthPasswordField(
+              controller: _passwordController,
+              enabled: !busy,
+              hint: 'Enter your password',
+              validator: AuthValidators.loginPassword,
+              onFieldSubmitted: (_) => _signIn(),
             ),
-          ),
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: busy ? null : _openForgotPassword,
+                child: const Text(
+                  'Forgot password?',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            AuthSubmitButton(
+              label: 'Sign in',
+              loadingLabel: 'Signing in...',
+              icon: Icons.login_rounded,
+              loading: auth.activeAction == AuthAction.login,
+              onPressed: busy ? null : _signIn,
+            ),
+            const SizedBox(height: 16),
+            AuthLinkRow(
+              question: "Don't have an account?",
+              action: 'Create account',
+              onPressed: busy ? null : () => context.push('/signup'),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.verified_user_outlined,
+                  size: 16,
+                  color: colors.onSurfaceVariant,
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    'Only verified, active accounts can sign in.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

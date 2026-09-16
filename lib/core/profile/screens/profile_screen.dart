@@ -1,6 +1,12 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+
+import '../../providers/auth_provider.dart';
+import '../../providers/user_provider.dart';
+import '../../services/permission_service.dart';
+import '../../theme/colors.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -13,7 +19,12 @@ class ProfileScreen extends StatelessWidget {
         ? user!.email!.trim()
         : 'No email available';
 
-    final String displayName = user?.displayName?.trim().isNotEmpty == true
+    final profileName =
+        context.watch<UserProvider>().currentUserProfile?.name.trim() ?? '';
+
+    final String displayName = profileName.isNotEmpty
+        ? profileName
+        : user?.displayName?.trim().isNotEmpty == true
         ? user!.displayName!.trim()
         : _nameFromEmail(email);
 
@@ -32,10 +43,7 @@ class ProfileScreen extends StatelessWidget {
           },
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: const Text(
-          'Profile',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
+        title: const Text('Profile'),
         actions: [
           IconButton(
             tooltip: 'Settings',
@@ -50,123 +58,105 @@ class ProfileScreen extends StatelessWidget {
       body: SafeArea(
         child: SingleChildScrollView(
           physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildProfileHeader(
-                context,
-                displayName: displayName,
-                email: email,
-                initials: initials,
-              ),
-              const SizedBox(height: 24),
-              _buildSectionTitle(
-                context,
-                'Personal Information',
-                'Your account information',
-              ),
-              const SizedBox(height: 12),
-              _buildInformationCard(
-                context,
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 900),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildInfoTile(
+                  _buildProfileHeader(
+                    context,
+                    displayName: displayName,
+                    email: email,
+                    initials: initials,
+                  ),
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildSectionTitle(
+                    context,
+                    'Personal Information',
+                    'Your account information',
+                  ),
+                  const SizedBox(height: AppSpacing.sm + 2),
+
+                  _buildInformationCard(
+                    context,
+                    children: [
+                      _buildInfoTile(
+                        context,
+                        icon: Icons.person_outline_rounded,
+                        title: 'Full Name',
+                        value: displayName,
+                      ),
+                      _buildDivider(context),
+                      _buildInfoTile(
+                        context,
+                        icon: Icons.email_outlined,
+                        title: 'Email Address',
+                        value: email,
+                      ),
+                      _buildDivider(context),
+                      _buildInfoTile(
+                        context,
+                        icon: Icons.admin_panel_settings_outlined,
+                        title: 'Account Role',
+                        value: PermissionService.roleLabel(
+                          context.watch<UserProvider>().currentUserRole,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildSectionTitle(
+                    context,
+                    'Account',
+                    'Manage your account and security',
+                  ),
+                  const SizedBox(height: AppSpacing.sm + 2),
+
+                  _buildMenuCard(
                     context,
                     icon: Icons.person_outline_rounded,
-                    title: 'Full Name',
-                    value: displayName,
+                    title: 'Personal Information',
+                    subtitle: 'View and manage your personal details',
+                    onTap: () {
+                      context.push('/personal-information');
+                    },
                   ),
-                  _buildDivider(context),
-                  _buildInfoTile(
+
+                  const SizedBox(height: AppSpacing.sm),
+
+                  _buildMenuCard(
                     context,
-                    icon: Icons.email_outlined,
-                    title: 'Email Address',
-                    value: email,
+                    icon: Icons.lock_outline_rounded,
+                    title: 'Change Password',
+                    subtitle: 'Update your account password',
+                    onTap: () {
+                      context.push('/change-password');
+                    },
                   ),
-                  _buildDivider(context),
-                  _buildInfoTile(
+
+                  const SizedBox(height: AppSpacing.sm),
+
+                  _buildMenuCard(
                     context,
-                    icon: Icons.admin_panel_settings_outlined,
-                    title: 'Account Role',
-                    value: 'IT Administrator',
+                    icon: Icons.security_outlined,
+                    title: 'Security',
+                    subtitle: 'Manage account security options',
+                    onTap: () {
+                      context.push('/security');
+                    },
                   ),
+
+                  const SizedBox(height: AppSpacing.xl),
+
+                  _buildLogoutCard(context),
                 ],
               ),
-              const SizedBox(height: 24),
-              _buildSectionTitle(
-                context,
-                'Account',
-                'Manage your account and security',
-              ),
-              const SizedBox(height: 12),
-              _buildMenuCard(
-                context,
-                icon: Icons.person_outline_rounded,
-                title: 'Personal Information',
-                subtitle: 'View and manage your personal details',
-                onTap: () {
-                  context.push('/personal-information');
-                },
-              ),
-              const SizedBox(height: 10),
-              _buildMenuCard(
-                context,
-                icon: Icons.lock_outline_rounded,
-                title: 'Change Password',
-                subtitle: 'Update your account password',
-                onTap: () {
-                  context.push('/change-password');
-                },
-              ),
-              const SizedBox(height: 10),
-              _buildMenuCard(
-                context,
-                icon: Icons.security_outlined,
-                title: 'Security',
-                subtitle: 'Manage account security options',
-                onTap: () {
-                  context.push('/security');
-                },
-              ),
-              const SizedBox(height: 24),
-              _buildSectionTitle(
-                context,
-                'Application',
-                'Customize your app experience',
-              ),
-              const SizedBox(height: 12),
-              _buildMenuCard(
-                context,
-                icon: Icons.settings_outlined,
-                title: 'App Settings',
-                subtitle: 'Appearance, notifications, cache and more',
-                onTap: () {
-                  context.push('/settings');
-                },
-              ),
-              const SizedBox(height: 10),
-              _buildMenuCard(
-                context,
-                icon: Icons.notifications_none_rounded,
-                title: 'Notifications',
-                subtitle: 'Manage your notification preferences',
-                onTap: () {
-                  context.push('/notifications');
-                },
-              ),
-              const SizedBox(height: 10),
-              _buildMenuCard(
-                context,
-                icon: Icons.info_outline_rounded,
-                title: 'About Application',
-                subtitle: 'Version and application information',
-                onTap: () {
-                  context.push('/app-info');
-                },
-              ),
-              const SizedBox(height: 24),
-              _buildLogoutCard(context),
-            ],
+            ),
           ),
         ),
       ),
@@ -179,119 +169,127 @@ class ProfileScreen extends StatelessWidget {
     required String email,
     required String initials,
   }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg + 2),
+        child: Row(
+          children: [
+            _buildAvatar(context, initials),
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(
+              child: _buildProfileHeaderText(
+                context,
+                displayName: displayName,
+                email: email,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAvatar(BuildContext context, String initials) {
     final colors = Theme.of(context).colorScheme;
 
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
+      width: 64,
+      height: 64,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [colors.primary, colors.primary.withValues(alpha: 0.78)],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: colors.primary.withValues(alpha: 0.20),
-            blurRadius: 26,
-            offset: const Offset(0, 12),
-          ),
-        ],
+        color: colors.primary,
+        shape: BoxShape.circle,
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 76,
-            height: 76,
-            decoration: BoxDecoration(
-              color: colors.onPrimary.withValues(alpha: 0.15),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: colors.onPrimary.withValues(alpha: 0.25),
-                width: 2,
-              ),
-            ),
-            child: Center(
-              child: Text(
-                initials,
-                style: TextStyle(
-                  color: colors.onPrimary,
-                  fontSize: 25,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            color: colors.onPrimary,
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.3,
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'My Profile',
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileHeaderText(
+    BuildContext context, {
+    required String displayName,
+    required String email,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'MY PROFILE',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: colors.onSurfaceVariant,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: colors.onSurface,
+            fontSize: 19,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.3,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          email,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: colors.onSurfaceVariant, fontSize: 13),
+        ),
+        const SizedBox(height: AppSpacing.sm + 2),
+        Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm + 2,
+            vertical: AppSpacing.xs,
+          ),
+          decoration: BoxDecoration(
+            color: AppColors.tint(colors.primary, colors.brightness),
+            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.verified_user_outlined,
+                size: 14,
+                color: colors.primary,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  PermissionService.roleLabel(
+                    context.watch<UserProvider>().currentUserRole,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: colors.onPrimary.withValues(alpha: 0.75),
+                    color: colors.primary,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: 5),
-                Text(
-                  displayName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: colors.onPrimary,
-                    fontSize: 21,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: colors.onPrimary.withValues(alpha: 0.82),
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colors.onPrimary.withValues(alpha: 0.13),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.verified_user_outlined,
-                        size: 14,
-                        color: colors.onPrimary,
-                      ),
-                      const SizedBox(width: 5),
-                      Text(
-                        'IT Administrator',
-                        style: TextStyle(
-                          color: colors.onPrimary,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -302,19 +300,27 @@ class ProfileScreen extends StatelessWidget {
   ) {
     final colors = Theme.of(context).colorScheme;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          subtitle,
-          style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
-        ),
-      ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: colors.onSurface,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.2,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 12.5, color: colors.onSurfaceVariant),
+          ),
+        ],
+      ),
     );
   }
 
@@ -322,17 +328,26 @@ class ProfileScreen extends StatelessWidget {
     BuildContext context, {
     required List<Widget> children,
   }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+        child: Column(children: children),
+      ),
+    );
+  }
+
+  Widget _buildIconTile(BuildContext context, IconData icon, {Color? tone}) {
     final colors = Theme.of(context).colorScheme;
+    final color = tone ?? colors.primary;
 
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      width: 40,
+      height: 40,
       decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.outline.withValues(alpha: 0.12)),
+        color: AppColors.tint(color, colors.brightness),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
       ),
-      child: Column(children: children),
+      child: Icon(icon, size: 20, color: color),
     );
   }
 
@@ -345,19 +360,11 @@ class ProfileScreen extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 15),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.md + 2),
       child: Row(
         children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: colors.primaryContainer,
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: Icon(icon, size: 21, color: colors.onPrimaryContainer),
-          ),
-          const SizedBox(width: 13),
+          _buildIconTile(context, icon),
+          const SizedBox(width: AppSpacing.md),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -365,19 +372,20 @@ class ProfileScreen extends StatelessWidget {
                 Text(
                   title,
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 12,
                     color: colors.onSurfaceVariant,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
+                    color: colors.onSurface,
                     fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
@@ -389,10 +397,7 @@ class ProfileScreen extends StatelessWidget {
   }
 
   Widget _buildDivider(BuildContext context) {
-    return Divider(
-      height: 1,
-      color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.08),
-    );
+    return const Divider(height: 1);
   }
 
   Widget _buildMenuCard(
@@ -404,58 +409,54 @@ class ProfileScreen extends StatelessWidget {
   }) {
     final colors = Theme.of(context).colorScheme;
 
-    return Material(
-      color: colors.surface,
-      borderRadius: BorderRadius.circular(18),
+    return Card(
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
         onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(15),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: colors.outline.withValues(alpha: 0.10)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: colors.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(icon, color: colors.primary, size: 22),
-              ),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 64),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.md,
+            ),
+            child: Row(
+              children: [
+                _buildIconTile(context, icon),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          color: colors.onSurface,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.35,
-                        color: colors.onSurfaceVariant,
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.35,
+                          color: colors.onSurfaceVariant,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              Icon(Icons.chevron_right_rounded, color: colors.onSurfaceVariant),
-            ],
+                const SizedBox(width: AppSpacing.sm),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: colors.onSurfaceVariant,
+                  size: 22,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -465,58 +466,56 @@ class ProfileScreen extends StatelessWidget {
   Widget _buildLogoutCard(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
-    return Material(
-      color: colors.errorContainer.withValues(alpha: 0.45),
-      borderRadius: BorderRadius.circular(20),
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+        side: BorderSide(color: colors.error.withValues(alpha: 0.30)),
+      ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
         onTap: () {
           _showLogoutDialog(context);
         },
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(17),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: colors.error.withValues(alpha: 0.15)),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: BoxDecoration(
-                  color: colors.error.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(14),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 64),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: AppSpacing.md,
+            ),
+            child: Row(
+              children: [
+                _buildIconTile(
+                  context,
+                  Icons.logout_rounded,
+                  tone: colors.error,
                 ),
-                child: Icon(Icons.logout_rounded, color: colors.error),
-              ),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Sign Out',
-                      style: TextStyle(
-                        color: colors.error,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Sign Out',
+                        style: TextStyle(
+                          color: colors.error,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      'Securely sign out from this account',
-                      style: TextStyle(
-                        color: colors.onSurfaceVariant,
-                        fontSize: 12,
+                      const SizedBox(height: 2),
+                      Text(
+                        'Securely sign out from this account',
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 12.5,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              Icon(Icons.chevron_right_rounded, color: colors.error),
-            ],
+                Icon(Icons.chevron_right_rounded, color: colors.error),
+              ],
+            ),
           ),
         ),
       ),
@@ -530,10 +529,7 @@ class ProfileScreen extends StatelessWidget {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text(
-            'Sign Out',
-            style: TextStyle(fontWeight: FontWeight.w800),
-          ),
+          title: const Text('Sign Out'),
           content: const Text(
             'Are you sure you want to sign out of your IT Management account?',
           ),
@@ -565,7 +561,9 @@ class ProfileScreen extends StatelessWidget {
     }
 
     try {
-      await FirebaseAuth.instance.signOut();
+      // Clears the session through AuthProvider; account-specific provider
+      // state is cleared by the App session watcher.
+      await context.read<AuthProvider>().logout();
 
       if (!context.mounted) {
         return;

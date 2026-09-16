@@ -1,11 +1,11 @@
 {
-    "name": "it_management_system",
-    "short_name": "it_management_system",
+    "name": "IT Inventory Management System",
+    "short_name": "IT Inventory",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "IT Inventory Management System",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

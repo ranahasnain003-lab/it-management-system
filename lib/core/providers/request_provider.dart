@@ -84,6 +84,9 @@ class RequestProvider extends ChangeNotifier {
 
     _cancelRequestListener();
 
+    // Never keep showing rows from a previous listener/account while the
+    // new query is loading.
+    _requests = [];
     _isLoading = true;
     _errorMessage = null;
     _isListening = true;
@@ -387,12 +390,18 @@ class RequestProvider extends ChangeNotifier {
   // CLEAR REQUESTS
   // ============================================================
 
+  /// Clears all account-specific state and stops the Firestore listener.
+  /// Called whenever the signed-in account changes.
   void clearRequests() {
     if (_disposed) {
       return;
     }
 
+    _cancelRequestListener();
+
     _requests = [];
+    _isLoading = false;
+    _errorMessage = null;
 
     _notifySafely();
   }
