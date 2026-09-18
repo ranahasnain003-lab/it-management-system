@@ -51,17 +51,13 @@ class AppDrawer extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: colors.primary,
-                      borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                    ),
-                    child: Icon(
-                      Icons.inventory_2_rounded,
-                      color: colors.onPrimary,
-                      size: 21,
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                    child: Image.asset(
+                      'assets/branding/psba_mark.png',
+                      width: 38,
+                      height: 38,
+                      filterQuality: FilterQuality.high,
                     ),
                   ),
                   const SizedBox(width: AppSpacing.md),
@@ -70,7 +66,7 @@ class AppDrawer extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'IT Inventory',
+                          'PSBA IT Inventory',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(

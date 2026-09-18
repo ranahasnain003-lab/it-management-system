@@ -958,54 +958,43 @@ class BazaarService {
         );
       }
     }
-
     bazaars.sort(_compareBazaars);
-
     return bazaars;
   }
-
   // ===========================================================================
   // SORT
   // ===========================================================================
-
   static int _compareBazaars(BazaarModel a, BazaarModel b) {
     final activeCompare = (b.isActive ? 1 : 0).compareTo(a.isActive ? 1 : 0);
 
     if (activeCompare != 0) {
       return activeCompare;
     }
-
     final locationCompare = a.location.trim().toLowerCase().compareTo(
       b.location.trim().toLowerCase(),
     );
-
     if (locationCompare != 0) {
       return locationCompare;
     }
-
-    return a.name.trim().toLowerCase().compareTo(b.name.trim().toLowerCase());
+  return a.name.trim().toLowerCase().compareTo(b.name.trim().toLowerCase());
   }
-
   // ===========================================================================
   // NORMALIZE
   // ===========================================================================
-
   static String _normalize(dynamic value) {
     if (value == null) {
       return '';
     }
-
     return value.toString().trim().toLowerCase().replaceAll(
       RegExp(r'\s+'),
       ' ',
     );
   }
-
   // ===========================================================================
   // BAZAAR KEY
   // ===========================================================================
-
   static String _bazaarKey(String name, String location) {
     return '${_normalize(name)}|${_normalize(location)}';
   }
-}
+   }  
+   

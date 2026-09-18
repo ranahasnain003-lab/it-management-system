@@ -140,10 +140,16 @@ class AssetService {
   ///   found by the identifier check;
   /// - concurrent creations of the same Asset ID collide on the reserved
   ///   document ID and only the first commits.
-  Future<String> addAsset(AssetModel asset) async {
+  /// [verifyUniqueness] scans the collection for an existing Asset ID before
+  /// writing. A bulk import checks every row against [loadIdentifierIndex]
+  /// first, so it turns the scan off: repeating it per row would read the
+  /// whole collection once for every imported asset. The reserved document ID
+  /// below still refuses a duplicate, including a concurrent one.
+  Future<String> addAsset(AssetModel asset, {bool verifyUniqueness = true}) async {
     final assetKey = normalizeIdentifier(asset.assetId);
 
-    if (assetKey.isNotEmpty &&
+    if (verifyUniqueness &&
+        assetKey.isNotEmpty &&
         await _hasDuplicate('assetId', asset.assetId.trim(), null)) {
       throw Exception('Asset ID "${asset.assetId.trim()}" already exists.');
     }
@@ -958,9 +964,7 @@ class AssetService {
       final data = doc.data();
 
       final quantity = _readQuantity(data['quantity']);
-      final purchasePrice = data['purchasePrice'] ?? data['price'];
-
-      final price = purchasePrice is num ? purchasePrice.toDouble() : 0.0;
+      final price = _readPrice(data['purchasePrice'] ?? data['price']);
 
       return total + (quantity * price);
     });
@@ -989,9 +993,7 @@ class AssetService {
       final data = doc.data();
 
       final quantity = _readQuantity(data['quantity']);
-      final purchasePrice = data['purchasePrice'] ?? data['price'];
-
-      final price = purchasePrice is num ? purchasePrice.toDouble() : 0.0;
+      final price = _readPrice(data['purchasePrice'] ?? data['price']);
 
       return total + (quantity * price);
     });
@@ -1085,7 +1087,31 @@ class AssetService {
       return result < 0 ? 0 : result;
     }
 
+    // Older documents can hold the number as text. AssetModel reads those,
+    // so the service reads them the same way and the totals agree.
+    if (value is String) {
+      final parsed = num.tryParse(value.trim());
+
+      if (parsed != null) {
+        final result = parsed.toInt();
+        return result < 0 ? 0 : result;
+      }
+    }
+
     return 0;
+  }
+
+  /// Reads a stored money value the same way [AssetModel] does.
+  double _readPrice(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    if (value is String) {
+      return double.tryParse(value.trim()) ?? 0.0;
+    }
+
+    return 0.0;
   }
 
   /// Statuses after which an asset can no longer be moved or assigned

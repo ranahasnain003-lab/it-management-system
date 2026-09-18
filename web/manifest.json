@@ -1,11 +1,11 @@
 {
-    "name": "IT Inventory Management System",
-    "short_name": "IT Inventory",
+    "name": "PSBA IT Inventory",
+    "short_name": "PSBA IT Inventory",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "IT Inventory Management System",
+    "description": "PSBA IT Inventory",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

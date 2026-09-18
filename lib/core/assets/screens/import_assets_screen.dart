@@ -619,7 +619,7 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
                   ),
                   const SizedBox(height: AppSpacing.xs),
                   Text(
-                    '.xlsx, .xls or .csv',
+                    '.xlsx or .csv',
                     style: TextStyle(
                       fontSize: 12,
                       color: colorScheme.onSurfaceVariant,
@@ -1002,7 +1002,9 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: const ['xlsx', 'xls', 'csv'],
+        // Legacy .xls (BIFF) cannot be decoded by the excel package, so it is
+        // not offered: picking one could only ever end in a read error.
+        allowedExtensions: const ['xlsx', 'csv'],
         withData: true,
       );
 
@@ -1055,6 +1057,19 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
 
       final parsedRows = _parseRows(table);
 
+      if (parsedRows.isEmpty) {
+        setState(() {
+          _isParsing = false;
+          _resetSummary();
+        });
+
+        _showMessage(
+          'The file has no asset rows below the header row.',
+          isError: true,
+        );
+        return;
+      }
+
       setState(() {
         _rows = parsedRows;
         _isParsing = false;
@@ -1093,7 +1108,15 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
       content = latin1.decode(bytes);
     }
 
-    return const CsvToListConverter(shouldParseNumbers: false).convert(content);
+    // Files exported by other tools may use \n or \r line endings; the CSV
+    // package only splits on \r\n by default, which would collapse the whole
+    // file into a single row.
+    final normalized = content.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+
+    return const CsvToListConverter(
+      eol: '\n',
+      shouldParseNumbers: false,
+    ).convert(normalized);
   }
 
   List<List<dynamic>> _parseExcel(Uint8List bytes) {
@@ -1198,6 +1221,8 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
 
       final warrantyText = getValue(['Warranty Months', 'Warranty']);
 
+      final purchaseDateText = getValue(['Purchase Date', 'Date']);
+
       rows.add(
         _ImportRow(
           rowNumber: i + 1,
@@ -1216,7 +1241,11 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
           quantity: _parseInteger(quantityText),
           purchasePrice: _parseDouble(priceText),
           warrantyMonths: _parseInteger(warrantyText),
-          purchaseDate: _parseDate(getValue(['Purchase Date', 'Date'])),
+          purchaseDate: _parseDate(purchaseDateText),
+          quantityText: quantityText,
+          priceText: priceText,
+          warrantyText: warrantyText,
+          purchaseDateText: purchaseDateText,
           location: getValue(['Location']),
           status: getValue(['Status']),
           condition: getValue(['Condition']),
@@ -1271,16 +1300,32 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
         row.errors.add('Category is required.');
       }
 
-      if (row.quantity <= 0) {
+      // A cell that is not a number is reported as such: it must never be
+      // imported as 0, which would silently understate stock or value.
+      if (row.quantityText.trim().isEmpty) {
+        row.errors.add('Quantity is required.');
+      } else if (!_isNumber(row.quantityText)) {
+        row.errors.add('Quantity "${row.quantityText}" is not a number.');
+      } else if (row.quantity <= 0) {
         row.errors.add('Quantity must be greater than 0.');
       }
 
-      if (row.purchasePrice < 0) {
+      if (row.priceText.trim().isEmpty) {
+        row.errors.add('Unit Purchase Price is required.');
+      } else if (!_isNumber(row.priceText)) {
+        row.errors.add('Unit Purchase Price "${row.priceText}" is not a number.');
+      } else if (row.purchasePrice < 0) {
         row.errors.add('Unit Purchase Price cannot be negative.');
       }
 
-      if (row.warrantyMonths < 0) {
+      if (row.warrantyText.trim().isNotEmpty && !_isNumber(row.warrantyText)) {
+        row.errors.add('Warranty Months "${row.warrantyText}" is not a number.');
+      } else if (row.warrantyMonths < 0) {
         row.errors.add('Warranty Months cannot be negative.');
+      }
+
+      if (row.purchaseDateText.trim().isNotEmpty && row.purchaseDate == null) {
+        row.errors.add('Purchase Date "${row.purchaseDateText}" could not be read.');
       }
 
       if (normalizedAssetId.isNotEmpty) {
@@ -1594,6 +1639,12 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
     return double.tryParse(value.trim().replaceAll(',', '')) ?? 0;
   }
 
+  /// Whether a cell holds a number the importer can read. Validation uses it
+  /// so an unreadable cell is reported instead of silently becoming 0.
+  bool _isNumber(String value) {
+    return double.tryParse(value.trim().replaceAll(',', '')) != null;
+  }
+
   DateTime? _parseDate(String value) {
     final trimmed = value.trim();
 
@@ -1808,6 +1859,10 @@ class _ImportRow {
     required this.purchasePrice,
     required this.warrantyMonths,
     required this.purchaseDate,
+    this.quantityText = '',
+    this.priceText = '',
+    this.warrantyText = '',
+    this.purchaseDateText = '',
     required this.location,
     required this.status,
     required this.condition,
@@ -1827,6 +1882,14 @@ class _ImportRow {
   final int quantity;
   final double purchasePrice;
   final int warrantyMonths;
+
+  /// The cells exactly as the file contained them. Validation needs them to
+  /// tell an empty cell apart from one that simply is not a number, so a
+  /// value that could not be read is reported instead of becoming 0.
+  final String quantityText;
+  final String priceText;
+  final String warrantyText;
+  final String purchaseDateText;
 
   final DateTime? purchaseDate;
 

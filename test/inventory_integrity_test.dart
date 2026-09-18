@@ -513,4 +513,272 @@ void main() {
     expect(index.assetIds, contains('lap-01'));
     expect(index.serials, contains('sn-abc'));
   });
+
+  // ===========================================================================
+  // AUDIT: MONETARY VALUE (quantity x unit price) AND STOCK DISTRIBUTION
+  //
+  // purchasePrice is the price of ONE unit: the asset detail sheet shows
+  // 'Purchase Price' and a separate 'Total Value' of purchasePrice * quantity
+  // (assets_screen.dart), and both value getters multiply by quantity.
+  // ===========================================================================
+
+  group('AUDIT: inventory value', () {
+    Future<AssetProvider> dashboard() async {
+      final provider = AssetProvider(assetService: AssetService(firestore: db));
+      provider.listenToAssets();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      addTearDown(provider.dispose);
+
+      return provider;
+    }
+
+    Future<String> createAsset({
+      required String assetId,
+      required int quantity,
+      required double unitPrice,
+      String name = 'Laptop',
+      String status = 'Available',
+    }) {
+      return assets.addAsset(
+        AssetModel(
+          id: '',
+          assetId: assetId,
+          name: name,
+          category: 'Laptop',
+          status: status,
+          quantity: quantity,
+          purchasePrice: unitPrice,
+          adminId: 'admin-1',
+          createdAt: DateTime(2026, 1, 1),
+        ),
+      );
+    }
+
+    for (final quantity in [1, 5, 10]) {
+      test('$quantity x Rs 10,000 = Rs ${quantity * 10000}', () async {
+        final id = await createAsset(assetId: 'AUD-$quantity', quantity: quantity, unitPrice: 10000);
+
+        final data = await assetData(id);
+        expect(data['quantity'], quantity, reason: 'quantity stored as entered');
+        expect(data['purchasePrice'], 10000, reason: 'unit price stored as entered');
+
+        final provider = await dashboard();
+        expect(provider.totalQuantity, quantity);
+        expect(provider.totalInventoryValue, quantity * 10000.0);
+        expect(await assets.getTotalInventoryValue(), quantity * 10000.0);
+      });
+    }
+
+    test('three assets: 5x10,000 + 3x20,000 + 2x5,000 = Rs 120,000', () async {
+      await createAsset(assetId: 'AUD-A', quantity: 5, unitPrice: 10000, name: 'Asset A');
+      await createAsset(assetId: 'AUD-B', quantity: 3, unitPrice: 20000, name: 'Asset B');
+      await createAsset(assetId: 'AUD-C', quantity: 2, unitPrice: 5000, name: 'Asset C');
+
+      final provider = await dashboard();
+      expect(provider.totalAssets, 3, reason: 'three asset records');
+      expect(provider.totalQuantity, 10, reason: '5 + 3 + 2 pieces');
+      expect(provider.totalInventoryValue, 120000.0);
+      expect(await assets.getTotalInventoryValue(), 120000.0);
+    });
+
+    test('moving stock changes the distribution but never the value', () async {
+      final id = await createAsset(assetId: 'AUD-LAP', quantity: 100, unitPrice: 10000);
+
+      var provider = await dashboard();
+      expect(provider.totalInventoryValue, 1000000.0);
+      expect(provider.headOfficeStock, 100);
+
+      await move(id, fromId: headOfficeId, fromName: headOffice, toId: 'A', toName: 'Bazaar A', quantity: 30);
+      await move(id, fromId: headOfficeId, fromName: headOffice, toId: 'B', toName: 'Bazaar B', quantity: 20);
+
+      provider = await dashboard();
+      expect(provider.headOfficeStock, 50);
+      expect(provider.deployedToBazaarsQuantity, 50);
+      expect(await bazaarStock(id), {'A': 30, 'B': 20});
+      expect(provider.totalQuantity, 100, reason: 'pieces are moved, never created');
+      expect(provider.totalInventoryValue, 1000000.0);
+      expect(provider.isStockBalanced, isTrue);
+      await expectInvariant(id);
+
+      // Assignment takes the stock that is still at Head Office.
+      await assets.assignAsset(assetId: id, userId: 'user-1');
+
+      provider = await dashboard();
+      expect(provider.headOfficeStock, 0);
+      expect(provider.assignedQuantity, 50);
+      expect(provider.deployedToBazaarsQuantity, 50);
+      expect(provider.totalQuantity, 100);
+      expect(provider.totalInventoryValue, 1000000.0);
+      expect(provider.isStockBalanced, isTrue);
+
+      // Returning 10 pieces from Bazaar A puts them back at Head Office.
+      await move(id, fromId: 'A', fromName: 'Bazaar A', toId: headOfficeId, toName: headOffice, quantity: 10);
+
+      provider = await dashboard();
+      expect(provider.headOfficeStock, 10);
+      expect(provider.assignedQuantity, 50);
+      expect(provider.deployedToBazaarsQuantity, 40);
+      expect(await bazaarStock(id), {'A': 20, 'B': 20});
+      expect(provider.totalQuantity, 100, reason: 'a return never duplicates stock');
+      expect(provider.totalInventoryValue, 1000000.0);
+      expect(provider.isStockBalanced, isTrue);
+      await expectInvariant(id);
+
+      // History is kept, and history never inflates current stock: only the
+      // Active movement records describe where the pieces are now.
+      final movements = await db.collection('deployments').get();
+      expect(movements.docs.length, greaterThanOrEqualTo(3), reason: 'transfer history is retained');
+
+      int sumOf(bool Function(Map<String, dynamic>) where) => movements.docs
+          .where((doc) => where(doc.data()))
+          .fold<int>(0, (running, doc) => running + (doc.data()['quantity'] as int));
+
+      final active = sumOf((data) => data['status'] == 'Active');
+      final all = sumOf((_) => true);
+
+      expect(active, provider.deployedToBazaarsQuantity, reason: 'current Bazaar stock = Active records');
+      expect(all, greaterThan(active), reason: 'closed movements stay on record');
+      expect(provider.totalQuantity, 100, reason: 'history never adds to current stock');
+    });
+
+    test('five mixed assets reconcile piece by piece and rupee by rupee', () async {
+      // 1: plain stock          10 x 1,000  = 10,000
+      final plain = await createAsset(assetId: 'MIX-1', quantity: 10, unitPrice: 1000);
+      // 2: partly at a Bazaar    8 x 2,500  = 20,000
+      final atBazaar = await createAsset(assetId: 'MIX-2', quantity: 8, unitPrice: 2500);
+      // 3: assigned              4 x 7,250  = 29,000
+      final assigned = await createAsset(assetId: 'MIX-3', quantity: 4, unitPrice: 7250);
+      // 4: damaged               6 x 500    = 3,000
+      final damaged = await createAsset(assetId: 'MIX-4', quantity: 6, unitPrice: 500);
+      // 5: under repair          2 x 12,000 = 24,000
+      final repair = await createAsset(assetId: 'MIX-5', quantity: 2, unitPrice: 12000);
+
+      await move(atBazaar, fromId: headOfficeId, fromName: headOffice, toId: 'A', toName: 'Bazaar A', quantity: 3);
+      await assets.assignAsset(assetId: assigned, userId: 'user-9');
+      await assets.updateAssetStatus(assetId: damaged, status: 'Damaged');
+      await assets.updateAssetStatus(assetId: repair, status: 'Under Repair');
+
+      final provider = await dashboard();
+
+      // Pieces: 10 + 8 + 4 + 6 + 2 = 30.
+      expect(provider.totalQuantity, 30);
+      expect(provider.totalAssets, 5);
+
+      // Value: 10,000 + 20,000 + 29,000 + 3,000 + 24,000 = 86,000.
+      expect(provider.totalInventoryValue, 86000.0);
+      expect(await assets.getTotalInventoryValue(), 86000.0);
+
+      // Distribution: HO usable 10 + 5 = 15, at Bazaar 3, assigned 4,
+      // unusable at HO (damaged 6 + repair 2) = 8.  15 + 3 + 4 + 8 = 30.
+      expect(provider.headOfficeStock, 15);
+      expect(provider.deployedToBazaarsQuantity, 3);
+      expect(provider.assignedQuantity, 4);
+      expect(provider.damagedQuantity, 6);
+      expect(provider.underRepairQuantity, 2);
+      expect(provider.unavailableAtHeadOfficeQuantity, 8);
+      expect(provider.isStockBalanced, isTrue);
+
+      await expectInvariant(plain);
+      await expectInvariant(atBazaar);
+      await expectInvariant(assigned);
+    });
+
+    test('decimals, zero and very large numbers stay exact', () async {
+      await createAsset(assetId: 'DEC-1', quantity: 3, unitPrice: 10000.50);
+      await createAsset(assetId: 'DEC-2', quantity: 1000000, unitPrice: 250000.75);
+
+      final provider = await dashboard();
+
+      // 3 x 10,000.50 = 30,001.50 and 1,000,000 x 250,000.75 = 250,000,750,000.
+      expect(provider.totalInventoryValue, 30001.5 + 250000750000.0);
+      expect(provider.totalQuantity, 1000003);
+    });
+
+    test('a legacy asset without stock fields is counted at Head Office AND at its Bazaar', () async {
+      // A document written before the stock fields existed: the dashboard
+      // derives the distribution, the Bazaar pages read movement records.
+      await db.collection('assets').doc('legacy-split').set({
+        'assetId': 'LEGACY-SPLIT',
+        'name': 'Legacy Laptop',
+        'category': 'Laptop',
+        'status': 'Available',
+        'quantity': 10,
+        'purchasePrice': 1000,
+        'location': 'Bazaar A',
+        'adminId': 'admin-1',
+        'createdAt': Timestamp.fromDate(DateTime(2026, 1, 1)),
+      });
+      await db.collection('deployments').add({
+        'assetDocumentId': 'legacy-split',
+        'toBazaarId': 'A',
+        'toBazaarName': 'Bazaar A',
+        'quantity': 4,
+        'status': 'Active',
+      });
+
+      final provider = await dashboard();
+
+      expect(provider.totalQuantity, 10);
+      expect(provider.headOfficeStock, 10, reason: 'dashboard puts every unit at Head Office');
+      expect(provider.deployedToBazaarsQuantity, 0, reason: 'dashboard sees no Bazaar stock');
+
+      final atBazaar = await bazaarStock('legacy-split');
+      expect(atBazaar, {'A': 4}, reason: 'the Bazaar pages read 4 units at Bazaar A');
+
+      // The same 4 pieces are therefore reported in two places at once.
+      expect(
+        provider.headOfficeStock + atBazaar.values.fold<int>(0, (a, b) => a + b),
+        greaterThan(provider.totalQuantity),
+        reason: 'DEFECT: Head Office count and Bazaar records overlap for legacy documents',
+      );
+    });
+
+    test('a text quantity is read by both paths; only a missing one is invented', () async {
+      await db.collection('assets').doc('no-qty').set({
+        'assetId': 'NOQTY-1',
+        'name': 'Quantity Missing',
+        'category': 'Laptop',
+        'status': 'Available',
+        'purchasePrice': 1000,
+        'adminId': 'admin-1',
+      });
+      await db.collection('assets').doc('text-qty').set({
+        'assetId': 'TEXTQTY-1',
+        'name': 'Quantity As Text',
+        'category': 'Laptop',
+        'status': 'Available',
+        'quantity': '5',
+        'purchasePrice': 1000,
+        'adminId': 'admin-1',
+      });
+
+      final provider = await dashboard();
+
+      // AssetModel falls back to 1 for a missing field and parses numeric text.
+      expect(provider.totalQuantity, 6, reason: '1 invented + 5 parsed');
+      // The service reads the same text, but never invents a missing quantity.
+      expect(await assets.getTotalQuantity(), 5);
+    });
+
+    test('a price stored as text is valued the same way by both paths', () async {
+      // Legacy documents can hold a string price; the two value paths disagree.
+      await db.collection('assets').doc('legacy').set({
+        'assetId': 'LEGACY-1',
+        'name': 'Legacy Laptop',
+        'category': 'Laptop',
+        'status': 'Available',
+        'quantity': 4,
+        'purchasePrice': '10000',
+        'headOfficeQuantity': 4,
+        'assignedQuantity': 0,
+        'deployedQuantity': 0,
+        'adminId': 'admin-1',
+      });
+
+      final provider = await dashboard();
+
+      expect(provider.totalInventoryValue, 40000.0, reason: 'AssetModel parses a numeric string');
+      expect(await assets.getTotalInventoryValue(), 40000.0, reason: 'the service parses it too');
+    });
+  });
 }

@@ -220,8 +220,10 @@ class _AppState extends State<App> {
 
     return MaterialApp.router(
       debugShowCheckedModeBanner: false,
-      title: 'IT Management System',
+      title: 'PSBA IT Inventory',
 
+      // The AI Assistant is hosted by the router's signed-in shell, not by a
+      // builder above the navigator, so dialogs and sheets stay above it.
       routerConfig: _router,
 
       // Use the project's centralized theme configuration.

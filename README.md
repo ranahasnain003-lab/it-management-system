@@ -1,6 +1,7 @@
-# it_management_system
+# PSBA IT Inventory
 
-A new Flutter project.
+IT asset inventory system for the Punjab Sahulat Bazaars Authority, built with Flutter and Firebase.
+One codebase serves the Android app and the web dashboard.
 
 ## Getting Started
 

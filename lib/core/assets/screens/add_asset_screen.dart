@@ -15,34 +15,9 @@ class AddAssetScreen extends StatefulWidget {
 
   const AddAssetScreen({super.key, this.asset});
 
-  @override
-  State<AddAssetScreen> createState() => _AddAssetScreenState();
-}
-
-class _AddAssetScreenState extends State<AddAssetScreen> {
-  final _formKey = GlobalKey<FormState>();
-
-  final assetIdController = TextEditingController();
-  final nameController = TextEditingController();
-  final serialNumberController = TextEditingController();
-  final brandController = TextEditingController();
-  final modelController = TextEditingController();
-  final quantityController = TextEditingController();
-  final purchasePriceController = TextEditingController();
-  final warrantyController = TextEditingController();
-  final locationController = TextEditingController();
-  final notesController = TextEditingController();
-
-  String selectedCategory = 'Laptop';
-  String selectedStatus = 'Available';
-  String selectedCondition = 'Good';
-
-  DateTime? purchaseDate;
-
-  bool _isSaving = false;
-
-  bool get isEditMode => widget.asset != null;
-
+  // The dropdown vocabularies for an asset. They live on the widget rather
+  // than its State so the AI Assistant can offer exactly the same options
+  // instead of keeping a second copy of them.
   static const List<String> categories = [
     'Laptop',
     'Desktop',
@@ -74,19 +49,48 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     'Damaged',
   ];
 
+  @override
+  State<AddAssetScreen> createState() => _AddAssetScreenState();
+}
+
+class _AddAssetScreenState extends State<AddAssetScreen> {
+  final _formKey = GlobalKey<FormState>();
+
+  final assetIdController = TextEditingController();
+  final nameController = TextEditingController();
+  final serialNumberController = TextEditingController();
+  final brandController = TextEditingController();
+  final modelController = TextEditingController();
+  final quantityController = TextEditingController();
+  final purchasePriceController = TextEditingController();
+  final warrantyController = TextEditingController();
+  final locationController = TextEditingController();
+  final notesController = TextEditingController();
+
+  String selectedCategory = 'Laptop';
+  String selectedStatus = 'Available';
+  String selectedCondition = 'Good';
+
+  DateTime? purchaseDate;
+
+  bool _isSaving = false;
+
+  bool get isEditMode => widget.asset != null;
+
+
   // Dropdown items for this form. A stored value that is not in the default
   // list (e.g. an imported category) is added so editing never silently
   // changes it.
   late final List<String> _categoryItems = _withValue(
-    categories,
+    AddAssetScreen.categories,
     widget.asset?.category,
   );
   late final List<String> _statusItems = _withValue(
-    statuses,
+    AddAssetScreen.statuses,
     widget.asset?.status,
   );
   late final List<String> _conditionItems = _withValue(
-    conditions,
+    AddAssetScreen.conditions,
     widget.asset?.condition,
   );
 

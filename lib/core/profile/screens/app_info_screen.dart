@@ -41,7 +41,7 @@ class AppInfoScreen extends StatelessWidget {
                   _buildSectionTitle(
                     context,
                     'Application',
-                    'Information about your IT Management System',
+                    'Information about your PSBA IT Inventory app',
                   ),
                   const SizedBox(height: AppSpacing.sm + 2),
                   _buildInformationCard(context),
@@ -98,22 +98,18 @@ class AppInfoScreen extends StatelessWidget {
           width: double.infinity,
           child: Column(
             children: [
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: colors.primary,
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusLg + 2),
-                ),
-                child: Icon(
-                  Icons.business_center_rounded,
-                  size: 30,
-                  color: colors.onPrimary,
+              ClipRRect(
+                borderRadius: BorderRadius.circular(AppSpacing.radiusLg + 2),
+                child: Image.asset(
+                  'assets/branding/psba_mark.png',
+                  width: 60,
+                  height: 60,
+                  filterQuality: FilterQuality.high,
                 ),
               ),
               const SizedBox(height: AppSpacing.lg),
               Text(
-                'IT Management System',
+                'PSBA IT Inventory',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: colors.onSurface,
@@ -124,7 +120,7 @@ class AppInfoScreen extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.xs),
               Text(
-                'Enterprise IT Inventory Management',
+                'Punjab Sahulat Bazaars Authority',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: colors.onSurfaceVariant,
@@ -201,14 +197,14 @@ class AppInfoScreen extends StatelessWidget {
               context,
               icon: Icons.apps_rounded,
               title: 'Application Name',
-              value: 'IT Management System',
+              value: 'PSBA IT Inventory',
             ),
             const Divider(height: 1),
             _buildInfoRow(
               context,
               icon: Icons.inventory_2_outlined,
               title: 'Application Type',
-              value: 'Enterprise IT Inventory',
+              value: 'PSBA IT Inventory',
             ),
             const Divider(height: 1),
             _buildInfoRow(
@@ -513,10 +509,18 @@ class AppInfoScreen extends StatelessWidget {
     return Center(
       child: Column(
         children: [
-          Icon(Icons.business_center_outlined, size: 26, color: colors.primary),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.asset(
+              'assets/branding/psba_mark.png',
+              width: 30,
+              height: 30,
+              filterQuality: FilterQuality.high,
+            ),
+          ),
           const SizedBox(height: AppSpacing.sm),
           Text(
-            'IT Management System',
+            'PSBA IT Inventory',
             style: TextStyle(
               color: colors.onSurface,
               fontSize: 13.5,
@@ -525,7 +529,7 @@ class AppInfoScreen extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            'Enterprise IT Inventory Management',
+            'Punjab Sahulat Bazaars Authority',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
           ),

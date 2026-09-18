@@ -52,6 +52,11 @@ android {
     buildTypes {
         getByName("release") {
             signingConfig = signingConfigs.getByName("release")
+
+            // Appended to the rules the Flutter Gradle plugin already adds.
+            // Keeps the reflective entry points Firebase needs after R8 has
+            // shrunk the release build - see proguard-rules.pro.
+            proguardFiles(file("proguard-rules.pro"))
         }
     }
 }

@@ -7,6 +7,7 @@ import '../../web/web_router.dart';
 import '../providers/auth_provider.dart';
 import '../providers/user_provider.dart';
 import 'route_guard.dart';
+import '../ai/ai_assistant_panel.dart';
 import '../features/splash/screens/splash_screen.dart';
 import '../authentication/screens/forgot_password_screen.dart';
 import '../authentication/screens/login_screen.dart';
@@ -116,187 +117,201 @@ class AppRouter {
         ),
 
         // ============================================================
-        // DASHBOARD
+        // SIGNED-IN SHELL
         // ============================================================
-        GoRoute(
-          path: '/dashboard',
-          name: 'dashboard',
-          builder: (context, state) {
-            return const DashboardScreen();
-          },
-        ),
+        //
+        // Every screen below is rendered inside this shell, which hosts the
+        // AI Assistant. Because the shell sits under the root navigator,
+        // dialogs and anything else pushed there are drawn above it instead
+        // of behind its button. Screens, guards and paths are unchanged.
+        ShellRoute(
+          observers: [assistantModalObserver],
+          builder: (context, state, child) => AiAssistantOverlay(child: child),
+          routes: [
+          // ============================================================
+          // DASHBOARD
+          // ============================================================
+          GoRoute(
+            path: '/dashboard',
+            name: 'dashboard',
+            builder: (context, state) {
+              return const DashboardScreen();
+            },
+          ),
 
-        // ============================================================
-        // EXISTING DEPLOYMENTS ROUTE
-        // ============================================================
-        GoRoute(
-          path: '/deployments',
-          name: 'deployments',
-          builder: (context, state) {
-            return const DeploymentsScreen();
-          },
-        ),
+          // ============================================================
+          // EXISTING DEPLOYMENTS ROUTE
+          // ============================================================
+          GoRoute(
+            path: '/deployments',
+            name: 'deployments',
+            builder: (context, state) {
+              return const DeploymentsScreen();
+            },
+          ),
 
-        // ============================================================
-        // CURRENTLY AT BAZAARS
-        // ============================================================
-        GoRoute(
-          path: '/currently-at-bazaars',
-          name: 'currently-at-bazaars',
-          builder: (context, state) {
-            return const CurrentlyAtBazaarsScreen();
-          },
-        ),
+          // ============================================================
+          // CURRENTLY AT BAZAARS
+          // ============================================================
+          GoRoute(
+            path: '/currently-at-bazaars',
+            name: 'currently-at-bazaars',
+            builder: (context, state) {
+              return const CurrentlyAtBazaarsScreen();
+            },
+          ),
 
-        // ============================================================
-        // DEPLOYMENT / MOVEMENT HISTORY
-        // ============================================================
-        GoRoute(
-          path: '/deployment-history',
-          name: 'deployment-history',
-          builder: (context, state) {
-            return const DeploymentHistoryScreen();
-          },
-        ),
+          // ============================================================
+          // DEPLOYMENT / MOVEMENT HISTORY
+          // ============================================================
+          GoRoute(
+            path: '/deployment-history',
+            name: 'deployment-history',
+            builder: (context, state) {
+              return const DeploymentHistoryScreen();
+            },
+          ),
 
-        // ============================================================
-        // PROFILE
-        // ============================================================
-        GoRoute(
-          path: '/profile',
-          name: 'profile',
-          builder: (context, state) {
-            return const ProfileScreen();
-          },
-        ),
+          // ============================================================
+          // PROFILE
+          // ============================================================
+          GoRoute(
+            path: '/profile',
+            name: 'profile',
+            builder: (context, state) {
+              return const ProfileScreen();
+            },
+          ),
 
-        // ============================================================
-        // PERSONAL INFORMATION
-        // ============================================================
-        GoRoute(
-          path: '/personal-information',
-          name: 'personal-information',
-          builder: (context, state) {
-            return const PersonalInformationScreen();
-          },
-        ),
+          // ============================================================
+          // PERSONAL INFORMATION
+          // ============================================================
+          GoRoute(
+            path: '/personal-information',
+            name: 'personal-information',
+            builder: (context, state) {
+              return const PersonalInformationScreen();
+            },
+          ),
 
-        // ============================================================
-        // CHANGE PASSWORD
-        // ============================================================
-        GoRoute(
-          path: '/change-password',
-          name: 'change-password',
-          builder: (context, state) {
-            return const ChangePasswordScreen();
-          },
-        ),
+          // ============================================================
+          // CHANGE PASSWORD
+          // ============================================================
+          GoRoute(
+            path: '/change-password',
+            name: 'change-password',
+            builder: (context, state) {
+              return const ChangePasswordScreen();
+            },
+          ),
 
-        // ============================================================
-        // SECURITY
-        // ============================================================
-        GoRoute(
-          path: '/security',
-          name: 'security',
-          builder: (context, state) {
-            return const SecurityScreen();
-          },
-        ),
+          // ============================================================
+          // SECURITY
+          // ============================================================
+          GoRoute(
+            path: '/security',
+            name: 'security',
+            builder: (context, state) {
+              return const SecurityScreen();
+            },
+          ),
 
-        // ============================================================
-        // APP INFORMATION
-        // ============================================================
-        GoRoute(
-          path: '/app-info',
-          name: 'app-info',
-          builder: (context, state) {
-            return const AppInfoScreen();
-          },
-        ),
+          // ============================================================
+          // APP INFORMATION
+          // ============================================================
+          GoRoute(
+            path: '/app-info',
+            name: 'app-info',
+            builder: (context, state) {
+              return const AppInfoScreen();
+            },
+          ),
 
-        // ============================================================
-        // SETTINGS
-        // ============================================================
-        GoRoute(
-          path: '/settings',
-          name: 'settings',
-          builder: (context, state) {
-            return const SettingsScreen();
-          },
-        ),
+          // ============================================================
+          // SETTINGS
+          // ============================================================
+          GoRoute(
+            path: '/settings',
+            name: 'settings',
+            builder: (context, state) {
+              return const SettingsScreen();
+            },
+          ),
 
-        // ============================================================
-        // LOCATION MANAGEMENT
-        // ============================================================
-        GoRoute(
-          path: '/locations',
-          name: 'locations',
-          builder: (context, state) {
-            return const LocationManagementScreen();
-          },
-        ),
+          // ============================================================
+          // LOCATION MANAGEMENT
+          // ============================================================
+          GoRoute(
+            path: '/locations',
+            name: 'locations',
+            builder: (context, state) {
+              return const LocationManagementScreen();
+            },
+          ),
 
-        // ============================================================
-        // ASSETS
-        // ============================================================
-        GoRoute(
-          path: '/assets',
-          name: 'assets',
-          builder: (context, state) {
-            final extra = state.extra;
+          // ============================================================
+          // ASSETS
+          // ============================================================
+          GoRoute(
+            path: '/assets',
+            name: 'assets',
+            builder: (context, state) {
+              final extra = state.extra;
 
-            String initialStatus = 'All';
+              String initialStatus = 'All';
 
-            if (extra is String && extra.trim().isNotEmpty) {
-              initialStatus = extra.trim();
-            }
+              if (extra is String && extra.trim().isNotEmpty) {
+                initialStatus = extra.trim();
+              }
 
-            return AssetsScreen(initialStatus: initialStatus);
-          },
-        ),
+              return AssetsScreen(initialStatus: initialStatus);
+            },
+          ),
 
-        // ============================================================
-        // IMPORT INVENTORY
-        // ============================================================
-        GoRoute(
-          path: '/import-assets',
-          name: 'import-assets',
-          builder: (context, state) {
-            return const ImportAssetsScreen();
-          },
-        ),
+          // ============================================================
+          // IMPORT INVENTORY
+          // ============================================================
+          GoRoute(
+            path: '/import-assets',
+            name: 'import-assets',
+            builder: (context, state) {
+              return const ImportAssetsScreen();
+            },
+          ),
 
-        // ============================================================
-        // USERS
-        // ============================================================
-        GoRoute(
-          path: '/users',
-          name: 'users',
-          builder: (context, state) {
-            return const UsersScreen();
-          },
-        ),
+          // ============================================================
+          // USERS
+          // ============================================================
+          GoRoute(
+            path: '/users',
+            name: 'users',
+            builder: (context, state) {
+              return const UsersScreen();
+            },
+          ),
 
-        // ============================================================
-        // REQUESTS
-        // ============================================================
-        GoRoute(
-          path: '/requests',
-          name: 'requests',
-          builder: (context, state) {
-            return const RequestsScreen();
-          },
-        ),
+          // ============================================================
+          // REQUESTS
+          // ============================================================
+          GoRoute(
+            path: '/requests',
+            name: 'requests',
+            builder: (context, state) {
+              return const RequestsScreen();
+            },
+          ),
 
-        // ============================================================
-        // NOTIFICATIONS
-        // ============================================================
-        GoRoute(
-          path: '/notifications',
-          name: 'notifications',
-          builder: (context, state) {
-            return const NotificationsScreen();
-          },
+          // ============================================================
+          // NOTIFICATIONS
+          // ============================================================
+          GoRoute(
+            path: '/notifications',
+            name: 'notifications',
+            builder: (context, state) {
+              return const NotificationsScreen();
+            },
+          ),
+          ],
         ),
       ],
 

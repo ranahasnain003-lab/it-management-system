@@ -531,7 +531,7 @@ class ProfileScreen extends StatelessWidget {
         return AlertDialog(
           title: const Text('Sign Out'),
           content: const Text(
-            'Are you sure you want to sign out of your IT Management account?',
+            'Are you sure you want to sign out of your PSBA IT Inventory account?',
           ),
           actions: [
             TextButton(

@@ -131,12 +131,16 @@ class AuthHeader extends StatelessWidget {
     required this.title,
     required this.subtitle,
     this.centered = true,
+    this.brandAsset,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
   final bool centered;
+
+  /// When set, the app's logo is shown in place of [icon].
+  final String? brandAsset;
 
   @override
   Widget build(BuildContext context) {
@@ -149,16 +153,27 @@ class AuthHeader extends StatelessWidget {
           ? CrossAxisAlignment.center
           : CrossAxisAlignment.start,
       children: [
-        Container(
-          width: 64,
-          height: 64,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: colors.primaryContainer,
+        if (brandAsset != null)
+          ClipRRect(
             borderRadius: BorderRadius.circular(20),
+            child: Image.asset(
+              brandAsset!,
+              width: 64,
+              height: 64,
+              filterQuality: FilterQuality.high,
+            ),
+          )
+        else
+          Container(
+            width: 64,
+            height: 64,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: colors.primaryContainer,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Icon(icon, size: 34, color: colors.onPrimaryContainer),
           ),
-          child: Icon(icon, size: 34, color: colors.onPrimaryContainer),
-        ),
         const SizedBox(height: 20),
         Text(
           title,

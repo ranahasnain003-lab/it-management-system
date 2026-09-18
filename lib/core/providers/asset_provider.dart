@@ -1262,7 +1262,10 @@ class AssetProvider extends ChangeNotifier {
           continue;
         }
 
-        await _assetService.addAsset(asset);
+        // Every row was already checked against the identifier index above,
+        // so the per-row collection scan is skipped; the reserved document ID
+        // inside addAsset still rejects a duplicate.
+        await _assetService.addAsset(asset, verifyUniqueness: false);
 
         existing.assetIds.add(assetKey);
         if (serialKey.isNotEmpty) existing.serials.add(serialKey);

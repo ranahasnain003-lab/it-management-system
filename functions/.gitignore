@@ -1,0 +1,13 @@
+node_modules/
+package-lock.json
+firebase-debug.log
+*.local
+
+# Never commit secrets. The OpenAI key lives in Google Secret Manager only.
+.env
+.env.*
+.runtimeconfig.json
+*.key
+
+# The template is documentation and holds no values.
+!.env.example

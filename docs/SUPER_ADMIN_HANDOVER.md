@@ -1,6 +1,6 @@
 # Super Admin Handover Guide
 
-This guide is for the person handing over the IT Inventory Management System and for the person taking it over.
+This guide is for the person handing over PSBA IT Inventory and for the person taking it over.
 
 No email address or account is built into the app as Super Admin. Super Admin is only the `role` value on an account's profile (`users/{uid}`), and the Firestore Security Rules enforce it. Any number of accounts can be Super Admin at the same time, so the system never depends on one person.
 

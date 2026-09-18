@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:provider/provider.dart';
@@ -25,6 +27,33 @@ import 'core/providers/bazaar_provider.dart';
 /// (e.g. `--dart-define=FIREBASE_EMULATOR_HOST=localhost`). Empty by default,
 /// so release builds always use the production project it-inventory-8e690.
 const String _emulatorHost = String.fromEnvironment('FIREBASE_EMULATOR_HOST');
+
+/// Registers this installation with Firebase App Check.
+///
+/// App Check gates only the AI Assistant backend. Every other feature keeps
+/// relying on Firebase Auth and firestore.rules exactly as before, so a
+/// failure here is logged and ignored rather than allowed to stop start-up.
+///
+/// Release builds attest through Play Integrity. Debug and profile builds use
+/// the debug provider, whose token is printed once to the console and must be
+/// registered under App Check in the Firebase console for that device.
+Future<void> _activateAppCheck() async {
+  // The assistant is an Android feature, and the Local Emulator Suite issues
+  // no App Check tokens, so neither build needs a provider.
+  if (kIsWeb || _emulatorHost.isNotEmpty) {
+    return;
+  }
+
+  try {
+    await FirebaseAppCheck.instance.activate(
+      androidProvider: kReleaseMode
+          ? AndroidProvider.playIntegrity
+          : AndroidProvider.debug,
+    );
+  } catch (e) {
+    debugPrint('App Check activation failed: $e');
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -74,6 +103,10 @@ Future<void> main() async {
 
   // Firebase (same project and configuration for Android and Web).
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Registers this installation so the AI Assistant backend can tell a real
+  // copy of the app from a script replaying a stolen sign-in token.
+  await _activateAppCheck();
 
   if (_emulatorHost.isNotEmpty) {
     // Auth must be pointed at the emulator BEFORE Firestore is touched: on

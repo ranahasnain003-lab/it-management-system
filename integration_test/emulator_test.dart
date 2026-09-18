@@ -9,12 +9,17 @@
 // Provider state is inspected between UI steps in this end-to-end test.
 // ignore_for_file: use_build_context_synchronously
 
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:provider/provider.dart';
 
 import 'package:it_management_system/app.dart';
@@ -38,6 +43,68 @@ import 'package:it_management_system/models/user_model.dart';
 import 'emulator_support.dart';
 import 'support/fixtures.dart';
 
+
+/// Serves a prepared file to the import screen instead of the OS file dialog.
+/// The screen asks for bytes (withData: true), which is also what the web
+/// implementation returns, so the parsing path under test is the real one.
+class _FakeFilePicker extends FilePicker with MockPlatformInterfaceMixin {
+  _FakeFilePicker({required this.name, required this.bytes});
+
+  final String name;
+  final Uint8List bytes;
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    bool allowCompression = true,
+    int compressionQuality = 30,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+  }) async {
+    return FilePickerResult([
+      PlatformFile(name: name, size: bytes.length, bytes: bytes),
+    ]);
+  }
+}
+
+/// Boots the real app with the same providers main.dart installs.
+Future<void> pumpApp(WidgetTester tester) async {
+  final themeProvider = ThemeProvider();
+  await themeProvider.loadTheme();
+
+  await tester.pumpWidget(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AuthProvider>(create: (_) => AuthProvider()..initialize()),
+        ChangeNotifierProvider<AssetProvider>(create: (_) => AssetProvider()),
+        ChangeNotifierProvider<UserProvider>(create: (_) => UserProvider()),
+        ChangeNotifierProvider<RequestProvider>(create: (_) => RequestProvider()),
+        ChangeNotifierProvider<NotificationProvider>(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider<LogProvider>(create: (_) => LogProvider()),
+        ChangeNotifierProvider<ThemeProvider>.value(value: themeProvider),
+        ChangeNotifierProvider<DeploymentProvider>(create: (_) => DeploymentProvider()),
+        ChangeNotifierProvider<BazaarProvider>(create: (_) => BazaarProvider()),
+      ],
+      child: const App(),
+    ),
+  );
+}
+
+/// Signs in through the real login form and waits for the signed-in name.
+Future<void> signInThroughUi(WidgetTester tester, String email, String displayName) async {
+  await pumpUntil(tester, find.text('Sign in'));
+  await tester.enterText(find.widgetWithText(TextFormField, 'Email address'), email);
+  await tester.enterText(find.widgetWithText(TextFormField, 'Password'), password);
+  await tester.tap(find.text('Sign in'));
+  await pumpUntil(tester, find.text(displayName), timeout: const Duration(seconds: 40));
+}
 
 RequestModel editRequest(String uid, String assetId, Map<String, dynamic> proposed) {
   return RequestModel(
@@ -868,6 +935,263 @@ void main() {
     expect(data['headOfficeQuantity'], 35);
     expect(data['deployedQuantity'], 65);
     expect(data['quantity'], 100);
+  });
+
+  // ===========================================================================
+  // BULK IMPORT (file -> parse -> validate -> Firestore)
+  // ===========================================================================
+
+  testWidgets('Android: bulk import parses, validates and writes correct documents', (tester) async {
+    await seedFixtures();
+    await signOutAndWait();
+
+    // One header row, three good rows, one blank row, then one broken row per
+    // failure mode. TAG-LaptopA already exists in the seeded inventory.
+    const csv = 'Asset ID,Asset Name,Category,Quantity,Unit Purchase Price,Serial Number,Brand,Model,Purchase Date,Location,Status,Condition,Notes\n'
+        'IMP-001,Dell Latitude 5440,Laptop,5,10000,SN-IMP-001,Dell,5440,2026-01-15,Head Office,Available,Good,First row\n'
+        'IMP-002,HP Monitor E24,Monitor,3,20000,SN-IMP-002,HP,E24,15/02/2026,Head Office,Available,Good,\n'
+        'IMP-003,Logitech Keyboard,Accessory,2,5000.50,SN-IMP-003,Logitech,K120,,,,,\n'
+        ',,,,,,,,,,,,\n'
+        'IMP-004,Bad Quantity,Laptop,abc,1000,SN-IMP-004,Dell,X,,,,,\n'
+        'IMP-005,Bad Price,Laptop,2,abc,SN-IMP-005,Dell,X,,,,,\n'
+        'IMP-006,Negative Quantity,Laptop,-3,500,SN-IMP-006,Dell,X,,,,,\n'
+        'IMP-007,Fractional Quantity,Laptop,1.5,500,SN-IMP-007,Dell,X,,,,,\n'
+        'IMP-008,Negative Price,Laptop,1,-500,SN-IMP-008,Dell,X,,,,,\n'
+        'IMP-001,Duplicate In File,Laptop,1,100,SN-IMP-009,Dell,X,,,,,\n'
+        'TAG-LaptopA,Already In Inventory,Laptop,1,100,SN-IMP-010,Dell,X,,,,,\n'
+        'IMP-009,,Laptop,1,100,SN-IMP-011,Dell,X,,,,,\n'
+        'IMP-010,No Category,,1,100,SN-IMP-012,Dell,X,,,,,\n';
+
+    FilePicker.platform = _FakeFilePicker(name: 'inventory.csv', bytes: Uint8List.fromList(utf8.encode(csv)));
+
+    await pumpApp(tester);
+    await signInThroughUi(tester, adminAEmail, 'Adeel AdminA');
+
+    GoRouter.of(tester.element(find.text('Adeel AdminA').first)).go('/import-assets');
+    await pumpUntil(tester, find.text('Choose File'));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+
+    await tester.tap(find.text('Choose File'));
+
+    final summary = find.text('Import Summary');
+    for (var i = 0; i < 200 && summary.evaluate().isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    if (summary.evaluate().isEmpty) {
+      final onScreen = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((text) => text.data)
+          .whereType<String>()
+          .join(' | ');
+      fail('The import screen produced no summary after picking a file. screen="$onScreen"');
+    }
+
+    for (var i = 0; i < 15; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    // Only the three complete rows are importable: the blank row is skipped and
+    // every broken row is reported instead of being silently repaired.
+    final importLabel = tester
+        .widgetList<Text>(find.descendant(of: find.byType(FilledButton), matching: find.byType(Text)))
+        .map((text) => text.data ?? '')
+        .firstWhere((text) => text.startsWith('Import'), orElse: () => '<no import button>');
+
+    expect(
+      importLabel,
+      'Import 3 Assets',
+      reason: 'only IMP-001..003 are complete rows; the button offered "$importLabel"',
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, importLabel));
+
+    Map<String, Map<String, dynamic>> imported = {};
+    final deadline = DateTime.now().add(const Duration(seconds: 40));
+    while (DateTime.now().isBefore(deadline)) {
+      await tester.pump(const Duration(milliseconds: 250));
+      final snapshot = await db.collection('assets').get();
+      imported = {
+        for (final doc in snapshot.docs)
+          (doc.data()['assetId'] ?? '').toString(): doc.data(),
+      };
+      if (imported.containsKey('IMP-003')) break;
+    }
+
+    // ----- exactly the good rows exist -----
+    expect(imported.containsKey('IMP-001'), isTrue);
+    expect(imported.containsKey('IMP-002'), isTrue);
+    expect(imported.containsKey('IMP-003'), isTrue);
+
+    for (final rejected in ['IMP-004', 'IMP-005', 'IMP-006', 'IMP-007', 'IMP-008', 'IMP-009', 'IMP-010']) {
+      expect(imported.containsKey(rejected), isFalse, reason: '$rejected must not be imported');
+    }
+
+    // ----- values are stored exactly as entered -----
+    final first = imported['IMP-001']!;
+    expect(first['name'], 'Dell Latitude 5440');
+    expect(first['category'], 'Laptop');
+    expect(first['quantity'], 5);
+    expect(first['purchasePrice'], 10000);
+    expect(first['headOfficeQuantity'], 5, reason: 'new stock starts at Head Office');
+    expect(first['assignedQuantity'], 0);
+    expect(first['deployedQuantity'], 0);
+    expect(first['adminId'], adminAUid, reason: 'imported into the selected owner');
+    expect(first['status'], 'Available');
+    expect(first['serialNumber'], 'SN-IMP-001');
+
+    final third = imported['IMP-003']!;
+    expect(third['quantity'], 2);
+    expect(third['purchasePrice'], 5000.5, reason: 'decimal price kept');
+    expect(third['status'], 'Available', reason: 'empty status falls back to Available');
+    expect(third['location'], 'Head Office', reason: 'empty location falls back to Head Office');
+    expect(third['condition'], 'Good');
+
+    // ----- a duplicate never overwrites the stored asset -----
+    final existing = imported['TAG-LaptopA']!;
+    expect(existing['name'], 'LaptopA');
+    expect(existing['quantity'], 100);
+    expect(existing['purchasePrice'], 1000.0);
+
+    // ----- the import feeds the same totals the dashboard shows -----
+    final provider = AssetProvider();
+    addTearDown(provider.dispose);
+    provider.listenToAssets();
+    await tester.pump(const Duration(seconds: 3));
+    for (var i = 0; i < 20 && provider.totalAssets < imported.length; i++) {
+      await tester.pump(const Duration(milliseconds: 300));
+    }
+
+    // Seeded: 100 x 1,000 + 10 x 1,000 = 110,000.
+    // Imported: 5 x 10,000 + 3 x 20,000 + 2 x 5,000.50 = 120,001.
+    expect(provider.totalQuantity, 100 + 10 + 5 + 3 + 2);
+    expect(provider.totalInventoryValue, 230001.0);
+    expect(provider.isStockBalanced, isTrue);
+  });
+
+  testWidgets('Android: bulk import throughput and failures are visible', (tester) async {
+    await seedFixtures();
+    await signInAs(adminAEmail, password);
+
+    final provider = AssetProvider();
+    addTearDown(provider.dispose);
+
+    const rowCount = 250;
+    final assets = [
+      for (var i = 1; i <= rowCount; i++)
+        AssetModel(
+          id: '',
+          assetId: 'THRU-${i.toString().padLeft(4, '0')}',
+          name: 'Throughput Asset $i',
+          category: 'Laptop',
+          status: 'Available',
+          quantity: (i % 9) + 1,
+          purchasePrice: (1000 + i).toDouble(),
+          serialNumber: 'SN-THRU-$i',
+          adminId: adminAUid,
+        ),
+    ];
+
+    final started = DateTime.now();
+    final result = await provider.addAssetsForAdmin(
+      assets: assets,
+      adminId: adminAUid,
+      adminName: 'Adeel AdminA',
+    );
+    final elapsed = DateTime.now().difference(started);
+
+    final stored = (await adminListCollection('assets'))
+        .where((data) => (data['assetId'] ?? '').toString().startsWith('THRU-'))
+        .length;
+
+    final summary =
+        'imported ${result.successful}/$rowCount in ${elapsed.inSeconds}s '
+        '(${(elapsed.inMilliseconds / rowCount).round()} ms per row, '
+        'duplicate ${result.duplicate}, failed ${result.failed}) '
+        'errors: ${result.errors.take(3).join(' | ')}';
+
+    // Rows are written one transaction at a time, so a busy emulator can time
+    // a single row out. A systematic failure still fails this test, and every
+    // row the import reported as written must really be in Firestore.
+    expect(result.successful, greaterThanOrEqualTo(rowCount - 2), reason: summary);
+    expect(result.duplicate, 0, reason: summary);
+    expect(stored, result.successful, reason: 'every reported row is stored. $summary');
+    expect(elapsed.inSeconds, lessThan(300), reason: summary);
+
+    for (final error in result.errors) {
+      expect(
+        error.contains('deadline-exceeded') || error.contains('Deadline'),
+        isTrue,
+        reason: 'only transient emulator timeouts are tolerated: $error',
+      );
+    }
+  });
+
+  testWidgets('Android: a large import stays responsive and writes every row', (tester) async {
+    await seedFixtures();
+    await signOutAndWait();
+
+    const rowCount = 60;
+    final buffer = StringBuffer('Asset ID,Asset Name,Category,Quantity,Unit Purchase Price,Serial Number\n');
+    for (var i = 1; i <= rowCount; i++) {
+      final id = 'BULK-${i.toString().padLeft(4, '0')}';
+      buffer.writeln('$id,Bulk Asset $i,Laptop,${(i % 9) + 1},${1000 + i},SN-$id');
+    }
+
+    FilePicker.platform = _FakeFilePicker(name: 'bulk.csv', bytes: Uint8List.fromList(utf8.encode(buffer.toString())));
+
+    await pumpApp(tester);
+    await signInThroughUi(tester, adminAEmail, 'Adeel AdminA');
+
+    GoRouter.of(tester.element(find.text('Adeel AdminA').first)).go('/import-assets');
+    await pumpUntil(tester, find.text('Choose File'));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+
+    final parseStarted = DateTime.now();
+    await tester.tap(find.text('Choose File'));
+    await pumpUntil(tester, find.textContaining('Import $rowCount Assets'), timeout: const Duration(minutes: 2));
+    final parseSeconds = DateTime.now().difference(parseStarted).inSeconds;
+
+    final importButton = find.widgetWithText(FilledButton, 'Import $rowCount Assets');
+
+    // A floating SnackBar sits over the bottom action bar and would swallow
+    // the tap, so it is dismissed first.
+    if (find.byType(SnackBar).evaluate().isNotEmpty) {
+      ScaffoldMessenger.of(tester.element(importButton)).hideCurrentSnackBar();
+      await tester.pump(const Duration(milliseconds: 600));
+    }
+
+    await tester.ensureVisible(importButton);
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(importButton, warnIfMissed: false);
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(
+      find.textContaining('Importing').evaluate().isNotEmpty ||
+          find.textContaining('Import $rowCount Assets').evaluate().isEmpty,
+      isTrue,
+      reason: 'the import did not start after tapping the action button',
+    );
+
+    // Counted with the emulator's owner token so the check never depends on
+    // the signed-in session that the screen itself is using.
+    var stored = 0;
+    final deadline = DateTime.now().add(const Duration(minutes: 5));
+    while (DateTime.now().isBefore(deadline)) {
+      await tester.pump(const Duration(milliseconds: 400));
+      final documents = await adminListCollection('assets');
+      stored = documents
+          .where((data) => (data['assetId'] ?? '').toString().startsWith('BULK-'))
+          .length;
+      if (stored >= rowCount) break;
+    }
+
+    expect(stored, rowCount, reason: 'every parsed row reached Firestore');
+    expect(parseSeconds, lessThan(60), reason: 'parsing + validation of $rowCount rows took ${parseSeconds}s');
   });
 
   // ===========================================================================

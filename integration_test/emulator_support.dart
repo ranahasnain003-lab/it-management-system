@@ -229,14 +229,23 @@ Map<String, dynamic> assetFixture({
 /// Reads a collection with the emulator's owner token (bypasses rules), for
 /// assertions that must not depend on what the signed-in account may read.
 Future<List<Map<String, dynamic>>> adminListCollection(String collection) async {
-  final response = await _request(
-    'GET',
-    Uri.parse(
-      'http://$emulatorHost:8080/v1/projects/$projectId/databases/(default)/documents/$collection?pageSize=300',
-    ),
-  );
+  // The REST listing is paged: without following nextPageToken a large
+  // collection is silently truncated and assertions undercount.
+  final documents = <dynamic>[];
+  String? pageToken;
 
-  final documents = (response['documents'] as List<dynamic>?) ?? const [];
+  do {
+    final response = await _request(
+      'GET',
+      Uri.parse(
+        'http://$emulatorHost:8080/v1/projects/$projectId/databases/(default)/documents/$collection'
+        '?pageSize=300${pageToken == null ? '' : '&pageToken=$pageToken'}',
+      ),
+    );
+
+    documents.addAll((response['documents'] as List<dynamic>?) ?? const []);
+    pageToken = response['nextPageToken'] as String?;
+  } while (pageToken != null && pageToken.isNotEmpty);
 
   return documents.map((raw) {
     final document = raw as Map<String, dynamic>;

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../../models/asset_model.dart';
 import '../../../models/request_model.dart';
 import '../../providers/asset_provider.dart';
+import '../../providers/asset_scope.dart';
 import '../../providers/request_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../requests/screens/create_request_screen.dart';
@@ -55,41 +56,9 @@ class _AssetsScreenState extends State<AssetsScreen> {
   void _listenForCurrentRole({bool forceRestart = false}) {
     if (!mounted) return;
 
-    final userProvider = context.read<UserProvider>();
-    final assetProvider = context.read<AssetProvider>();
-
-    if (userProvider.isSuperAdmin) {
-      assetProvider.listenToAssets(forceRestart: forceRestart);
-      return;
-    }
-
-    if (userProvider.isAdmin) {
-      final adminUid = userProvider.currentUserUid;
-
-      if (adminUid == null || adminUid.trim().isEmpty) {
-        assetProvider.clearAssets();
-        return;
-      }
-
-      assetProvider.listenToAdminAssets(
-        adminUid.trim(),
-        forceRestart: forceRestart,
-      );
-      return;
-    }
-
-    final assignedAdminUid =
-        userProvider.currentUserProfile?.createdBy.trim() ?? '';
-
-    if (assignedAdminUid.isEmpty) {
-      assetProvider.clearAssets();
-      return;
-    }
-
-    assetProvider.listenToUserAssets(
-      assignedAdminUid,
-      forceRestart: forceRestart,
-    );
+    // Scoping lives in AssetScope so this screen, the Dashboard and the AI
+    // Assistant all read exactly the same slice of inventory.
+    AssetScope.listenFromContext(context, forceRestart: forceRestart);
   }
 
   String _normalizeInitialStatus(String status) {
@@ -1727,7 +1696,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                 ),
                 _detailRow(
                   sheetContext,
-                  'Purchase Price',
+                  'Unit Purchase Price',
                   _formatPrice(asset.purchasePrice),
                   Icons.payments_outlined,
                 ),

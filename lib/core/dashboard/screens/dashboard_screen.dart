@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import '../../ai/assistant_modal_observer.dart';
 import '../../providers/asset_provider.dart';
+import '../../providers/asset_scope.dart';
 import '../../providers/user_provider.dart';
 import '../../services/bazaar_service.dart';
 import '../../shared/drawer/app_drawer.dart';
@@ -32,6 +34,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _initializeDashboard();
     });
+  }
+
+  @override
+  void dispose() {
+    // If this screen goes away while its drawer is open - a sign-out from the
+    // drawer's own logout tile does exactly that - onDrawerChanged never fires
+    // again, so the flag is cleared here rather than left stuck.
+    assistantModalObserver.setDrawerOpen(false);
+    super.dispose();
   }
 
   String _scopeKey(UserProvider userProvider) {
@@ -93,55 +104,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _listenerScopeKey = _scopeKey(userProvider);
     }
 
-    // ============================================================
-    // SUPER ADMIN
-    // ============================================================
-    // Super Admin has organization-wide inventory visibility.
-    if (userProvider.isSuperAdmin) {
-      assetProvider.listenToAssets(forceRestart: forceRestart);
-      return;
-    }
-
-    // ============================================================
-    // ADMIN
-    // ============================================================
-    // Current project decision:
-    // Admin can SEE organization-wide inventory/data.
-    //
-    // Write permissions remain controlled separately by the
-    // service + Firestore rules.
-    if (userProvider.isAdmin) {
-      final adminUid = userProvider.currentUserUid;
-
-      if (adminUid == null || adminUid.trim().isEmpty) {
-        assetProvider.clearAssets();
-        return;
-      }
-
-      assetProvider.listenToAdminAssets(
-        adminUid.trim(),
-        forceRestart: forceRestart,
-      );
-      return;
-    }
-
-    // ============================================================
-    // USER
-    // ============================================================
-    // A normal user must NEVER load organization-wide inventory.
-    //
-    // Their scope is determined from the Admin that created/
-    // manages their user profile.
-    final assignedAdminUid =
-        userProvider.currentUserProfile?.createdBy.trim() ?? '';
-
-    if (assignedAdminUid.isEmpty) {
-      assetProvider.clearAssets();
-      return;
-    }
-
-    assetProvider.listenToUserAssets(
-      assignedAdminUid,
+    // Scoping lives in AssetScope so the Dashboard, the Assets screen and the
+    // AI Assistant all read exactly the same slice of inventory.
+    AssetScope.listenForRole(
+      users: userProvider,
+      assets: assetProvider,
       forceRestart: forceRestart,
     );
   }
@@ -158,6 +125,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
         return Scaffold(
           drawer: const AppDrawer(),
+
+          // The drawer is part of this page rather than a route, so no
+          // navigator observer can see it. Telling the assistant directly is
+          // what keeps its button from floating over the open drawer.
+          onDrawerChanged: assistantModalObserver.setDrawerOpen,
           appBar: AppBar(
             titleSpacing: 4,
             title: Column(
@@ -170,7 +142,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  'IT Management System',
+                  'PSBA IT Inventory',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

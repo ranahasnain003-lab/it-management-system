@@ -73,22 +73,18 @@ class _SplashScreenState extends State<SplashScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 76,
-                  height: 76,
-                  decoration: BoxDecoration(
-                    color: colors.primary,
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-                  ),
-                  child: Icon(
-                    Icons.inventory_2_rounded,
-                    size: 38,
-                    color: colors.onPrimary,
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
+                  child: Image.asset(
+                    'assets/branding/psba_mark.png',
+                    width: 76,
+                    height: 76,
+                    filterQuality: FilterQuality.high,
                   ),
                 ),
                 const SizedBox(height: AppSpacing.xl),
                 Text(
-                  'IT Management System',
+                  'PSBA IT Inventory',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 22,
@@ -99,7 +95,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 ),
                 const SizedBox(height: AppSpacing.xs + 2),
                 Text(
-                  'Enterprise IT Inventory Management',
+                  'Punjab Sahulat Bazaars Authority',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 14,

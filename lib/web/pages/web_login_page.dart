@@ -28,7 +28,7 @@ class WebLoginPage extends StatelessWidget {
         maxWidth: 420,
         child: AuthSignInForm(
           title: 'Sign in',
-          subtitle: 'Use your IT Inventory Management account.',
+          subtitle: 'Use your PSBA IT Inventory account.',
           centeredHeader: !wide,
           onSignedIn: () => context.go(_target),
         ),
@@ -122,25 +122,25 @@ class _BrandPanel extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: colors.primary,
-                              borderRadius: BorderRadius.circular(AppSpacing.radiusLg - 2),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(AppSpacing.radiusLg - 2),
+                            child: Image.asset(
+                              'assets/branding/psba_mark.png',
+                              width: 44,
+                              height: 44,
+                              filterQuality: FilterQuality.high,
                             ),
-                            child: const Icon(Icons.inventory_2_rounded, size: 24, color: Colors.white),
                           ),
                           const SizedBox(width: 12),
                           const Text(
-                            'IT Inventory',
+                            'PSBA IT Inventory',
                             style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: Colors.white),
                           ),
                         ],
                       ),
                       const SizedBox(height: 48),
                       const Text(
-                        'IT Inventory Management',
+                        'Punjab Sahulat Bazaars Authority',
                         style: TextStyle(
                           fontSize: 36,
                           height: 1.15,

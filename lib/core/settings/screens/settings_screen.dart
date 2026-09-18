@@ -320,7 +320,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Configure your IT Management System experience.',
+                    'Configure your PSBA IT Inventory experience.',
                     style: TextStyle(
                       color: colors.onSurfaceVariant,
                       fontSize: 13,
@@ -666,10 +666,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       child: Column(
         children: [
-          Icon(Icons.business_center_outlined, size: 28, color: colors.primary),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.asset(
+              'assets/branding/psba_mark.png',
+              width: 32,
+              height: 32,
+              filterQuality: FilterQuality.high,
+            ),
+          ),
           const SizedBox(height: AppSpacing.sm),
           Text(
-            'IT Management System',
+            'PSBA IT Inventory',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: colors.onSurface,
@@ -679,7 +687,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 2),
           Text(
-            'Enterprise IT Inventory Management',
+            'Punjab Sahulat Bazaars Authority',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12.5, color: colors.onSurfaceVariant),
           ),
@@ -776,7 +784,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'Storage',
           ),
           content: const Text(
-            'Your IT Management System uses Firebase for secure '
+            'PSBA IT Inventory uses Firebase for secure '
             'cloud data storage.\n\n'
             'Firebase data includes:\n'
             '• Inventory records\n'
@@ -803,26 +811,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ================================================================
 
   void _showAboutApplication(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
     showDialog<void>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          icon: Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
-              color: AppColors.tint(colors.primary, colors.brightness),
-              borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-            ),
-            child: Icon(
-              Icons.business_center_outlined,
-              color: colors.primary,
+          icon: ClipRRect(
+            borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+            child: Image.asset(
+              'assets/branding/psba_mark.png',
+              width: 58,
+              height: 58,
+              filterQuality: FilterQuality.high,
             ),
           ),
           title: const Text(
-            'IT Management System',
+            'PSBA IT Inventory',
             textAlign: TextAlign.center,
           ),
           content: const Text(

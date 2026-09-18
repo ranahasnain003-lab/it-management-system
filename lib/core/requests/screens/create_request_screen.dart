@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../../models/asset_model.dart';
 import '../../../models/request_model.dart';
+import '../../providers/asset_scope.dart';
 import '../../providers/asset_provider.dart';
 import '../../providers/request_provider.dart';
 import '../../providers/user_provider.dart';
@@ -77,29 +78,9 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
   /// listener here (as before) was permission-denied for Users and replaced
   /// their working, scoped listener, freezing the dashboard/assets screens.
   void _ensureScopedAssetListener() {
-    final userProvider = context.read<UserProvider>();
-    final assetProvider = context.read<AssetProvider>();
-
-    if (userProvider.isSuperAdmin) {
-      assetProvider.listenToAssets();
-      return;
-    }
-
-    if (userProvider.isAdmin) {
-      final uid = userProvider.currentUserUid?.trim() ?? '';
-
-      if (uid.isNotEmpty) {
-        assetProvider.listenToAdminAssets(uid);
-      }
-
-      return;
-    }
-
-    final adminUid = userProvider.currentUserProfile?.createdBy.trim() ?? '';
-
-    if (adminUid.isNotEmpty) {
-      assetProvider.listenToUserAssets(adminUid);
-    }
+    // Scoping lives in AssetScope, so every screen and the AI Assistant read
+    // the same slice of inventory.
+    AssetScope.listenFromContext(context);
   }
 
   static const List<String> _allowedStatuses = [
@@ -560,7 +541,7 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       ),
       _buildTextField(
         controller: purchasePriceController,
-        label: 'Purchase Price',
+        label: 'Unit Purchase Price',
         icon: Icons.payments_outlined,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
       ),
@@ -653,7 +634,7 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
           }
         }
 
-        if (label == 'Purchase Price') {
+        if (label == 'Unit Purchase Price') {
           final price = double.tryParse(value?.trim() ?? '');
 
           if (price == null || price < 0) {

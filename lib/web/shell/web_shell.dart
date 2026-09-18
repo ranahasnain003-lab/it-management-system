@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/providers/asset_scope.dart';
 import '../../core/providers/asset_provider.dart';
 import '../../core/providers/auth_provider.dart';
 import '../../core/providers/bazaar_provider.dart';
@@ -78,18 +79,13 @@ class _WebShellState extends State<WebShell> {
 
     _scopeKey = key;
 
-    final assets = context.read<AssetProvider>();
-
-    // Same scoping as the Android dashboard/assets screens.
-    if (_users.isSuperAdmin) {
-      assets.listenToAssets(forceRestart: true);
-    } else if (_users.isAdmin) {
-      assets.listenToAdminAssets(uid, forceRestart: true);
-    } else if (profile.createdBy.trim().isNotEmpty) {
-      assets.listenToUserAssets(profile.createdBy.trim(), forceRestart: true);
-    } else {
-      assets.clearAssets();
-    }
+    // Same scoping as the Android screens and the AI Assistant, from the one
+    // definition in AssetScope.
+    AssetScope.listenForRole(
+      users: _users,
+      assets: context.read<AssetProvider>(),
+      forceRestart: true,
+    );
 
     context.read<BazaarProvider>().listenToBazaars(forceRestart: true);
     context.read<RequestProvider>().listenToRequests(forceRestart: true);
@@ -403,17 +399,24 @@ class _Brand extends StatelessWidget {
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              color: colors.primary,
               borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
               boxShadow: [
                 BoxShadow(
-                  color: colors.primary.withValues(alpha: 0.3),
+                  color: Colors.black.withValues(alpha: 0.18),
                   blurRadius: 10,
                   offset: const Offset(0, 3),
                 ),
               ],
             ),
-            child: Icon(Icons.inventory_2_rounded, color: colors.onPrimary, size: 20),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+              child: Image.asset(
+                'assets/branding/psba_mark.png',
+                width: 38,
+                height: 38,
+                filterQuality: FilterQuality.high,
+              ),
+            ),
           ),
           if (!collapsed) ...[
             const SizedBox(width: 12),
@@ -423,7 +426,7 @@ class _Brand extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'IT Inventory',
+                    'PSBA IT Inventory',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -628,7 +631,7 @@ Future<void> webLogout(BuildContext context) async {
   final confirmed = await confirmWebAction(
     context,
     title: 'Logout',
-    message: 'Sign out of the IT Inventory Management System?',
+    message: 'Sign out of PSBA IT Inventory?',
     confirmLabel: 'Logout',
     destructive: true,
   );
@@ -811,6 +814,6 @@ class _TopBar extends StatelessWidget {
 
     if (location.startsWith('/import-assets')) return ('Inventory', 'Import Assets');
 
-    return (null, 'IT Inventory Management');
+    return (null, 'PSBA IT Inventory');
   }
 }

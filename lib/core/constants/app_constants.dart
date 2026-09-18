@@ -5,7 +5,7 @@ class AppConstants {
   // APPLICATION
   // ============================================================
 
-  static const String appName = 'IT Management System';
+  static const String appName = 'PSBA IT Inventory';
   static const String appVersion = '1.0.0';
 
   // ============================================================

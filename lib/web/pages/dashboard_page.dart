@@ -97,7 +97,9 @@ class WebDashboardPage extends StatelessWidget {
               : 1,
           children: [
             WebStatCard(
-              label: 'Total Inventory',
+              // The number is a count of asset records, so it is named the way
+              // the Android dashboard names it instead of reading as a total.
+              label: 'Total Assets',
               value: '${assets.totalAssets}',
               caption: 'Asset records',
               icon: Icons.inventory_2_rounded,

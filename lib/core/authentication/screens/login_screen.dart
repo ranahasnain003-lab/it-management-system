@@ -32,14 +32,20 @@ class AuthSignInForm extends StatefulWidget {
     super.key,
     required this.onSignedIn,
     this.title = 'Welcome back',
-    this.subtitle = 'Sign in to your IT Management System account.',
+    this.subtitle = 'Sign in to your PSBA IT Inventory account.',
     this.centeredHeader = true,
+    this.brandAsset = 'assets/branding/psba_mark.png',
   });
 
   final VoidCallback onSignedIn;
   final String title;
   final String subtitle;
   final bool centeredHeader;
+
+  /// The app logo shown in the header. It defaults to the application mark so
+  /// the sign-in identity is the same on Android and on the web; pass null to
+  /// fall back to [AuthHeader]'s icon.
+  final String? brandAsset;
 
   @override
   State<AuthSignInForm> createState() => _AuthSignInFormState();
@@ -227,6 +233,7 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
               title: widget.title,
               subtitle: widget.subtitle,
               centered: widget.centeredHeader,
+              brandAsset: widget.brandAsset,
             ),
             const SizedBox(height: 28),
 
