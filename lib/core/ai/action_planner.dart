@@ -1,6 +1,7 @@
 import '../../models/asset_model.dart';
 import '../../models/user_model.dart';
 import '../assets/screens/add_asset_screen.dart' show AddAssetScreen;
+import '../services/deployment_service.dart' show DeploymentService;
 import 'assistant_actions.dart';
 import 'inventory_assistant.dart';
 
@@ -121,6 +122,72 @@ class ActionPlanner {
     'konsa',
     'kaunsa',
   ];
+
+  /// Extra ways of asking to be told something, beyond [_questionWords].
+  ///
+  /// Kept separate because [plan] deliberately does not treat these as
+  /// questions - "users screen dikhao" is a navigation command - while
+  /// [readsAsQuestion] does, for deciding whether a language model should get
+  /// the message first.
+  static const List<String> _askingWords = [
+    'dikhao',
+    'dikha do',
+    'dikhaen',
+    'show me',
+    'tell me',
+    'kya ',
+    'kaun ',
+    'kaunsi',
+    'konsi',
+    'kab ',
+    'kyun',
+    'kion',
+    ' ya nahi',
+    ' ya nhi',
+    ' ya nahin',
+  ];
+
+  /// Words that open a question, tested only at the start of a message.
+  ///
+  /// "is" and "kya" are ordinary words in the middle of a sentence - "is ka
+  /// price", "kya kya bheja" - so they are only a question signal in first
+  /// position. 'ya nahi' is the Roman Urdu "or not", which turns any
+  /// statement into a yes/no question wherever it appears.
+  static const List<String> _openingQuestionWords = [
+    'is ', 'are ', 'was ', 'were ', 'does ', 'do ', 'did ',
+    'has ', 'have ', 'had ', 'can ', 'could ', 'will ', 'would ', 'should ',
+    'who ', 'what ', 'which ', 'when ', 'where ', 'why ', 'how ',
+    'kya ', 'kaun', 'kitn', 'kahan', 'kab ',
+  ];
+
+  /// Whether a message reads as a request to be told something.
+  ///
+  /// Used to decide whether the keyword planner may act on a message by
+  /// itself, or whether a language model should see it first. It is broader
+  /// than the guard inside [plan]: that one only has to stop a question
+  /// becoming a write, while this one also has to stop a question becoming a
+  /// navigation, and to catch the questions the keyword list misses - "is
+  /// IT-LAP-001 assigned to Ayesha Khan?" contains no question word at all,
+  /// but it plainly asks rather than instructs.
+  static bool readsAsQuestion(String message) {
+    final q = message.toLowerCase().trim();
+    if (q.isEmpty) return false;
+
+    // '؟' is the Urdu question mark.
+    if (q.endsWith('?') || q.endsWith('؟')) return true;
+
+    // Plenty of questions are typed without one. An opening auxiliary or
+    // question word is the reliable English signal - "is IT-LAP-001 assigned
+    // to Ayesha Khan" is a question whether or not it ends in a '?', and the
+    // verb list would otherwise resolve it into a confirmable assignment.
+    // Matched only at the start, because these words are far too common
+    // inside a sentence to test for anywhere else.
+    for (final opener in _openingQuestionWords) {
+      if (q.startsWith(opener)) return true;
+    }
+
+    return _has(q, _questionWords) || _has(q, _askingWords);
+  }
 
   /// Reads the first standalone whole number in the message, or null.
   ///
@@ -300,7 +367,12 @@ class ActionPlanner {
     // "open the transfers screen" contains "transfer", so navigation is
     // settled before the movement verbs. It only fires when a navigation word
     // and a screen the app actually has are both present.
-    if (_has(q, ['open ', 'go to ', 'take me to', 'kholo', 'dikhao', 'screen']) &&
+    // Deliberately no bare 'screen': navigation happens instantly and with
+    // no confirmation, so it must take an explicit instruction. "assets screen
+    // par Dell laptop nahi mil raha" is a complaint, not a request to be
+    // taken somewhere, and answering it by closing the panel threw the whole
+    // conversation away.
+    if (_has(q, ['open ', 'go to ', 'take me to', 'kholo', 'dikhao']) &&
         screenRoute(q) != null) {
       return _Verb.openScreen;
     }
@@ -454,6 +526,460 @@ class ActionPlanner {
       case _Verb.returnHome:
         return _planMovement(q, data, permissions, verb, lastAsset);
     }
+  }
+
+  // =========================================================================
+  // FROM A LANGUAGE MODEL'S READING OF A SENTENCE
+  // =========================================================================
+
+  /// Every action kind, by the name the language model uses for it.
+  static final Map<String, AssistantActionKind> _kindsByName = {
+    for (final kind in AssistantActionKind.values) kind.name: kind,
+  };
+
+  /// The three kinds that all mean "move stock from one place to another".
+  ///
+  /// [_planMovement] works the direction out for itself from the source and
+  /// the destination it resolves, so the model naming one of these and the
+  /// planner settling on another is agreement about the change, not a
+  /// disagreement about it.
+  static const Set<AssistantActionKind> _movementKinds = {
+    AssistantActionKind.sendToBazaar,
+    AssistantActionKind.moveBetweenBazaars,
+    AssistantActionKind.returnToHeadOffice,
+  };
+
+  /// Kinds that cannot be planned at all without a number of units.
+  ///
+  /// The number is demanded here rather than left to [readQuantity], because
+  /// an asset named "Dell Latitude 5420" carries a standalone number of its
+  /// own that would otherwise be read as the quantity.
+  static const Set<AssistantActionKind> _needQuantity = {
+    AssistantActionKind.addStock,
+    AssistantActionKind.sendToBazaar,
+    AssistantActionKind.moveBetweenBazaars,
+    AssistantActionKind.returnToHeadOffice,
+  };
+
+  /// Plans an action from what a language model understood a sentence to mean.
+  ///
+  /// The model is trusted for exactly one thing: noticing that a free-form
+  /// sentence - in English, Urdu or Roman Urdu, in whatever words the user
+  /// chose - was an instruction, and roughly which kind. It is trusted for no
+  /// value whatsoever. [intent] carries loose strings the model copied out of
+  /// the facts it was shown; not one of them is an id, and not one of them has
+  /// been checked against anything.
+  ///
+  /// Everything is therefore resolved and validated again here, by exactly the
+  /// code that handles a typed command. The way that is guaranteed is
+  /// deliberately blunt: the intent is written back out in the app's own
+  /// canonical command wording and handed to [plan], so no permission check,
+  /// stock check, duplicate check or invariant is duplicated, reimplemented or
+  /// skipped. Whatever the model says, the account's own snapshot and
+  /// [AssistantPermissions] decide what is possible.
+  ///
+  /// If [plan] comes back with a different kind of change from the one the
+  /// model named, the result is thrown away and the user is asked to say it
+  /// again. The assistant proposes the change it understood or none at all -
+  /// never a different one.
+  ///
+  /// The conversation's last asset is deliberately NOT carried in here. That
+  /// pointer is set by the keyword engine, and only when IT recognises an
+  /// asset - so once the model is carrying the conversation the two drift
+  /// apart, and it can be several questions stale. A follow-up naming no asset
+  /// would then quietly propose a change to the wrong one. The model has the
+  /// whole conversation in front of it and is asked to name the asset every
+  /// time; when it does not, the planner asks, which is the right answer to an
+  /// ambiguous instruction. Typed commands are unaffected: [plan] still
+  /// follows the conversation exactly as it did before.
+  ///
+  /// Returns null when the intent names nothing this app can do, which leaves
+  /// the model's own words to stand as an ordinary answer.
+  ActionPlan? planFromIntent(
+    AssistantIntent intent,
+    InventorySnapshot data,
+    AssistantPermissions permissions, {
+    List<UserModel> people = const <UserModel>[],
+  }) {
+    final kind = _kindsByName[intent.kind.trim()];
+    if (kind == null) return null;
+
+    // Navigation is deliberately not reachable this way. It is the one action
+    // that happens immediately and without a confirmation, and a question the
+    // model merely misread as an instruction would close the assistant and
+    // throw the conversation away instead of answering. Typed navigation -
+    // "open assets", "users screen kholo" - still works, because the
+    // deterministic planner reads it before the model is ever asked.
+    if (kind == AssistantActionKind.openScreen) return null;
+
+    // Nobody named, nobody assigned. Without this the canonical sentence still
+    // carries the asset's own name, and a person whose name happens to appear
+    // in it would be picked as the recipient.
+    if (kind == AssistantActionKind.assign && intent.personName.trim().isEmpty) {
+      return const ActionPlan.ask(
+        'Who should I assign it to? Give me the exact name or the email '
+        'address of the person, as it appears under Users.',
+      );
+    }
+
+    if (_needQuantity.contains(kind) && intent.quantity == null) {
+      return const ActionPlan.ask('How many units? Tell me a whole number.');
+    }
+    if (intent.quantity != null && intent.quantity! <= 0) {
+      return const ActionPlan.refuse(
+        'The quantity has to be at least 1, so there is nothing for me to do here.',
+      );
+    }
+
+    final command = _canonicalCommand(intent, kind, people);
+    if (command == null) return _unclear();
+
+    final planned = plan(command, data, permissions, people: people);
+
+    // The canonical wording did not read back as a command at all. Rather than
+    // guess, the user is asked to put it in their own words again.
+    if (planned == null) return _unclear();
+
+    if (planned.isProposal) {
+      final action = planned.action!;
+      final proposed = action.kind;
+      final agrees = proposed == kind ||
+          (_movementKinds.contains(proposed) && _movementKinds.contains(kind));
+
+      if (!agrees) return _unclear();
+      if (!_matchesIntent(action, intent, kind, data)) return _unclear();
+    }
+
+    return planned;
+  }
+
+  /// Reads the finished proposal back against what the model actually said.
+  ///
+  /// The canonical wording is re-parsed by [plan], and the values in it were
+  /// copied out of records that users typed. An asset named, say, "Laptop from
+  /// Township Bazaar" would put the words of a place into the middle of a
+  /// transfer sentence. The confirmation the user sees names every figure, so
+  /// such a thing could not be carried out unnoticed - but a proposal that
+  /// drifted from what was asked for should never reach that screen in the
+  /// first place, so each value the model did name is compared with what the
+  /// planner resolved, and any disagreement drops the proposal.
+  bool _matchesIntent(
+    AssistantAction action,
+    AssistantIntent intent,
+    AssistantActionKind kind,
+    InventorySnapshot data,
+  ) {
+    // The asset the canonical sentence resolved to must be the asset the model
+    // pointed at, and not one the rest of the sentence dragged in. Resolving
+    // the reference on its own and comparing is the only way to tell.
+    final ref = intent.assetRef.trim();
+    if (action.asset != null) {
+      // The model has to name the asset it means. If it named none and the
+      // planner still resolved one, that asset came out of some OTHER field -
+      // a Bazaar called "Township Bazaar Dell Latitude 5420" would otherwise
+      // pick the laptop itself out of the sentence - and it is not what was
+      // asked for.
+      if (ref.isEmpty) return false;
+
+      final alone = _finder.findAsset(ref.toLowerCase(), data);
+      if (alone == null || alone.id != action.asset!.id) return false;
+    }
+
+    if (_needQuantity.contains(kind) &&
+        intent.quantity != null &&
+        action.quantity != intent.quantity) {
+      return false;
+    }
+
+    if (_movementKinds.contains(kind)) {
+      // Compared against the places the canonical sentence actually named, not
+      // against the raw intent: "send 5 of X to Township" means "from Head
+      // Office" even though the model left the source out, and an asset called
+      // "Laptop from Model Town Bazaar" must not be able to become the source.
+      final sides = _movementSides(intent, kind);
+
+      // A side nobody named must not have been filled in by a place that
+      // happened to appear inside an asset's name. With no destination given
+      // the right outcome is the planner's question, not a guess.
+      if (sides.to.isEmpty && !_isHeadOffice(action.destinationName)) return false;
+      if (sides.from.isEmpty && !_isHeadOffice(action.sourceName)) return false;
+
+      if (!_placeAgrees(sides.from, action.sourceName)) return false;
+      if (!_placeAgrees(sides.to, action.destinationName)) return false;
+    }
+
+    if (kind == AssistantActionKind.assign &&
+        !_placeAgrees(intent.personName, action.assigneeName)) {
+      return false;
+    }
+
+    // The status is resolved by the longest status word anywhere in the
+    // sentence, so an asset called "Repair Bench PC" would turn "mark it as
+    // Lost" into Under Repair. Only checked when the model used a word the app
+    // knows, so a synonym it chose for itself is still allowed through.
+    if (kind == AssistantActionKind.updateStatus) {
+      final asked = _statusWords[intent.status.trim().toLowerCase()];
+
+      // A word the app does not know cannot have produced the status the
+      // planner settled on, so that status came from somewhere else in the
+      // sentence - the asset's own name. Unverifiable means refused, not
+      // waved through. The model is told the five statuses by name, so this
+      // only fires when it went off script.
+      if (asked == null || action.status != asked) return false;
+    }
+
+    if (kind == AssistantActionKind.createAsset &&
+        action.draft != null &&
+        !_draftAgrees(action.draft!, intent.newAsset)) {
+      return false;
+    }
+
+    // The Bazaar actions carry a name rather than a resolved record, so the
+    // asset check above says nothing about them. A new Bazaar's name is read
+    // back from the quotes it was written into, and the one being disabled is
+    // resolved by the longest matching name - so both are read back here
+    // against the name that was actually asked for.
+    if (kind == AssistantActionKind.createBazaar) {
+      final asked = intent.bazaarName.trim().toLowerCase();
+      if (asked.isNotEmpty && action.subjectName.trim().toLowerCase() != asked) {
+        return false;
+      }
+    }
+
+    if (kind == AssistantActionKind.disableBazaar &&
+        !_placeAgrees(intent.bazaarName, action.subjectName)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /// The source and destination a movement asks for, worked out exactly the
+  /// way [_canonicalCommand] writes them into the sentence.
+  ({String from, String to}) _movementSides(
+    AssistantIntent intent,
+    AssistantActionKind kind,
+  ) {
+    if (kind == AssistantActionKind.returnToHeadOffice) {
+      return (
+        from: _bazaarSide(intent.fromLocation, intent.bazaarName),
+        to: 'Head Office',
+      );
+    }
+
+    return (
+      from: intent.fromLocation.trim().isEmpty
+          ? 'Head Office'
+          : intent.fromLocation.trim(),
+      to: _bazaarSide(intent.toLocation, intent.bazaarName),
+    );
+  }
+
+  /// Whether the draft that came back is the record that was described.
+  ///
+  /// [readAssetFields] splits the canonical sentence on field labels, so a
+  /// value that happens to contain one - a name like "Dell price 1" - would
+  /// quietly become two fields. Every value the model did supply is therefore
+  /// read back off the finished draft.
+  bool _draftAgrees(NewAssetDraft draft, Map<String, dynamic> asked) {
+    bool textAgrees(String key, String got) {
+      final want = asked[key];
+      if (want == null) return true;
+
+      final wanted = want.toString().trim().toLowerCase();
+      if (wanted.isEmpty) return true;
+
+      return got.trim().toLowerCase() == wanted;
+    }
+
+    // Everything the model described must have survived the round trip...
+    if (!textAgrees('assetId', draft.assetId)) return false;
+    if (!textAgrees('name', draft.name)) return false;
+    if (!textAgrees('category', draft.category)) return false;
+    if (!textAgrees('brand', draft.brand)) return false;
+    if (!textAgrees('model', draft.model)) return false;
+    if (!textAgrees('serialNumber', draft.serialNumber)) return false;
+    if (!textAgrees('notes', draft.notes)) return false;
+
+    final quantity = asked['quantity'];
+    if (quantity is num && draft.quantity != quantity.round()) return false;
+
+    final price = asked['purchasePrice'];
+    if (price is num && draft.purchasePrice != price.toDouble()) return false;
+
+    // ...and nothing it did not describe may have appeared. A note reading
+    // "serial to be confirmed by vendor" contains a field label, so without
+    // this it would quietly become the serial number of the new asset.
+    bool absent(String key, bool isEmpty) => asked.containsKey(key) || isEmpty;
+
+    if (!absent('brand', draft.brand.isEmpty)) return false;
+    if (!absent('model', draft.model.isEmpty)) return false;
+    if (!absent('serialNumber', draft.serialNumber.isEmpty)) return false;
+    if (!absent('notes', draft.notes.isEmpty)) return false;
+    if (!absent('warrantyMonths', draft.warrantyMonths == 0)) return false;
+    if (!absent('purchaseDate', draft.purchaseDate == null)) return false;
+
+    return true;
+  }
+
+  /// Whether a place is Head Office rather than a Bazaar.
+  static bool _isHeadOffice(String name) =>
+      name.trim().toLowerCase() == 'head office';
+
+  /// Whether a name the model gave and the one the app resolved are the same
+  /// place or person. Either may be the shorter form - "Township" for
+  /// "Township Bazaar", "Ayesha" for "Ayesha Khan" - so one containing the
+  /// other counts as agreement.
+  static bool _placeAgrees(String named, String resolved) {
+    final want = named.trim().toLowerCase();
+    if (want.isEmpty) return true;
+
+    final got = resolved.trim().toLowerCase();
+    if (got.isEmpty) return false;
+
+    return got.contains(want) || want.contains(got);
+  }
+
+  ActionPlan _unclear() => const ActionPlan.ask(
+    'I understood that as a change you want made, but not clearly enough to '
+    'set it up safely. Tell me the asset, how many units, and where it should '
+    'go, and I will put it up for you to confirm.',
+  );
+
+  /// Writes an intent back out in the wording [plan] already understands.
+  ///
+  /// The quantity always comes before the asset, because [readQuantity] takes
+  /// the first standalone number in the sentence and an asset name may well
+  /// contain one of its own.
+  ///
+  /// An asset the model did not name is deliberately left out rather than
+  /// treated as a failure: "aur 5 aur add karo" names no asset because the
+  /// conversation already established one, and [_asset] falls back to
+  /// `lastAsset` exactly as it does for a typed follow-up. With no asset in
+  /// either place the planner asks which one is meant.
+  String? _canonicalCommand(
+    AssistantIntent intent,
+    AssistantActionKind kind,
+    List<UserModel> people,
+  ) {
+    final asset = intent.assetRef.trim();
+    final units = intent.quantity == null ? '' : '${intent.quantity} units of ';
+
+    switch (kind) {
+      case AssistantActionKind.openScreen:
+        final screen = intent.screen.trim();
+        return screen.isEmpty ? null : 'open $screen';
+
+      case AssistantActionKind.createBazaar:
+        // The planner takes this name from the first quoted run and nowhere
+        // else, so a quote inside the name would end it early. Quotes are
+        // dropped rather than escaped: no Bazaar is named with one.
+        final name = intent.bazaarName.replaceAll(RegExp('["\']'), ' ').trim();
+        return name.isEmpty ? null : 'create bazaar "$name"';
+
+      case AssistantActionKind.disableBazaar:
+        final name = intent.bazaarName.trim();
+        return name.isEmpty ? null : 'disable bazaar $name';
+
+      case AssistantActionKind.createAsset:
+        return _canonicalCreateAsset(intent);
+
+      case AssistantActionKind.addStock:
+        return 'add stock ${intent.quantity} units to $asset';
+
+      case AssistantActionKind.updateStatus:
+        return 'mark $asset as ${intent.status.trim()}';
+
+      case AssistantActionKind.assign:
+        final person =
+            _personFrom(intent.personName, people) ?? intent.personName.trim();
+        return 'assign $asset to $person';
+
+      case AssistantActionKind.unassign:
+        return 'unassign $asset';
+
+      case AssistantActionKind.returnToHeadOffice:
+        // With no Bazaar named, the planner asks which one to bring it back
+        // from, which is the right question to put to the user.
+        final back = _movementSides(intent, kind);
+        return back.from.isEmpty
+            ? 'return $units$asset'
+            : 'return $units$asset from ${back.from}';
+
+      case AssistantActionKind.sendToBazaar:
+      case AssistantActionKind.moveBetweenBazaars:
+        final out = _movementSides(intent, kind);
+        return out.to.isEmpty
+            ? 'send $units$asset from ${out.from}'
+            : 'send $units$asset from ${out.from} to ${out.to}';
+    }
+  }
+
+  /// The full registered name of the person the model named, or null when it
+  /// fits nobody or fits more than one.
+  ///
+  /// [_planAssign] identifies a person by finding their stored name or email
+  /// inside the message, so "Ayesha" on its own would never match "Ayesha
+  /// Khan". The staff list is deliberately NOT among the facts sent to the
+  /// model - it has no directory to copy an exact name out of - so the shorter
+  /// form it heard is expanded here instead, and only when exactly one account
+  /// fits. Anything else is left as it was, and the planner asks who is meant.
+  static String? _personFrom(String named, List<UserModel> people) {
+    final want = named.trim().toLowerCase();
+    if (want.isEmpty) return '';
+    if (want.length < 3) return null;
+
+    final matches = people.where((person) {
+      final name = person.name.trim().toLowerCase();
+      final email = person.email.trim().toLowerCase();
+
+      return (name.isNotEmpty && (name.contains(want) || want.contains(name))) ||
+          (email.isNotEmpty && (email.contains(want) || want.contains(email)));
+    }).toList();
+
+    if (matches.length != 1) return null;
+
+    final resolved = matches.single.name.trim();
+    return resolved.isEmpty ? null : resolved;
+  }
+
+  /// A named place, falling back to the loose `bazaarName` the model may have
+  /// filled in instead.
+  static String _bazaarSide(String primary, String fallback) {
+    final first = primary.trim();
+    return first.isNotEmpty ? first : fallback.trim();
+  }
+
+  String? _canonicalCreateAsset(AssistantIntent intent) {
+    final draft = intent.newAsset;
+    final parts = <String>[];
+
+    void add(String label, String key) {
+      final value = draft[key];
+      if (value == null) return;
+      final text = value.toString().trim();
+      if (text.isEmpty) return;
+      parts.add('$label: $text');
+    }
+
+    add('Asset ID', 'assetId');
+    add('Name', 'name');
+    add('Category', 'category');
+    add('Quantity', 'quantity');
+    add('Purchase price', 'purchasePrice');
+    add('Brand', 'brand');
+    add('Model', 'model');
+    add('Serial number', 'serialNumber');
+    add('Purchase date', 'purchaseDate');
+    add('Warranty months', 'warrantyMonths');
+    add('Location', 'location');
+    add('Condition', 'condition');
+    add('Status', 'status');
+    add('Notes', 'notes');
+
+    if (parts.isEmpty) return null;
+
+    return 'create asset ${parts.join(', ')}';
   }
 
   // ---------------------------------------------------------------- helpers
@@ -637,7 +1163,15 @@ class ActionPlanner {
       quantity: quantity,
       sourceId: source.id,
       sourceName: source.name,
-      destinationId: destination.id,
+      // DeploymentService.transferAsset requires a non-empty destination id
+      // and has its own name for Head Office. Sending an empty one meant
+      // every return to Head Office - typed or requested - was refused with
+      // "Destination is required" before the service ever looked at the
+      // name. The source keeps its empty id, which is what movement records
+      // have always stored and what _isHeadOffice matches by name anyway.
+      destinationId: destination.isHeadOffice
+          ? DeploymentService.headOfficeId
+          : destination.id,
       destinationName: destination.name,
       viaRequest: viaRequest,
     ));
@@ -706,7 +1240,11 @@ class ActionPlanner {
       details: [
         'Asset: ${_label(asset)}',
         'To: ${person.name} (${person.email})',
-        'Unassigned at Head Office: ${_units(asset.calculatedHeadOfficeQuantity)}',
+        // Assigning hands over EVERY unassigned unit at Head Office - the
+        // service takes no quantity. Saying only how many are there reads as
+        // background, so the preview says plainly what will happen to them.
+        'Handing over all ${_units(asset.calculatedHeadOfficeQuantity)} '
+            'currently unassigned at Head Office',
         if (viaRequest) 'This will be sent to your Admin for approval.',
       ],
       asset: asset,

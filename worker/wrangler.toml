@@ -1,0 +1,47 @@
+# PSBA IT Inventory - AI Assistant backend, on Cloudflare Workers.
+#
+# Everything here is configuration, not secrets. The Gemini API key is set
+# separately and never appears in this file or in the repository:
+#
+#   npx wrangler secret put GEMINI_API_KEY
+#
+# The Workers Free plan covers this service: 100,000 requests a day, and
+# SQLite-backed Durable Objects for the per-account request counter. No
+# billing account and no card are involved.
+
+name = "psba-inventory-assistant"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Not secrets: the project id is in the app already, and the project number is
+# public. They are here so token verification is pinned to THIS Firebase
+# project and a token minted for any other project is refused.
+[vars]
+FIREBASE_PROJECT_ID = "it-inventory-8e690"
+FIREBASE_PROJECT_NUMBER = "315288299970"
+
+# Which Gemini model answers. Any free Flash model can be named here.
+AI_MODEL = "gemini-3.6-flash"
+
+# Set to "false" ONLY while the Android build is side-loaded as an APK rather
+# than installed from Google Play: the Play Integrity provider issues App
+# Check tokens only for Play-distributed builds, so enforcement would reject
+# every call. With it false the Worker still requires a signed-in,
+# email-verified account and still applies the per-account daily cap.
+AI_REQUIRE_APP_CHECK = "true"
+
+# One counter per account. A Durable Object handles its requests one at a
+# time, which is what makes the read-decide-write atomic without a database
+# transaction - the guarantee the Firestore version used to get from
+# runTransaction.
+[[durable_objects.bindings]]
+name = "USAGE"
+class_name = "UsageCounter"
+
+# SQLite-backed classes are the ones included on the Free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UsageCounter"]
+
+[observability]
+enabled = true

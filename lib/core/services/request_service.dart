@@ -37,6 +37,10 @@ class RequestService {
   DeploymentService get _deploymentService =>
       DeploymentService(firestore: _firestore);
 
+  /// The same service the direct (non-request) assign and unassign use, so
+  /// an approval runs exactly the workflow the user was shown.
+  AssetService get _assetService => AssetService(firestore: _firestore);
+
   // ============================================================
   // CURRENT USER / ROLE
   // ============================================================
@@ -425,6 +429,67 @@ class RequestService {
     // APPROVE EDIT REQUEST
     // ==========================================================
 
+    if (request.isAssignmentRequest) {
+      await _approveAssignmentRequest(
+        request: request,
+        requestRef: requestRef,
+        remarks: remarks,
+        approvedBy: cleanApproverName,
+        assigneeId: request.assigneeId,
+      );
+
+      await _createStatusNotification(
+        request: request,
+        requestId: cleanRequestId,
+        status: 'Approved',
+        remarks: remarks,
+        approvedBy: cleanApproverName,
+      );
+
+      await _createReceiverStatusNotification(
+        request: request,
+        requestId: cleanRequestId,
+        status: 'Approved',
+        remarks: remarks,
+        approvedBy: cleanApproverName,
+      );
+
+      return;
+    }
+
+    // Filed before 'Assignment' existed, but unmistakably one of them. Only
+    // a request whose ONLY difference is the holder is diverted; anything
+    // else keeps ordinary Edit behaviour, so no existing edit changes meaning.
+    final legacyHolder = _legacyAssignmentTarget(request);
+
+    if (request.isEditRequest && legacyHolder != null) {
+      await _approveAssignmentRequest(
+        request: request,
+        requestRef: requestRef,
+        remarks: remarks,
+        approvedBy: cleanApproverName,
+        assigneeId: legacyHolder,
+      );
+
+      await _createStatusNotification(
+        request: request,
+        requestId: cleanRequestId,
+        status: 'Approved',
+        remarks: remarks,
+        approvedBy: cleanApproverName,
+      );
+
+      await _createReceiverStatusNotification(
+        request: request,
+        requestId: cleanRequestId,
+        status: 'Approved',
+        remarks: remarks,
+        approvedBy: cleanApproverName,
+      );
+
+      return;
+    }
+
     if (request.isEditRequest) {
       await _approveEditRequest(
         request: request,
@@ -621,13 +686,31 @@ class RequestService {
 
     final destinationName = request.destinationBazaarName.trim();
 
-    if (destinationId.isEmpty) {
-      throw Exception('Destination Bazaar is missing.');
-    }
-
     if (destinationName.isEmpty) {
       throw Exception('Destination Bazaar name is missing.');
     }
+
+    // Head Office is identified by an EMPTY id plus the name "Head Office" -
+    // the convention DeploymentService.transferAsset and every direct
+    // (non-request) transfer already use. Treating an empty id as "missing"
+    // made a return to Head Office impossible to approve: the request stuck
+    // on Pending for good, because the only destination it can ever have is
+    // the one being rejected here.
+    final toHeadOffice = _isHeadOffice(destinationName);
+
+    if (destinationId.isEmpty && !toHeadOffice) {
+      throw Exception('Destination Bazaar is missing.');
+    }
+
+    // transferAsset requires a NON-EMPTY destination id and keeps its own name
+    // for Head Office, so letting the empty id through would only move the
+    // refusal one call deeper. A request filed before the assistant knew that
+    // is mapped onto the sentinel here, which is what makes an already-Pending
+    // one approvable instead of stuck for good. Only an EMPTY id is mapped: a
+    // request that names a real Bazaar keeps it.
+    final resolvedDestinationId = destinationId.isEmpty && toHeadOffice
+        ? DeploymentService.headOfficeId
+        : destinationId;
 
     if (request.transferQuantity <= 0) {
       throw Exception('Transfer quantity must be greater than 0.');
@@ -648,7 +731,7 @@ class RequestService {
       assetDocumentId: assetSnapshot.id,
       sourceId: sourceId,
       sourceName: resolvedSourceName,
-      destinationId: destinationId,
+      destinationId: resolvedDestinationId,
       destinationName: destinationName,
       quantity: request.transferQuantity,
       transferredBy: _currentUid,
@@ -691,6 +774,114 @@ class RequestService {
   // ============================================================
   // APPROVE EDIT REQUEST
   // ============================================================
+
+  /// Approves a request to hand an asset over, or to take it back.
+  ///
+  /// Runs the REAL assignment workflow - the same AssetService methods the
+  /// direct path uses - rather than writing fields. That is what keeps holder,
+  /// status and the stock split consistent: assignAsset moves every
+  /// unassigned Head Office unit to the holder and sets assignedTo, and
+  /// returnAsset gives them back and clears it. Both run in one transaction
+  /// with this request's own status, so an approval cannot be applied twice.
+  Future<void> _approveAssignmentRequest({
+    required RequestModel request,
+    required DocumentReference<Map<String, dynamic>> requestRef,
+    required String remarks,
+    required String approvedBy,
+    required String assigneeId,
+  }) async {
+    final assetId = request.assetId.trim();
+
+    if (assetId.isEmpty) {
+      throw Exception('Asset ID is missing from the assignment request.');
+    }
+
+    final bookkeeping = <String, dynamic>{
+      'adminRemarks': remarks.trim(),
+      'approvedBy': approvedBy.trim(),
+      'approvedByUid': _currentUid,
+    };
+
+    final holder = assigneeId.trim();
+
+    if (holder.isNotEmpty) {
+      await _assetService.assignAsset(
+        assetId: assetId,
+        userId: holder,
+        approvalRequestRef: requestRef,
+        approvalRequestUpdate: bookkeeping,
+      );
+
+      return;
+    }
+
+    await _assetService.returnAsset(
+      assetId,
+      approvalRequestRef: requestRef,
+      approvalRequestUpdate: bookkeeping,
+    );
+  }
+
+  /// The holder a legacy 'Edit' request was really asking for, or null when
+  /// it is an ordinary edit and must stay one.
+  ///
+  /// Before 'Assignment' existed, the assistant filed assign and unassign as
+  /// Edits whose proposed data differed from the previous data in the holder
+  /// and nothing else. Approving those applied buildSafeEditUpdate, which
+  /// deliberately never touches assignedTo - so the status changed, the holder
+  /// did not, and both sides were told it had worked. Such a request is still
+  /// sitting Pending in any database that predates the fix.
+  ///
+  /// Identification is deliberately narrow: the holder must have changed, and
+  /// NOTHING outside the assignment workflow's own fields may have changed
+  /// with it. A request that edits a name and a holder together is ambiguous,
+  /// so it keeps ordinary Edit behaviour rather than being guessed at.
+  ///
+  /// An empty result means unassign; a non-empty one is the new holder.
+  static String? _legacyAssignmentTarget(RequestModel request) {
+    if (!request.isEditRequest) return null;
+
+    final previous = request.previousAssetData;
+    final proposed = request.proposedAssetData;
+
+    if (previous == null || proposed == null) return null;
+    if (previous.isEmpty || proposed.isEmpty) return null;
+
+    String holderOf(Map<String, dynamic> data) =>
+        (data['assignedTo'] ?? '').toString().trim();
+
+    final before = holderOf(previous);
+    final after = holderOf(proposed);
+
+    // The holder is what an assignment changes. If it did not move, this is
+    // an ordinary edit - including a status-only or add-stock request.
+    if (before == after) return null;
+
+    // Fields the assignment workflow owns and recomputes for itself. Anything
+    // else differing makes the request a mixed edit, and its intent is no
+    // longer unambiguous.
+    const ownedByAssignment = <String>{
+      'assignedTo',
+      'status',
+      'assignedQuantity',
+      'headOfficeQuantity',
+      'lastUpdated',
+      'updatedAt',
+    };
+
+    for (final key in <String>{...previous.keys, ...proposed.keys}) {
+      if (ownedByAssignment.contains(key)) continue;
+      if ('${previous[key]}' == '${proposed[key]}') continue;
+
+      return null;
+    }
+
+    return after;
+  }
+
+  /// Whether a destination names Head Office rather than a Bazaar.
+  static bool _isHeadOffice(String name) =>
+      name.trim().toLowerCase() == 'head office';
 
   Future<void> _approveEditRequest({
     required RequestModel request,

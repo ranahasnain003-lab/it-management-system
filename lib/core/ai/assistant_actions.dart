@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../../models/asset_model.dart';
 import '../services/permission_service.dart';
 
@@ -303,4 +305,134 @@ class AssistantPermissions {
 
   /// Whether this account files changes as requests for an Admin to approve.
   bool get worksThroughRequests => isNormalUser;
+
+  /// What this account may be offered, named the way the language model names
+  /// it, so the model does not propose a change the user would only be
+  /// refused for.
+  ///
+  /// This is a wording hint and nothing else. It grants no power: it travels
+  /// to the backend as ordinary request data, and every proposal that comes
+  /// back is re-checked against these same permissions by ActionPlanner before
+  /// the user is even shown a confirmation. Firestore rules remain the real
+  /// enforcement, which is why nothing is lost if this list is wrong.
+  List<String> get assistantCapabilities => [
+    if (canEditAsset || worksThroughRequests) 'addStock',
+    if (canAddAsset) 'createAsset',
+    if (canTransfer || worksThroughRequests) ...[
+      'sendToBazaar',
+      'moveBetweenBazaars',
+      'returnToHeadOffice',
+    ],
+    if (canAssign || worksThroughRequests) 'assign',
+    if (canReturn || worksThroughRequests) 'unassign',
+    if (canChangeStatus || worksThroughRequests) 'updateStatus',
+    if (canManageBazaars) ...['createBazaar', 'disableBazaar'],
+  ];
+}
+
+/// A change the language model believes the user asked for.
+///
+/// **Nothing here is trusted.** These are loose strings the model copied out of
+/// the facts it was shown; none of them is an id and none of them has been
+/// checked. [ActionPlanner.planFromIntent] looks every one of them up again in
+/// the account's own permission-scoped snapshot, re-runs every quantity, stock,
+/// permission and invariant check, and the result still goes behind the Confirm
+/// button before anything is written.
+@immutable
+class AssistantIntent {
+  const AssistantIntent({
+    required this.kind,
+    this.assetRef = '',
+    this.quantity,
+    this.fromLocation = '',
+    this.toLocation = '',
+    this.personName = '',
+    this.status = '',
+    this.bazaarName = '',
+    this.screen = '',
+    this.newAsset = const <String, dynamic>{},
+  });
+
+  /// Matches the name of an [AssistantActionKind] value. An unknown kind is
+  /// dropped before an intent is ever built.
+  final String kind;
+
+  /// Asset ID, serial number or name, as the model read it off the facts.
+  final String assetRef;
+
+  final int? quantity;
+  final String fromLocation;
+  final String toLocation;
+  final String personName;
+  final String status;
+  final String bazaarName;
+  final String screen;
+
+  /// Fields for a proposed new asset. Only used for `createAsset`.
+  final Map<String, dynamic> newAsset;
+
+  /// Characters that must never survive into a generated command sentence or
+  /// a confirmation dialog: control characters and newlines (which would let
+  /// a value paint extra lines into the preview the user is approving),
+  /// angle brackets, and commas (the planner reads `Field: value, Field:
+  /// value` lists).
+  static final RegExp _unsafe = RegExp(r'[\u0000-\u001f\u007f<>,]');
+
+  static final RegExp _runsOfSpace = RegExp(r'\s+');
+
+  /// One line of plain text, capped.
+  ///
+  /// This deliberately repeats what the backend already does to the same
+  /// values. The backend is a network service: under any threat model where
+  /// its reply is attacker-controlled, its cleaning is not a layer at all, so
+  /// the app cannot be the only thing relying on it.
+  static String _text(Object? value, [int cap = 120]) {
+    if (value is! String) return '';
+
+    final flattened =
+        value.replaceAll(_unsafe, ' ').replaceAll(_runsOfSpace, ' ').trim();
+
+    return flattened.length <= cap ? flattened : flattened.substring(0, cap);
+  }
+
+  static int? _int(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.round();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
+  }
+
+  /// Reads an intent off the callable's response, or null when there is none.
+  static AssistantIntent? fromMap(Object? value) {
+    if (value is! Map) return null;
+
+    final map = value.cast<Object?, Object?>();
+    final kind = _text(map['kind']);
+    if (kind.isEmpty) return null;
+
+    final draft = map['newAsset'];
+
+    return AssistantIntent(
+      kind: kind,
+      assetRef: _text(map['assetRef']),
+      quantity: _int(map['quantity']),
+      fromLocation: _text(map['fromLocation']),
+      toLocation: _text(map['toLocation']),
+      personName: _text(map['personName']),
+      status: _text(map['status'], 40),
+      bazaarName: _text(map['bazaarName']),
+      screen: _text(map['screen'], 40),
+      newAsset: draft is Map
+          ? {
+              // Cleaned like every other value: these end up in the
+              // confirmation the user approves, and in a `Field: value` list
+              // the planner reads back.
+              for (final entry in draft.entries)
+                entry.key.toString(): entry.value is String
+                    ? _text(entry.value, 200)
+                    : entry.value,
+            }
+          : const <String, dynamic>{},
+    );
+  }
 }

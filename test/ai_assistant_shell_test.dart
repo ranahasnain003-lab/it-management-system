@@ -1,15 +1,16 @@
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:it_management_system/core/ai/ai_assistant_panel.dart';
 import 'package:it_management_system/core/ai/ai_backend.dart';
 
-/// Lets the tests build the exception the Cloud Function throws. The real
-/// constructor is protected, so it is reached through a subclass.
-class _FunctionsError extends FirebaseFunctionsException {
-  _FunctionsError({required super.code, required super.message});
-}
+/// The refusal the assistant backend raises, built the way it is built from
+/// the Worker's JSON error body.
+AssistantBackendException _backendError({
+  required String code,
+  required String message,
+}) =>
+    AssistantBackendException(code: code, message: message);
 
 /// A minimal modal route, to check the observer reacts to the type rather
 /// than to any one Material widget.
@@ -211,16 +212,16 @@ void main() {
   // =========================================================================
   // DAILY CAP FEEDBACK
   //
-  // The cap itself is enforced in the Cloud Function (functions/usage_policy.js,
-  // covered by functions/test). These tests cover what the app does with the
+  // The cap itself is enforced in the Worker (worker/src/usage_policy.js,
+  // covered by worker/test). These tests cover what the app does with the
   // refusal: it tells the user, and it still shows the answer it computed.
   // =========================================================================
 
   // =========================================================================
   // FREE / LOCAL MODE
   //
-  // The app must work fully with no paid AI dependency. These tests fail if a
-  // build ever ships that would reach for the Cloud Function by default.
+  // The app must work fully with no external AI dependency. These tests fail
+  // if a build ever ships that would reach for the backend by default.
   // =========================================================================
 
   group('the assistant is free by default', () {
@@ -246,6 +247,34 @@ void main() {
       expect(worded, isNull);
     });
 
+    test('ask returns null without touching Firebase at all', () async {
+      // Firebase is not initialised in this test. If ask reached for the
+      // callable it would throw [core/no-app]; returning null proves the paid
+      // path is never entered, and that the natural-language layer changed
+      // nothing about the free build.
+      final reply = await const AiBackend().ask(
+        question: 'how many laptops do we have?',
+        facts: const {'totals': {}},
+        groundedAnswer: 'Inventory overview',
+        capabilities: const ['sendToBazaar'],
+      );
+
+      expect(reply, isNull);
+    });
+
+    test('the backend reports itself as disabled through the seam', () {
+      expect(const AiBackend().enabled, isFalse);
+      expect(const AiBackend(), isA<AssistantBackend>());
+    });
+
+    test('a build with no backend address stays offline whatever else is set', () {
+      // Two switches, not one: the assistant calls out only when it is both
+      // allowed to and told where to. A build that forgets the address falls
+      // back to the on-device engine rather than failing every question.
+      expect(AiBackend.proxyUrl, isEmpty);
+      expect(const AiBackend().enabled, isFalse);
+    });
+
     test('a disabled model never reports a quota notice', () async {
       var notified = false;
 
@@ -263,7 +292,7 @@ void main() {
   group('AiBackend.quotaNotice', () {
     test('returns the backend message when the account hit its limit', () {
       final notice = AiBackend.quotaNotice(
-        _FunctionsError(
+        _backendError(
           code: 'resource-exhausted',
           message: "You have reached today's limit of 60 assistant questions.",
         ),
@@ -274,7 +303,7 @@ void main() {
 
     test('falls back to its own wording when the message is empty', () {
       final notice = AiBackend.quotaNotice(
-        _FunctionsError(code: 'resource-exhausted', message: '   '),
+        _backendError(code: 'resource-exhausted', message: '   '),
       );
 
       expect(notice, isNotNull);
@@ -284,19 +313,19 @@ void main() {
     test('stays silent for every other backend failure', () {
       expect(
         AiBackend.quotaNotice(
-          _FunctionsError(code: 'unavailable', message: 'busy'),
+          _backendError(code: 'unavailable', message: 'busy'),
         ),
         isNull,
       );
       expect(
         AiBackend.quotaNotice(
-          _FunctionsError(code: 'not-found', message: 'not deployed'),
+          _backendError(code: 'not-found', message: 'not deployed'),
         ),
         isNull,
       );
       expect(
         AiBackend.quotaNotice(
-          _FunctionsError(
+          _backendError(
             code: 'failed-precondition',
             message: 'This request did not come from a recognised app installation.',
           ),

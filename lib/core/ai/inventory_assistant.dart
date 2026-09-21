@@ -28,6 +28,7 @@ class InventorySnapshot {
     required this.scopeNote,
     this.bazaarDataLoaded = true,
     this.inventoryLoading = false,
+    this.holders = const <String, String>{},
   });
 
   final List<AssetModel> assets;
@@ -65,6 +66,21 @@ class InventorySnapshot {
   /// assistant was opened before the asset listener had answered.
   final bool inventoryLoading;
 
+  /// Account id -> the person's display name, for the accounts this user is
+  /// already allowed to see under Users.
+  ///
+  /// Held so "who has IT-LAP-001" and "what does Ali have" can be answered.
+  /// Only the display name ever leaves the app: [toFacts] never emits an
+  /// account id or an email address.
+  final Map<String, String> holders;
+
+  /// The display name of whoever holds [asset], or an empty string.
+  String holderOf(AssetModel asset) {
+    final uid = (asset.assignedTo ?? '').trim();
+    if (uid.isEmpty) return '';
+    return holders[uid]?.trim() ?? '';
+  }
+
   int get totalAssets => assets.length;
 
   bool get isEmpty => assets.isEmpty;
@@ -92,13 +108,88 @@ class InventorySnapshot {
         .toList();
   }
 
+  /// Sums one breakdown of the whole inventory, not of the sampled slice.
+  ///
+  /// [key] returns the bucket an asset belongs in, or an empty string to leave
+  /// it out. Buckets are capped so a database full of one-off values cannot
+  /// grow the payload without bound; the cap is reported so the model knows
+  /// the breakdown is partial.
+  Map<String, dynamic> _breakdown(
+    String Function(AssetModel) key, {
+    int maxBuckets = 30,
+  }) {
+    final records = <String, int>{};
+    final quantity = <String, int>{};
+    final value = <String, double>{};
+
+    for (final asset in assets) {
+      final bucket = key(asset).trim();
+      if (bucket.isEmpty) continue;
+
+      records[bucket] = (records[bucket] ?? 0) + 1;
+      quantity[bucket] = (quantity[bucket] ?? 0) + asset.quantity;
+      value[bucket] =
+          (value[bucket] ?? 0) + asset.purchasePrice * asset.quantity;
+    }
+
+    final ordered = quantity.keys.toList()
+      ..sort((a, b) => (quantity[b] ?? 0).compareTo(quantity[a] ?? 0));
+
+    final result = <String, dynamic>{};
+
+    for (final bucket in ordered.take(maxBuckets)) {
+      result[bucket] = {
+        'records': records[bucket],
+        'quantity': quantity[bucket],
+        'value': value[bucket],
+      };
+    }
+
+    // Whatever did not fit is rolled into one bucket rather than dropped, so
+    // the breakdown still adds up to the whole inventory. Silently returning
+    // the top 30 would have the model confidently report a total that is short
+    // by however many kinds of thing this account happens to own.
+    if (ordered.length > maxBuckets) {
+      var otherRecords = 0;
+      var otherQuantity = 0;
+      var otherValue = 0.0;
+
+      for (final bucket in ordered.skip(maxBuckets)) {
+        otherRecords += records[bucket] ?? 0;
+        otherQuantity += quantity[bucket] ?? 0;
+        otherValue += value[bucket] ?? 0;
+      }
+
+      result['(everything else)'] = {
+        'records': otherRecords,
+        'quantity': otherQuantity,
+        'value': otherValue,
+        'distinctValues': ordered.length - maxBuckets,
+      };
+    }
+
+    return result;
+  }
+
   /// The facts the language model is allowed to see: this snapshot, already
   /// filtered by the signed-in account's permissions, flattened and capped so
   /// one question never ships the whole database.
   ///
   /// [focus] is the asset the question is about, if one was recognised; it is
   /// always included even when the list is truncated.
-  Map<String, dynamic> toFacts({int maxAssets = 40, AssetModel? focus}) {
+  ///
+  /// The breakdowns below are computed over EVERY asset this account can see,
+  /// not over the sampled `assets` list. That is the point of them: the model
+  /// is forbidden to count from the sample, so anything it might be asked to
+  /// total has to arrive already totalled. [now] is injected so the date
+  /// arithmetic is testable.
+  Map<String, dynamic> toFacts({
+    int maxAssets = 40,
+    AssetModel? focus,
+    DateTime? now,
+  }) {
+    final today = now ?? DateTime.now();
+
     final chosen = <AssetModel>[
       ?focus,
       ...assets.where((a) => a.id != focus?.id).take(maxAssets),
@@ -125,8 +216,10 @@ class InventorySnapshot {
       if (a.purchaseDate != null)
         'purchaseDate': a.purchaseDate!.toIso8601String().split('T').first,
     };
-    // Note: the holder's account id is deliberately NOT sent outside the app.
-    // The assistant answers "who has it" locally from the same record.
+    // Note: the holder's account id is deliberately NOT sent outside the app,
+    // and neither is anyone's email address. "Who has it" is answered from the
+    // display name in `assignments` below, which is the least that can be sent
+    // and still answer the question.
 
     final focusMovements = focus == null
         ? const <Map<String, dynamic>>[]
@@ -138,7 +231,149 @@ class InventorySnapshot {
             'status': m.status,
           }).toList();
 
+    // What is out at each Bazaar, asset by asset, from the same Active
+    // movement records the Bazaar screens read. Without this the model knows
+    // a Bazaar's total but cannot say what makes it up.
+    final perBazaarAssets = <String, Map<String, int>>{};
+    for (final movement in deployments) {
+      if (movement.status.trim().toLowerCase() != 'active') continue;
+
+      final bazaar = (movement.toBazaarName ?? movement.toLocation).trim();
+      if (bazaar.isEmpty) continue;
+
+      final tag = movement.assetId.trim().isEmpty
+          ? movement.assetName.trim()
+          : movement.assetId.trim();
+      if (tag.isEmpty) continue;
+
+      final bucket = perBazaarAssets.putIfAbsent(bazaar, () => <String, int>{});
+      bucket[tag] = (bucket[tag] ?? 0) + movement.quantity;
+    }
+
+    final bazaarContents = <String, dynamic>{};
+    for (final entry in perBazaarAssets.entries.take(15)) {
+      bazaarContents[entry.key] = entry.value.entries
+          .take(12)
+          .map((e) => {'assetId': e.key, 'quantity': e.value})
+          .toList();
+    }
+
+    // Who is holding what. Display names only: no account id and no email
+    // address ever leaves the app.
+    final assignments = <Map<String, dynamic>>[];
+    var assignedRecords = 0;
+
+    for (final asset in assets) {
+      if (asset.calculatedAssignedQuantity <= 0) continue;
+
+      assignedRecords++;
+      if (assignments.length >= 25) continue;
+
+      final holder = holderOf(asset);
+      assignments.add({
+        'assetId': asset.assetId,
+        'name': asset.name,
+        'quantity': asset.calculatedAssignedQuantity,
+        if (holder.isNotEmpty) 'heldBy': holder,
+      });
+    }
+
+    // Ranking needs the whole set, so it is done here rather than left to the
+    // model, which only ever sees a sample.
+    final byValue = assets.toList()
+      ..sort((a, b) => (b.purchasePrice * b.quantity)
+          .compareTo(a.purchasePrice * a.quantity));
+
+    final mostValuable = byValue.take(10).map((a) => {
+      'assetId': a.assetId,
+      'name': a.name,
+      'totalValue': a.purchasePrice * a.quantity,
+      'quantity': a.quantity,
+    }).toList();
+
+    final noneAtHeadOffice =
+        assets.where((a) => a.calculatedHeadOfficeQuantity <= 0).toList();
+    final noneAtHeadOfficeTotal = noneAtHeadOffice.length;
+
+    final outOfStockAtHeadOffice = noneAtHeadOffice
+        .take(15)
+        .map((a) => {'assetId': a.assetId, 'name': a.name})
+        .toList();
+
+    // Warranty, worked out against the same clock the rest of the answer uses.
+    final warranties = <Map<String, dynamic>>[];
+    var expired = 0;
+    var expiringSoon = 0;
+
+    for (final asset in assets) {
+      final bought = asset.purchaseDate;
+      if (bought == null || asset.warrantyMonths <= 0) continue;
+
+      final months = bought.month + asset.warrantyMonths;
+      final year = bought.year + (months - 1) ~/ 12;
+      final month = (months - 1) % 12 + 1;
+
+      // Day 0 of the next month is the last day of this one. Without this, a
+      // warranty bought on the 31st would expire on the 1st of the month
+      // after the one it actually runs to.
+      final lastDay = DateTime(year, month + 1, 0).day;
+      final ends = DateTime(year, month, bought.day < lastDay ? bought.day : lastDay);
+
+      final days = ends.difference(today).inDays;
+      if (days < 0) {
+        expired++;
+      } else if (days <= 90) {
+        expiringSoon++;
+      }
+
+      warranties.add({
+        'assetId': asset.assetId,
+        'name': asset.name,
+        'expires': ends.toIso8601String().split('T').first,
+        'daysLeft': days,
+      });
+    }
+
+    // Soonest first, because "which warranties are running out" is the
+    // question people ask. Listing the first 15 in storage order would name
+    // the wrong assets entirely.
+    warranties.sort(
+      (a, b) => (a['daysLeft'] as int).compareTo(b['daysLeft'] as int),
+    );
+    final warrantySoonest = warranties.take(15).toList();
+
+    // Movement activity, so "how many transfers this week" has something to
+    // stand on rather than a list of the most recent few.
+    final movementsByStatus = <String, int>{};
+    var last7Days = 0;
+    var last30Days = 0;
+
+    for (final movement in deployments) {
+      final status = movement.status.trim();
+      if (status.isNotEmpty) {
+        movementsByStatus[status] = (movementsByStatus[status] ?? 0) + 1;
+      }
+
+      final age = today.difference(movement.deploymentDate).inDays;
+      if (age < 0) continue;
+      if (age <= 7) last7Days++;
+      if (age <= 30) last30Days++;
+    }
+
+    final recent = deployments.toList()
+      ..sort((a, b) => b.deploymentDate.compareTo(a.deploymentDate));
+
+    final recentMovements = recent.take(15).map((m) => {
+      'date': m.deploymentDate.toIso8601String().split('T').first,
+      'assetId': m.assetId,
+      'quantity': m.quantity,
+      'from': m.fromBazaarName ?? m.fromLocation,
+      'to': m.toBazaarName ?? m.toLocation,
+      'status': m.status,
+    }).toList();
+
     return {
+      'today': today.toIso8601String().split('T').first,
       'scope': {
         'role': roleLabel,
         'note': scopeNote,
@@ -159,7 +394,62 @@ class InventorySnapshot {
         'totalInventoryValue': totalInventoryValue,
         'currency': 'Rs.',
       },
+      // Every breakdown below covers ALL assetsVisible, not the sample.
+      'byCategory': _breakdown((a) => a.category),
+      'byStatus': _breakdown((a) => a.status),
+      'byCondition': _breakdown((a) => a.condition),
+      'byBrand': _breakdown((a) => a.brand),
+      'byLocation': _breakdown((a) => a.location),
       'bazaarStock': quantityPerBazaar,
+      if (bazaarDataLoaded)
+        'bazaarDirectory': bazaars.take(60).map((b) => {
+          'name': b.name,
+          if (b.location.trim().isNotEmpty) 'location': b.location,
+          'isActive': b.isActive,
+        }).toList(),
+      if (bazaarContents.isNotEmpty) 'bazaarContents': bazaarContents,
+      if (assignments.isNotEmpty)
+        'assignments': {
+          'assetRecordsAssigned': assignedRecords,
+          'listed': assignments.length,
+          'items': assignments,
+        },
+      if (mostValuable.isNotEmpty) 'mostValuable': mostValuable,
+      if (outOfStockAtHeadOffice.isNotEmpty)
+        'noneAtHeadOffice': {
+          'assetRecords': noneAtHeadOfficeTotal,
+          'listed': outOfStockAtHeadOffice.length,
+          'items': outOfStockAtHeadOffice,
+        },
+      if (warranties.isNotEmpty)
+        'warranty': {
+          'assetRecordsWithWarranty': warranties.length,
+          'expired': expired,
+          'expiringWithin90Days': expiringSoon,
+          'soonestToExpire': warrantySoonest,
+        },
+      if (movementsByStatus.isNotEmpty)
+        'movements': {
+          'total': deployments.length,
+          'byStatus': movementsByStatus,
+          'inLast7Days': last7Days,
+          'inLast30Days': last30Days,
+          'recent': recentMovements,
+        },
+      // The model is told these two describe different things, because they
+      // do and it would otherwise be asked to reconcile them.
+      'fieldNotes': {
+        'totals':
+            'Unit counts for the whole inventory. damaged, underRepair, lost '
+            'and disposed count only units sitting at Head Office.',
+        'byStatus':
+            'Asset records and their FULL quantity wherever it is, grouped by '
+            'the status field. Deliberately not the same measure as '
+            'totals.damaged and its neighbours, so do not compare the two.',
+        'lists':
+            'Every "items" list is capped. Where a list has a count beside it, '
+            'that count is the real number; the list is only a sample of it.',
+      },
       'assets': chosen.map(assetFacts).toList(),
       if (focus != null) 'focusAsset': focus.assetId,
       if (focusMovements.isNotEmpty) 'focusAssetMovements': focusMovements,
@@ -170,11 +460,18 @@ class InventorySnapshot {
 /// What the assistant replied, plus what it was talking about so a follow-up
 /// question such as "aur head office mein kitne hain?" can be understood.
 class AssistantReply {
-  const AssistantReply(this.text, {this.asset, this.bazaar});
+  const AssistantReply(this.text, {this.asset, this.bazaar, this.understood = true});
 
   final String text;
   final AssetModel? asset;
   final String? bazaar;
+
+  /// False when the deterministic engine did not recognise the question and
+  /// [text] is its "ask me another way" message rather than an answer.
+  ///
+  /// The language model is given the computed answer as authoritative, so a
+  /// message that answers nothing must not be handed over wearing that badge.
+  final bool understood;
 }
 
 /// Turns a question in English or Roman Urdu into an answer built only from
@@ -645,6 +942,7 @@ class InventoryAssistant {
     }
 
     return AssistantReply(
+      understood: false,
       'I did not catch which figure you need. Try for example:\n'
       '  "total stock"  ·  "head office mein kitne hain"\n'
       '  "Township Bazaar mein kitna stock hai"\n'

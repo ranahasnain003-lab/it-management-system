@@ -588,7 +588,14 @@ class _RequestsScreenState extends State<RequestsScreen> {
         .trim()
         .toLowerCase();
 
-    final isEditRequest = requestTypeNormalized == 'edit';
+    // An assignment request carries the same before/after snapshot an edit
+    // does, so it is shown the same way - the Admin still sees Assigned To
+    // changing before approving it. Only the APPROVAL differs: an assignment
+    // runs the real assignment workflow rather than the field editor.
+    final isAssignmentRequest = requestTypeNormalized == 'assignment';
+
+    final isEditRequest =
+        requestTypeNormalized == 'edit' || isAssignmentRequest;
 
     final isTransferRequest =
         requestTypeNormalized == 'transfer' ||

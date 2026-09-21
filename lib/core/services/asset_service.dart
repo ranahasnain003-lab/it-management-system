@@ -706,9 +706,18 @@ class AssetService {
   // ASSIGN
   // ---------------------------------------------------------------------------
 
+  /// Hands every unassigned unit at Head Office to [userId].
+  ///
+  /// [approvalRequestRef] lets an Admin approving a request commit the
+  /// assignment and the request's own status in ONE transaction, exactly the
+  /// way DeploymentService.transferAsset already does. Without it the two
+  /// writes could drift apart - the stock moving while the request stayed
+  /// Pending, or a second approver assigning twice.
   Future<void> assignAsset({
     required String assetId,
     required String userId,
+    DocumentReference<Map<String, dynamic>>? approvalRequestRef,
+    Map<String, dynamic> approvalRequestUpdate = const {},
   }) async {
     final cleanAssetId = assetId.trim();
     final cleanUserId = userId.trim();
@@ -729,6 +738,9 @@ class AssetService {
       if (!snapshot.exists || snapshot.data() == null) {
         throw Exception('Asset not found.');
       }
+
+      // Every read must happen before the first write in a transaction.
+      await _requireStillPending(transaction, approvalRequestRef);
 
       final data = snapshot.data()!;
       final stock = _stockOf(snapshot.id, data);
@@ -761,6 +773,8 @@ class AssetService {
         'deployedQuantity': deployed,
         'lastUpdated': FieldValue.serverTimestamp(),
       });
+
+      _markRequestApproved(transaction, approvalRequestRef, approvalRequestUpdate);
     });
   }
 
@@ -809,7 +823,15 @@ class AssetService {
   // RETURN
   // ---------------------------------------------------------------------------
 
-  Future<void> returnAsset(String assetId) async {
+  /// Takes assigned stock back from its holder and returns it to Head
+  /// Office.
+  ///
+  /// [approvalRequestRef] works exactly as it does for [assignAsset].
+  Future<void> returnAsset(
+    String assetId, {
+    DocumentReference<Map<String, dynamic>>? approvalRequestRef,
+    Map<String, dynamic> approvalRequestUpdate = const {},
+  }) async {
     final cleanAssetId = assetId.trim();
 
     if (cleanAssetId.isEmpty) {
@@ -824,6 +846,9 @@ class AssetService {
       if (!snapshot.exists || snapshot.data() == null) {
         throw Exception('Asset not found.');
       }
+
+      // Every read must happen before the first write in a transaction.
+      await _requireStillPending(transaction, approvalRequestRef);
 
       final data = snapshot.data()!;
       final stock = _stockOf(snapshot.id, data);
@@ -859,6 +884,48 @@ class AssetService {
         'deployedQuantity': deployed,
         'lastUpdated': FieldValue.serverTimestamp(),
       });
+
+      _markRequestApproved(transaction, approvalRequestRef, approvalRequestUpdate);
+    });
+  }
+
+  /// Refuses to go on unless the approval request is still Pending.
+  ///
+  /// This is what makes approval exactly-once: two Admins tapping Approve at
+  /// the same moment, or one tapping twice, cannot assign the same stock
+  /// twice, because the loser's transaction sees a request that is no longer
+  /// Pending and aborts before writing anything.
+  static Future<void> _requireStillPending(
+    Transaction transaction,
+    DocumentReference<Map<String, dynamic>>? requestRef,
+  ) async {
+    if (requestRef == null) return;
+
+    final snapshot = await transaction.get(requestRef);
+
+    if (!snapshot.exists || snapshot.data() == null) {
+      throw Exception('Request not found.');
+    }
+
+    final status = (snapshot.data()!['status'] ?? '').toString().trim().toLowerCase();
+
+    if (status != 'pending') {
+      throw Exception('This request has already been processed.');
+    }
+  }
+
+  /// Marks the approval request Approved in the same transaction as the write.
+  static void _markRequestApproved(
+    Transaction transaction,
+    DocumentReference<Map<String, dynamic>>? requestRef,
+    Map<String, dynamic> extra,
+  ) {
+    if (requestRef == null) return;
+
+    transaction.update(requestRef, {
+      ...extra,
+      'status': 'Approved',
+      'approvedDate': FieldValue.serverTimestamp(),
     });
   }
 

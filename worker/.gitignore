@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+dist/
+
+# Never commit secrets. The Gemini API key lives only in Cloudflare's secret
+# store, set with `npx wrangler secret put GEMINI_API_KEY`.
+.dev.vars
+.env
+.env.*
+*.key

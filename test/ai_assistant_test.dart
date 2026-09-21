@@ -317,6 +317,38 @@ void main() {
       final reply = InventoryAssistant().answer('blah blah zzz', snapshot());
       expect(reply.text, contains('did not catch'));
     });
+
+    test('one assistant answers a run of questions without repeating itself', () {
+      // Guards the "every question gives me the same answer" report: one
+      // instance, asked in sequence, so any carried-over state - the last
+      // asset, the last Bazaar, a cached snapshot - would show up as two
+      // identical answers.
+      final assistant = InventoryAssistant();
+      // Each asks something genuinely different: synonyms such as "total
+      // stock" and "kul kitna stock hai" are meant to land on one answer.
+      const questions = [
+        'bazaar stock',
+        'total stock',
+        'total inventory value',
+        'head office mein kitne hain',
+        'IT-LAP-001 ki qeemat',
+        'damaged',
+        'IT-LAP-001 ki warranty',
+      ];
+
+      final answers = [
+        for (final question in questions)
+          assistant.answer(question, snapshot()).text,
+      ];
+
+      expect(answers.toSet(), hasLength(questions.length));
+      expect(answers.first, contains('are at Bazaars'));
+      expect(
+        answers.skip(1).where((a) => a.contains('are at Bazaars')),
+        isEmpty,
+        reason: 'only the Bazaar question may produce the Bazaar breakdown',
+      );
+    });
   });
 
   group('facts sent to the language model', () {

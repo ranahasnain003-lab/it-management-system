@@ -33,6 +33,14 @@ class RequestModel {
   final int transferQuantity;
   final String transferRemarks;
 
+  /// Who an assignment request hands the asset to.
+  ///
+  /// Empty on an unassignment, which takes it back from whoever holds it.
+  /// Held explicitly rather than inferred from proposedAssetData, so the
+  /// approval never has to guess what was asked for.
+  final String assigneeId;
+  final String assigneeName;
+
   const RequestModel({
     this.id = '',
     this.requestType = '',
@@ -61,6 +69,8 @@ class RequestModel {
     this.destinationBazaarName = '',
     this.transferQuantity = 0,
     this.transferRemarks = '',
+    this.assigneeId = '',
+    this.assigneeName = '',
   });
 
   factory RequestModel.fromMap(
@@ -109,6 +119,8 @@ class RequestModel {
       ),
 
       transferRemarks: _readString(map['transferRemarks']),
+      assigneeId: _readString(map['assigneeId']),
+      assigneeName: _readString(map['assigneeName']),
     );
   }
 
@@ -145,6 +157,8 @@ class RequestModel {
       'destinationBazaarName': destinationBazaarName,
       'transferQuantity': transferQuantity,
       'transferRemarks': transferRemarks,
+      'assigneeId': assigneeId,
+      'assigneeName': assigneeName,
     };
   }
 
@@ -176,6 +190,8 @@ class RequestModel {
     String? destinationBazaarName,
     int? transferQuantity,
     String? transferRemarks,
+    String? assigneeId,
+    String? assigneeName,
   }) {
     return RequestModel(
       id: id ?? this.id,
@@ -213,6 +229,8 @@ class RequestModel {
           destinationBazaarId ?? this.destinationBazaarId,
       destinationBazaarName:
           destinationBazaarName ?? this.destinationBazaarName,
+      assigneeId: assigneeId ?? this.assigneeId,
+      assigneeName: assigneeName ?? this.assigneeName,
       transferQuantity:
           transferQuantity ?? this.transferQuantity,
       transferRemarks:
@@ -237,6 +255,19 @@ class RequestModel {
 
   bool get isDeleteRequest =>
       requestType.trim().toLowerCase() == 'delete';
+
+  /// A request to hand an asset to somebody, or to take it back.
+  ///
+  /// Its own type, because approving one has to run the real assignment
+  /// workflow. Filed as an Edit it was applied by the descriptive-field
+  /// editor, which deliberately never touches assignedTo or the stock split -
+  /// so the status changed and the holder did not.
+  bool get isAssignmentRequest =>
+      requestType.trim().toLowerCase() == 'assignment';
+
+  /// True when this assignment request hands the asset over; false when it
+  /// takes it back.
+  bool get assignsToSomebody => assigneeId.trim().isNotEmpty;
 
   bool get hasReceiver =>
       receiverId.trim().isNotEmpty ||

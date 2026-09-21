@@ -232,8 +232,18 @@ class ActionExecutor {
         action.kind == AssistantActionKind.moveBetweenBazaars ||
         action.kind == AssistantActionKind.returnToHeadOffice;
 
+    // Handing an asset to somebody, or taking it back, is its own kind of
+    // request. Filed as an Edit it was applied by the descriptive-field
+    // editor, which never touches assignedTo or the stock split - so the
+    // status changed and the holder did not, and both sides were told it had
+    // worked.
+    final isAssignment = action.kind == AssistantActionKind.assign ||
+        action.kind == AssistantActionKind.unassign;
+
     final request = RequestModel(
-      requestType: isTransfer ? 'Transfer' : 'Edit',
+      requestType: isTransfer
+          ? 'Transfer'
+          : (isAssignment ? 'Assignment' : 'Edit'),
       assetId: asset.id,
       assetName: asset.name,
       category: asset.category,
@@ -250,6 +260,14 @@ class ActionExecutor {
       destinationBazaarName: isTransfer ? action.destinationName : '',
       transferQuantity: isTransfer ? action.quantity : 0,
       transferRemarks: isTransfer ? _reason : '',
+      // Empty for an unassignment, which is what tells the approval to take
+      // the asset back rather than hand it over.
+      assigneeId: action.kind == AssistantActionKind.assign
+          ? action.assigneeUid
+          : '',
+      assigneeName: action.kind == AssistantActionKind.assign
+          ? action.assigneeName
+          : '',
       previousAssetData: isTransfer ? null : asset.toMap(),
       proposedAssetData: isTransfer ? null : _proposedData(action, asset),
     );

@@ -18,7 +18,13 @@ class DeploymentService {
   static const String _assetCollection = 'assets';
   static const String _bazaarCollection = 'bazaars';
 
-  static const String _headOfficeId = '__head_office__';
+  /// How a movement record names Head Office as a source or destination.
+  ///
+  /// Public because anything building a transfer has to use the same value:
+  /// [transferAsset] requires a non-empty destination id, so a caller that
+  /// invents its own sentinel (an empty string, say) is refused before
+  /// [_isHeadOffice] is ever consulted.
+  static const String headOfficeId = '__head_office__';
   static const String _headOfficeName = 'Head Office';
 
   /// Statuses whose stock physically no longer exists in the organization.
@@ -80,7 +86,7 @@ class DeploymentService {
     final cleanId = id.trim().toLowerCase();
     final cleanName = name.trim().toLowerCase();
 
-    return cleanId == _headOfficeId.toLowerCase() ||
+    return cleanId == headOfficeId.toLowerCase() ||
         cleanName == 'head office' ||
         cleanName == 'head-office' ||
         cleanName == 'head_office' ||
@@ -1535,7 +1541,7 @@ class DeploymentService {
       assetDocumentId: cleanAssetDocumentId,
       sourceId: sourceBazaarId,
       sourceName: sourceBazaarName,
-      destinationId: _headOfficeId,
+      destinationId: headOfficeId,
       destinationName: _headOfficeName,
       quantity: quantity,
       remarks: remarks,

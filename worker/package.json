@@ -1,0 +1,11 @@
+{
+  "name": "psba-inventory-assistant-worker",
+  "description": "AI Assistant backend for PSBA IT Inventory. Holds the Gemini API key server-side, on the Cloudflare Workers free plan.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}

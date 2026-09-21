@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -24,9 +26,14 @@ export 'assistant_modal_observer.dart';
 /// Wraps the app so the assistant button floats above every signed-in screen.
 /// It adds nothing to the layout of the screens themselves.
 class AiAssistantOverlay extends StatefulWidget {
-  const AiAssistantOverlay({super.key, required this.child});
+  const AiAssistantOverlay({super.key, required this.child, this.backend});
 
   final Widget child;
+
+  /// The natural-language backend. Defaults to the real one, which is itself
+  /// disabled unless the build was made with AI_LLM_ENABLED=true. Tests pass a
+  /// fake here to drive the whole conversation without a network.
+  final AssistantBackend? backend;
 
   @override
   State<AiAssistantOverlay> createState() => _AiAssistantOverlayState();
@@ -81,7 +88,10 @@ class _AiAssistantOverlayState extends State<AiAssistantOverlay> {
         widget.child,
         if (ready && _open)
           Positioned.fill(
-            child: _AssistantSurface(onClose: () => setState(() => _open = false)),
+            child: _AssistantSurface(
+              onClose: () => setState(() => _open = false),
+              backend: widget.backend,
+            ),
           ),
         if (ready && !_open)
           Positioned(
@@ -109,9 +119,10 @@ class _AiAssistantOverlayState extends State<AiAssistantOverlay> {
 
 /// Dimmed backdrop plus the panel, drawn without a Navigator.
 class _AssistantSurface extends StatelessWidget {
-  const _AssistantSurface({required this.onClose});
+  const _AssistantSurface({required this.onClose, this.backend});
 
   final VoidCallback onClose;
+  final AssistantBackend? backend;
 
   @override
   Widget build(BuildContext context) {
@@ -130,12 +141,47 @@ class _AssistantSurface extends StatelessWidget {
           bottom: 0,
           child: Material(
             type: MaterialType.transparency,
-            child: _AssistantPanel(onClose: onClose),
+            child: _AssistantPanel(onClose: onClose, backend: backend),
           ),
         ),
       ],
     );
   }
+}
+
+/// Whether a plan from the keyword planner should be acted on as it stands.
+///
+/// The planner matches verbs on substrings and has no grammar, so it claims
+/// plenty of messages that were never instructions. With a language model
+/// available, only an unambiguous command is acted on here; everything else
+/// goes to the model, which is what it is for. With no model, the planner is
+/// all there is and behaves exactly as it did before the model was added.
+///
+/// Nothing is lost by deferring. A message that really was a command comes
+/// back from the model as an intent, and ActionPlanner.planFromIntent runs it
+/// through this same planner to the same conclusion, with the same checks.
+bool shouldActOnPlan(
+  ActionPlan plan, {
+  required bool modelAvailable,
+  required String message,
+}) {
+  // No model: the planner is all there is, and it behaves exactly as it did
+  // before the model was added.
+  if (!modelAvailable) return true;
+
+  // Anything that reads as a question goes to the model, whatever the planner
+  // made of it. The verb list matches on substrings, so "is IT-LAP-001
+  // assigned to Ayesha Khan?" resolves into a complete, confirmable
+  // assignment, and "Township Bazaar ka poora stock dikhao" into a navigation
+  // that closes the panel - both of them answers to a question nobody asked.
+  // Nothing is lost by deferring: a message that really was an instruction
+  // comes back from the model as an intent and is planned by this same code.
+  if (ActionPlanner.readsAsQuestion(message)) return false;
+
+  // Otherwise a finished plan is acted on, and a half-understood one - which
+  // is where the keyword verbs give their "which asset do you mean?" - is
+  // left to the model.
+  return plan.isProposal;
 }
 
 /// What the signed-in account may do, read from its live profile.
@@ -193,6 +239,14 @@ InventorySnapshot buildInventorySnapshot(BuildContext context) {
     // Separates "this account owns nothing" from "the stream has not answered
     // yet". Only the first is a real answer.
     inventoryLoading: AssetScope.isSettling(users: users, assets: assets),
+    // Display names for the accounts this user can already see under Users, so
+    // "who has IT-LAP-001" can be answered. Account ids and email addresses
+    // stay in the app: InventorySnapshot.toFacts never emits either.
+    holders: {
+      for (final person in users.users)
+        if (person.uid.trim().isNotEmpty && person.name.trim().isNotEmpty)
+          person.uid: person.name,
+    },
   );
 }
 
@@ -347,9 +401,10 @@ class _Message {
 }
 
 class _AssistantPanel extends StatefulWidget {
-  const _AssistantPanel({required this.onClose});
+  const _AssistantPanel({required this.onClose, this.backend});
 
   final VoidCallback onClose;
+  final AssistantBackend? backend;
 
   @override
   State<_AssistantPanel> createState() => _AssistantPanelState();
@@ -362,6 +417,7 @@ class _AssistantPanelState extends State<_AssistantPanel> {
   final _focus = FocusNode();
 
   late final _planner = ActionPlanner(finder: _assistant);
+  late final AssistantBackend _backend = widget.backend ?? const AiBackend();
   final _executor = ActionExecutor();
 
   /// A change the user has been shown and has not answered yet. Nothing is
@@ -373,8 +429,9 @@ class _AssistantPanelState extends State<_AssistantPanel> {
 
   final List<_Message> _messages = [
     const _Message(
-      'Hello. Ask me about the inventory in English or Roman Urdu - for '
-      'example "total stock", "head office mein kitne hain" or an Asset ID.',
+      'Hello. Ask me anything about the inventory, in your own words - '
+      'English, Urdu or Roman Urdu. For example "how many laptops do we '
+      'have?", "head office mein kitne hain" or an Asset ID.',
       fromUser: false,
     ),
   ];
@@ -420,12 +477,21 @@ class _AssistantPanelState extends State<_AssistantPanel> {
     ActionPlan plan,
     String question,
     InventorySnapshot snapshot,
-    List<Map<String, dynamic>> history,
-  ) async {
+    List<Map<String, dynamic>> history, {
+    bool reword = true,
+  }) async {
     // A question the assistant needs answered, or a refusal. Either way this
     // is plain, grounded text; the model may reword it but cannot change it.
+    //
+    // [reword] is false when this plan came from the model's own reading of
+    // the message. It has already spoken, in the user's own language, and a
+    // second call for the same question would spend another request against
+    // the daily cap and be refused by the burst interval anyway - which the
+    // user would see as a spurious "please wait a moment".
     if (!plan.isProposal) {
-      return await _worded(question, plan.message, snapshot, history);
+      return reword
+          ? await _worded(question, plan.message, snapshot, history)
+          : plan.message;
     }
 
     final action = plan.action!;
@@ -466,7 +532,10 @@ class _AssistantPanelState extends State<_AssistantPanel> {
   ) async {
     String? limitNotice;
 
-    final worded = await const AiBackend().rephrase(
+    // Wording only. Any action the model suggests in reply is ignored here on
+    // purpose: the app has already decided what this message was, and a
+    // question or a refusal is not the place to reopen that.
+    final worded = await _backend.ask(
       question: question,
       facts: snapshot.toFacts(),
       groundedAnswer: text,
@@ -474,7 +543,7 @@ class _AssistantPanelState extends State<_AssistantPanel> {
       onLimited: (notice) => limitNotice = notice,
     );
 
-    final answer = worded ?? text;
+    final answer = worded?.text ?? text;
     final notice = limitNotice;
 
     return notice == null ? answer : '$answer\n\n$notice';
@@ -492,8 +561,34 @@ class _AssistantPanelState extends State<_AssistantPanel> {
     });
     _scrollToEnd();
 
-    final permissions = buildAssistantPermissions(context);
-    final result = await _executor.run(action, permissions);
+    // Both flags above gate _send(). If anything below threw they would stay
+    // set for good, and from then on every question the user typed would be
+    // dropped in silence - no new bubble, no error, the previous answer just
+    // sitting there. So the outcome is resolved defensively and the flags are
+    // always cleared.
+    var message = 'That did not go through. Nothing was changed.';
+
+    try {
+      final permissions = buildAssistantPermissions(context);
+
+      // Bounded, because a Firestore write made with no connection does not
+      // fail - it is queued, and its Future simply never completes until the
+      // server acknowledges it. Without this the two flags above would stay
+      // set for the life of the panel and every later question would be
+      // dropped in silence, which is the exact failure this method was
+      // already written to avoid.
+      final result =
+          await _executor.run(action, permissions).timeout(_actionTimeout);
+
+      message = result.message;
+    } on TimeoutException {
+      // A queued write can still land later, so "nothing was changed" would
+      // be a guess, and the wrong one.
+      message = 'That is taking longer than usual. It may still go through, '
+          'so check the record before trying it again.';
+    } catch (error) {
+      debugPrint('Assistant could not carry that out: $error');
+    }
 
     if (!mounted) return;
 
@@ -501,7 +596,7 @@ class _AssistantPanelState extends State<_AssistantPanel> {
       _pending = null;
       _running = false;
       _thinking = false;
-      _messages.add(_Message(result.message, fromUser: false));
+      _messages.add(_Message(message, fromUser: false));
     });
     _scrollToEnd();
 
@@ -521,6 +616,25 @@ class _AssistantPanelState extends State<_AssistantPanel> {
     _scrollToEnd();
   }
 
+  /// How long a confirmed change is waited on before the user is told it is
+  /// taking too long. See [_confirm].
+  static const Duration _actionTimeout = Duration(seconds: 20);
+
+  /// Email addresses, as they appear in text bound for the backend.
+  static final RegExp _address = RegExp(r'\s*\(?[\w.+-]+@[\w-]+\.[\w.-]+\)?');
+
+  /// Strips email addresses out of text before it leaves the app.
+  ///
+  /// The confirmation preview deliberately names a person as "Ayesha Khan
+  /// (ayesha@test.local)", so that the user approves the right account. That
+  /// bubble then becomes part of the conversation, and the conversation is
+  /// sent to the model as context - so without this the address would travel
+  /// with it, which is exactly what InventorySnapshot.toFacts takes care never
+  /// to do. The name is what the model needs to follow the thread; the address
+  /// is not.
+  static String _withoutAddresses(String text) =>
+      text.replaceAll(_address, '');
+
   Future<void> _send() async {
     final question = _input.text.trim();
     if (question.isEmpty || _thinking || _running) return;
@@ -531,7 +645,7 @@ class _AssistantPanelState extends State<_AssistantPanel> {
 
     final recent = _messages
         .skip(_messages.length > 6 ? _messages.length - 6 : 0)
-        .map((m) => {'fromUser': m.fromUser, 'text': m.text})
+        .map((m) => {'fromUser': m.fromUser, 'text': _withoutAddresses(m.text)})
         .toList();
 
     setState(() {
@@ -572,7 +686,24 @@ class _AssistantPanelState extends State<_AssistantPanel> {
         lastAsset: _assistant.lastAsset,
       );
 
-      if (plan != null) {
+      // A fully formed command is acted on here and now: the planner is
+      // deterministic, costs nothing and works with no network.
+      //
+      // A half-understood one is NOT. The verb list fires on ordinary
+      // questions too - "what was moved to Township last week?" and "is
+      // IT-LAP-001 assigned to anyone?" both read as commands - and answering
+      // those with "which asset do you mean?" is exactly the fixed-keyword
+      // behaviour the model is here to replace. So an ask or a refusal is
+      // handed on to the model when there is one, and only stands on its own
+      // when there is not. Nothing is lost by doing so: if the message really
+      // was a command, the model says so and planFromIntent runs it back
+      // through this same planner, which reaches the same conclusion.
+      if (plan != null &&
+          shouldActOnPlan(
+            plan,
+            modelAvailable: _backend.enabled,
+            message: question,
+          )) {
         final outcome = await _handlePlan(plan, question, snapshot, recent);
         if (outcome != null) {
           if (!mounted) return;
@@ -583,8 +714,21 @@ class _AssistantPanelState extends State<_AssistantPanel> {
           _scrollToEnd();
           return;
         }
+
+        // Nothing to say means the plan was a navigation: the panel has been
+        // closed and the route has already changed. Carrying on would compute
+        // an answer nobody is there to read, and spend one of the account's
+        // model requests doing it.
+        if (!mounted) return;
+        setState(() => _thinking = false);
+        return;
       }
 
+      // The deterministic engine always runs. Its answer is what the user sees
+      // when the model is switched off or unreachable, and it is the
+      // authoritative figure handed to the model when it is on - but only when
+      // it actually recognised the question, because its "ask me another way"
+      // message answers nothing and must not be passed off as an answer.
       final reply = _assistant.answer(question, snapshot);
       answer = reply.text;
 
@@ -593,17 +737,77 @@ class _AssistantPanelState extends State<_AssistantPanel> {
       // step was skipped - so the note is appended rather than shown alone.
       String? limitNotice;
 
-      // The language model only rewrites that answer. If it is unavailable the
-      // computed answer is shown unchanged, so the assistant never fails.
-      final worded = await const AiBackend().rephrase(
-        question: question,
+      // Natural language, in the user's own words and their own script. The
+      // model is given nothing but this account's own permission-scoped facts,
+      // and it can write nothing. If it is unavailable, disabled or over its
+      // limit, the computed answer above is shown unchanged and the assistant
+      // simply keeps working.
+      final understood = await _backend.ask(
+        // Redacted like the history is. The planner's own wording asks for
+        // "the exact name or the email address", so an address genuinely
+        // turns up here - and toFacts never sends one, which would make this
+        // the only way a colleague's address reached the model.
+        question: _withoutAddresses(question),
         facts: snapshot.toFacts(focus: reply.asset),
-        groundedAnswer: reply.text,
+        groundedAnswer: reply.understood ? reply.text : '',
         history: recent,
+        capabilities: permissions.assistantCapabilities,
         onLimited: (notice) => limitNotice = notice,
       );
 
-      answer = worded ?? reply.text;
+      if (understood != null) {
+        // The model may have read the message as an instruction rather than a
+        // question. Its reading is only a hint: every name, number and
+        // permission in it is resolved and checked again from scratch against
+        // this same snapshot, and a change still has to be confirmed.
+        // A question back to the user is a question, not a change. The model
+        // sets this when it could not tell which asset, Bazaar or person was
+        // meant, and acting on the half-formed reading it also returned would
+        // turn "which Bazaar did you mean?" into a one-tap confirmation.
+        final intent = understood.needsClarification ? null : understood.intent;
+
+        if (intent != null) {
+          final intentPlan = _planner.planFromIntent(
+            intent,
+            snapshot,
+            permissions,
+            people: people,
+          );
+
+          if (intentPlan != null && intentPlan.isProposal) {
+            final outcome = await _handlePlan(
+              intentPlan,
+              question,
+              snapshot,
+              recent,
+              reword: false,
+            );
+            if (outcome != null) {
+              if (!mounted) return;
+              setState(() {
+                _messages.add(_Message(outcome, fromUser: false));
+                _thinking = false;
+              });
+              _scrollToEnd();
+              return;
+            }
+          }
+
+          // The planner would not put that change up. Its refusal names a
+          // real rule - a permission, a stock figure - so the user has to
+          // hear it; but it is in English, and the model has already answered
+          // in the language they wrote in. So the refusal is added to that
+          // answer rather than replacing it. A mere request for clarification
+          // is dropped entirely: the model's own words are the better version
+          // of the same thing.
+          final refusal = intentPlan?.refusal;
+          answer = refusal == null
+              ? understood.text
+              : '${understood.text}\n\n$refusal';
+        } else {
+          answer = understood.text;
+        }
+      }
 
       final notice = limitNotice;
       if (notice != null) answer = '$answer\n\n$notice';
@@ -621,13 +825,23 @@ class _AssistantPanelState extends State<_AssistantPanel> {
   }
 
   void _scrollToEnd() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!_scroll.hasClients) return;
-      _scroll.animateTo(
+
+      await _scroll.animateTo(
         _scroll.position.maxScrollExtent,
         duration: const Duration(milliseconds: 240),
         curve: Curves.easeOut,
       );
+
+      // The list builds its bubbles lazily, so a long answer - a Bazaar
+      // breakdown, the help text - can still be laying out when the extent
+      // above is measured, and the trip stops short with the newest answer
+      // below the fold. That reads as "it gave me the same answer again", so
+      // the end is measured once more after the frame has settled.
+      if (!mounted || !_scroll.hasClients) return;
+      final end = _scroll.position.maxScrollExtent;
+      if (_scroll.offset < end) _scroll.jumpTo(end);
     });
   }
 

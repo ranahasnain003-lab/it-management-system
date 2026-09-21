@@ -17,7 +17,7 @@ dependencies:
   firebase_auth: ^4.17.0
   cloud_firestore: ^4.15.0
   # Proves calls to the AI Assistant backend come from a real install of this
-  # app, so a stolen ID token alone cannot spend the OpenAI budget.
+  # app, so a stolen ID token alone cannot spend the Gemini allowance.
   firebase_app_check: ^0.2.2
 
   provider: ^6.1.2
@@ -36,6 +36,10 @@ dependencies:
   web: ^0.5.1
   cloud_functions: ^4.7.6
 
+  # Plain HTTPS for the assistant backend, which is a Cloudflare Worker
+  # rather than a Cloud Function (Cloud Functions need the Blaze plan).
+  http: ^1.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -50,6 +54,7 @@ dev_dependencies:
   plugin_platform_interface: 2.1.8
   integration_test:
     sdk: flutter
+  firebase_auth_mocks: ^0.13.0
 
 dependency_overrides:
   flutter_plugin_android_lifecycle: 2.0.20
