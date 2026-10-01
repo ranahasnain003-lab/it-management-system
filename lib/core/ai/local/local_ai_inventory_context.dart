@@ -1062,6 +1062,9 @@ class LocalAiInventoryContext {
     'waiting',
     'zer e ghaur',
     'not yet approved',
+    // "Open requests" is how the pending ones are usually asked for. The whole
+    // phrase has to appear: "open" by itself says nothing about a status.
+    'open request',
   ];
   static const List<String> _requestStatusApproved = [
     'approved',
@@ -1259,6 +1262,15 @@ class LocalAiInventoryContext {
     'more',
     'most',
     'least',
+    // The other ways of asking for the top or the bottom of a list, alongside
+    // "most" and "least": which Bazaar holds the highest or lowest stock.
+    'highest',
+    'lowest',
+    'largest',
+    'smallest',
+    'fewest',
+    'maximum',
+    'minimum',
     'than',
     'less',
     'then',

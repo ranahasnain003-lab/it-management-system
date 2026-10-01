@@ -289,6 +289,10 @@ class _DirectAnswer {
     'deploy',
     'cancel',
     'rename',
+    // "Open the dashboard" asks for a screen, not for a figure. "Open
+    // requests" is the exception the _asNoun rule below already makes: there
+    // the word is part of what is being asked about, not a thing to do.
+    'open',
   };
 
   /// A Roman Urdu instruction ends with an imperative.
@@ -1160,6 +1164,7 @@ class _DirectAnswer {
         : null;
 
     return _join([
+      _mostOrFewest(withStock, units),
       '${base == null ? 'Stock at Bazaars' : 'At Bazaars, $_within'}: '
           '${_units(total)}, at '
           '${withStock.length == 1 ? '1 Bazaar' : '${_n(withStock.length)} Bazaars'}:',
@@ -1171,6 +1176,56 @@ class _DirectAnswer {
       dashboard,
     ]);
   }
+
+  /// "Which Bazaar has the most monitors": the Bazaar at the top, or at the
+  /// bottom, of the per-Bazaar figures, named before the list they come from.
+  /// Null when the question did not ask for either.
+  ///
+  /// The comparison is only ever over the Bazaars that hold some of what was
+  /// asked about. A Bazaar with none of it is not the one with the fewest in
+  /// any useful sense, and which Bazaars those are is on the line below
+  /// anyway. Every Bazaar tied at the figure is named, because naming one of
+  /// them would say something the figures do not.
+  String? _mostOrFewest(List<String> withStock, Map<String, int> units) {
+    if (withStock.isEmpty) return null;
+    final most = _asks(_mostWords);
+    final fewest = _asks(_fewestWords);
+    if (most == fewest) return null;
+
+    final figures = withStock.map((n) => units[n]!);
+    final pick = figures.reduce(
+      (a, b) => most ? (b > a ? b : a) : (b < a ? b : a),
+    );
+    final named = withStock.where((n) => units[n] == pick).toList();
+    final word = most ? 'most' : 'least';
+    final what = b._base(e) == null ? ' stock of any Bazaar' : ' of any Bazaar, $_within';
+
+    if (named.length == 1) {
+      return '${named.first} has the $word$what: ${_units(pick)}.';
+    }
+    return '${_n(named.length)} Bazaars hold the $word$what, '
+        '${_units(pick)} each: ${named.join(', ')}.';
+  }
+
+  static const Set<String> _mostWords = {
+    'most',
+    'highest',
+    'largest',
+    'maximum',
+    'top',
+    'zyada',
+    'ziada',
+    'zada',
+  };
+
+  static const Set<String> _fewestWords = {
+    'fewest',
+    'least',
+    'lowest',
+    'smallest',
+    'minimum',
+    'kam',
+  };
 
   /// "How many Bazaars are there", "active Bazaars in Lahore".
   String? _directory(Set<LocalAiTopic> own) {

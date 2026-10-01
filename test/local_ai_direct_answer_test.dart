@@ -180,7 +180,21 @@ void main() {
           '• Sahiwal Bazaar: 2 units\n'
           'With no stock: Model Town Bazaar.';
       expect(direct('bazaar stock'), perBazaar);
-      expect(direct('which bazaar has the most stock?'), perBazaar);
+
+      // Asked which Bazaar has the most or the fewest, the answer names it
+      // first and then shows the figures it came from.
+      expect(
+        direct('which bazaar has the most stock?'),
+        'Township Bazaar has the most stock of any Bazaar: 11 units.\n$perBazaar',
+      );
+      expect(
+        direct('which bazaar has the least stock?'),
+        'Sahiwal Bazaar has the least stock of any Bazaar: 2 units.\n$perBazaar',
+      );
+      // Only the Bazaars that hold some of it are compared: one with none is
+      // on the "with no stock" line, and is not the one with the fewest.
+      expect(direct('which bazaar has the most laptops?'), contains('Township Bazaar has the most of any Bazaar, in the Laptop category: 3 units.'));
+      expect(direct('which bazaar has the fewest laptops?'), contains('Sahiwal Bazaar has the least of any Bazaar, in the Laptop category: 2 units.'));
 
       expect(
         direct('how many bazaars are there'),
@@ -304,14 +318,19 @@ void main() {
         '• 2026-09-25 · ABC-123 (Dell Latitude 5420) · 3 units · Head Office '
         '→ Township Bazaar (Active)',
       );
-      expect(
-        direct('pending requests'),
-        'Pending requests: 2.\n'
-        '• 2026-09-26 · Transfer · Dell Latitude 5420 · 2 units to Township '
-        'Bazaar · by Usman User · Pending\n'
-        '• 2026-09-26 · Assignment · HP ProBook 450 · assign to Usman User · '
-        'by Ali Admin · Pending',
-      );
+      const pending =
+          'Pending requests: 2.\n'
+          '• 2026-09-26 · Transfer · Dell Latitude 5420 · 2 units to Township '
+          'Bazaar · by Usman User · Pending\n'
+          '• 2026-09-26 · Assignment · HP ProBook 450 · assign to Usman User · '
+          'by Ali Admin · Pending';
+      expect(direct('pending requests'), pending);
+      // "Open requests" is the same question in the words people usually use.
+      expect(direct('list the open requests'), pending);
+      expect(direct('how many open requests are there?'), pending);
+      // "Open" on its own says nothing about a status, so it is not a request
+      // question at all and the model gets it.
+      expect(direct('open the dashboard'), isNull);
     });
 
     test('users, a department and one person', () {
