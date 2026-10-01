@@ -26,14 +26,18 @@ class WebNavItem {
   static bool _always(UserProvider _) => true;
 }
 
+/// The account's deciding role. Only the primary `role` field is listed: the
+/// `roles` mirror never grants anything (PermissionService.hasPermission), and
+/// an account that is not active gets no role at all, so a pending
+/// self-registration sees no privileged entry.
 List<String> _roles(UserProvider users) {
   final profile = users.currentUserProfile;
 
-  if (profile == null) {
+  if (profile == null || !profile.isActive) {
     return const [];
   }
 
-  return <String>[profile.role, ...profile.roles];
+  return <String>[profile.effectiveRole];
 }
 
 bool isManager(UserProvider users) => users.isSuperAdmin || users.isAdmin;
@@ -50,10 +54,13 @@ bool _canViewReports(UserProvider users) => PermissionService.hasPermission(
 
 bool _canManageUsers(UserProvider users) => users.canManageUsers;
 
-bool _canViewMovements(UserProvider users) =>
-    isManager(users) ||
-    (users.isNormalUser &&
-        (users.currentUserProfile?.createdBy.trim().isNotEmpty ?? false));
+/// Movement history is organisation-wide, like the inventory it describes:
+/// every active account reads all of it, not only the Users attached to an
+/// Admin.
+bool _canViewMovements(UserProvider users) => PermissionService.hasPermission(
+  roles: _roles(users),
+  permission: PermissionService.viewAssetHistory,
+);
 
 final List<WebNavItem> webNavigation = [
   const WebNavItem(
@@ -102,6 +109,8 @@ final List<WebNavItem> webNavigation = [
   ),
   const WebNavItem(label: 'Reports', icon: Icons.bar_chart_rounded, path: '/reports', isVisible: _canViewReports),
   const WebNavItem(label: 'Activity Logs', icon: Icons.receipt_long_rounded, path: '/activity-logs', isVisible: isManager),
+  // Every signed-in user: answers are built from what the account may see.
+  const WebNavItem(label: 'AI Assistant', icon: Icons.smart_toy_rounded, path: '/ai-assistant'),
   const WebNavItem(label: 'Notifications', icon: Icons.notifications_rounded, path: '/notifications'),
   const WebNavItem(label: 'Settings', icon: Icons.settings_rounded, path: '/settings'),
 ];

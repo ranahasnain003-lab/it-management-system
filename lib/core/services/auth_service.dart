@@ -118,9 +118,11 @@ class AuthService {
         await user.updateDisplayName(cleanName);
       }
 
-      if (!user.emailVerified) {
-        await user.sendEmailVerification();
-      }
+      // Deliberately does NOT send the verification e-mail. AuthProvider.signup
+      // owns that single send, together with creating the Firestore profile and
+      // starting the resend cooldown. Sending here as well is how an account
+      // ends up receiving the same message twice, which confuses the person and
+      // counts against delivery.
 
       return credential;
     } on FirebaseAuthException catch (e) {
@@ -138,6 +140,35 @@ class AuthService {
   // EMAIL VERIFICATION
   // ============================================================
 
+  /// Where the verification link sends the person once Firebase has accepted
+  /// it: this project's own hosted sign-in page.
+  ///
+  /// Two reasons to set it rather than leave Firebase's bare "e-mail
+  /// verified" page. The person lands back in the app and can sign in
+  /// immediately instead of being left on a dead end; and the link in the
+  /// message points at a domain that belongs to this project, which is one
+  /// of the few delivery signals the app itself can control. It is NOT a
+  /// cure for the message landing in Spam - that is decided by the sending
+  /// domain's DNS records, which live outside the app (see the handover
+  /// notes on SPF/DKIM/DMARC and the custom SMTP sender).
+  ///
+  /// The domain must be listed under Authentication > Settings > Authorized
+  /// domains. Firebase Hosting domains of the project are there by default,
+  /// but if it is ever removed Firebase refuses the whole send - so
+  /// [sendEmailVerification] falls back to a plain send rather than leaving
+  /// a new account with no verification e-mail at all.
+  static final ActionCodeSettings verificationLinkSettings =
+      ActionCodeSettings(
+        url: 'https://it-inventory-8e690.web.app/login?verified=1',
+        handleCodeInApp: false,
+      );
+
+  /// Sends the ONE verification e-mail for the signed-in account.
+  ///
+  /// Callers own the question of when: every automatic send happens exactly
+  /// once, at signup, and anything else is the person pressing "Resend"
+  /// behind a cooldown. Sending the same message twice is both confusing and
+  /// a spam signal, so nothing here sends on its own.
   Future<void> sendEmailVerification() async {
     final User? user = _firebaseAuth.currentUser;
 
@@ -153,7 +184,20 @@ class AuthService {
     }
 
     try {
-      await user.sendEmailVerification();
+      try {
+        await user.sendEmailVerification(verificationLinkSettings);
+      } on FirebaseAuthException catch (e) {
+        // The continue URL is configuration, not something the person did
+        // wrong. If it is rejected, the verification e-mail still has to go.
+        if (e.code == 'invalid-continue-uri' ||
+            e.code == 'unauthorized-continue-uri' ||
+            e.code == 'missing-continue-uri' ||
+            e.code == 'invalid-dynamic-link-domain') {
+          await user.sendEmailVerification();
+        } else {
+          rethrow;
+        }
+      }
     } on FirebaseAuthException catch (e) {
       throw AuthException.fromFirebase(e);
     } catch (_) {
@@ -367,7 +411,6 @@ class AuthException implements Exception {
       case 'user-token-expired':
       case 'invalid-user-token':
         return 'Your session has expired. Please sign in again.';
-
       default:
         return 'Something went wrong. Please try again.';
     }

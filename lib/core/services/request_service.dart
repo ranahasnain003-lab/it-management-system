@@ -8,6 +8,8 @@ import '../../models/request_model.dart';
 import 'asset_service.dart';
 import 'deployment_service.dart';
 import 'guarded_transaction.dart';
+import 'log_service.dart';
+import 'permission_service.dart';
 
 class RequestService {
   RequestService({FirebaseFirestore? firestore, FirebaseAuth? auth})
@@ -41,12 +43,23 @@ class RequestService {
   /// an approval runs exactly the workflow the user was shown.
   AssetService get _assetService => AssetService(firestore: _firestore);
 
+  /// Audit trail. Written only after a decision has committed, and never
+  /// inside a transaction - see [LogService.recordActivity].
+  LogService get _logService => LogService(firestore: _firestore, auth: _auth);
+
   // ============================================================
   // CURRENT USER / ROLE
   // ============================================================
 
   String get _currentUid => _auth.currentUser?.uid.trim() ?? '';
 
+  /// The acting role, resolved the way firestore.rules resolves it.
+  ///
+  /// The rules read the primary `role` field alone, trimmed and lower-cased.
+  /// This used to fold in the `roles` array as well, which could grant an
+  /// account a role the rules would then refuse - the array is a mirror, so it
+  /// must never decide anything. Returns '' for a stored value that is not one
+  /// of the three canonical roles, and an unknown role gets nothing.
   Future<String> _getCurrentRole() async {
     final uid = _currentUid;
 
@@ -60,37 +73,18 @@ class RequestService {
       throw Exception('Your user profile could not be found.');
     }
 
-    final data = snapshot.data()!;
+    return _canonicalRole(snapshot.data()!['role']);
+  }
 
-    final rolesValue = data['roles'];
+  /// Trim + lower-case of a stored role, or '' when it is not canonical.
+  ///
+  /// Delegates to PermissionService so an authorisation decision is never
+  /// forked: `normalizeRole` is exactly `roleOf()` in firestore.rules (no
+  /// alias mapping), and `isMainRole` keeps only the three canonical values.
+  static String _canonicalRole(Object? value) {
+    final role = PermissionService.normalizeRole(value?.toString());
 
-    final roles = <String>[];
-
-    if (rolesValue is Iterable) {
-      for (final role in rolesValue) {
-        final value = role.toString().trim().toLowerCase();
-
-        if (value.isNotEmpty) {
-          roles.add(value);
-        }
-      }
-    }
-
-    final role = data['role']?.toString().trim().toLowerCase() ?? '';
-
-    if (role.isNotEmpty && !roles.contains(role)) {
-      roles.add(role);
-    }
-
-    if (roles.contains('super_admin')) {
-      return 'super_admin';
-    }
-
-    if (roles.contains('admin')) {
-      return 'admin';
-    }
-
-    return 'user';
+    return PermissionService.isMainRole(role) ? role : '';
   }
 
   // ============================================================
@@ -115,50 +109,26 @@ class RequestService {
   /// error. While subscribed, failures still reach the listener's onError.
   Stream<List<RequestModel>> _getCurrentRoleForStream(String uid) {
     return Stream<String>.fromFuture(_getCurrentRole()).asyncExpand((role) {
-      if (role == 'super_admin') {
+      // An Admin may now decide a request about ANY inventory, exactly like a
+      // Super Admin, so both read the whole collection. The previous Admin
+      // query kept only requests addressed to them or about inventory they
+      // own, which hid requests they are allowed - and expected - to answer.
+      //
+      // Unordered on purpose: an orderBy('requestDate') would drop a request
+      // that has no date, and _mapRequestSnapshot already sorts by date.
+      if (role == 'super_admin' || role == 'admin') {
+        return _requests.snapshots().map(_mapRequestSnapshot);
+      }
+
+      if (role == 'user') {
         return _requests
-            .orderBy('requestDate', descending: true)
+            .where('requestedBy', isEqualTo: uid)
             .snapshots()
             .map(_mapRequestSnapshot);
       }
 
-      if (role == 'admin') {
-        return _getAdminRequests(uid);
-      }
-
-      return _requests
-          .where('requestedBy', isEqualTo: uid)
-          .snapshots()
-          .map(_mapRequestSnapshot);
-    });
-  }
-
-  /// Admin sees requests addressed to them and requests about inventory they
-  /// own (the same scope [_validateAdminRequestAccess] allows them to act on).
-  /// Firestore rules permit Admin to read all requests, so the scope is
-  /// applied client-side to avoid depending on an OR/composite index.
-  Stream<List<RequestModel>> _getAdminRequests(String uid) {
-    return _requests.snapshots().map((snapshot) {
-      final requests = <RequestModel>[];
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-
-        final receiverId = (data['receiverId'] ?? '').toString().trim();
-        final assetAdminId = (data['assetAdminId'] ?? '').toString().trim();
-        final requestedBy = (data['requestedBy'] ?? '').toString().trim();
-
-        if (receiverId == uid || assetAdminId == uid || requestedBy == uid) {
-          requests.add(RequestModel.fromMap(data, id: doc.id));
-        }
-      }
-
-      requests.sort(
-        (a, b) => (b.requestDate ?? DateTime.fromMillisecondsSinceEpoch(0))
-            .compareTo(a.requestDate ?? DateTime.fromMillisecondsSinceEpoch(0)),
-      );
-
-      return requests;
+      // An unrecognised stored role gets nothing, the way the rules treat it.
+      return Stream.value(<RequestModel>[]);
     });
   }
 
@@ -332,8 +302,8 @@ class RequestService {
 
     final currentRole = await _getCurrentRole();
 
-    if (currentRole == 'user') {
-      throw Exception('Users cannot approve or reject requests.');
+    if (currentRole != 'super_admin' && currentRole != 'admin') {
+      throw Exception('Only an Admin or Super Admin can decide a request.');
     }
 
     final request = await getRequestById(cleanRequestId);
@@ -350,9 +320,11 @@ class RequestService {
       throw Exception('You cannot approve or reject your own request.');
     }
 
-    if (currentRole == 'admin') {
-      await _validateAdminRequestAccess(request, currentUid);
-    }
+    // No owner check: canActOnRequest is isManager() in firestore.rules, so an
+    // Admin decides requests about any inventory. The guards that remain are
+    // the ones that still matter - the request must be Pending, nobody
+    // approves their own, and a decided request is immutable (re-checked
+    // inside every transaction below).
 
     final cleanStatus = status.trim();
 
@@ -374,6 +346,50 @@ class RequestService {
       throw Exception('Approver name is required.');
     }
 
+    await _applyRequestDecision(
+      request: request,
+      requestRef: requestRef,
+      cleanRequestId: cleanRequestId,
+      normalizedStatus: normalizedStatus,
+      remarks: remarks,
+      cleanApproverName: cleanApproverName,
+      currentUid: currentUid,
+    );
+
+    // The audit entry is written only once the decision has committed. The
+    // decision itself runs in a transaction that refuses a request which is no
+    // longer Pending, and a failed log write is swallowed, so the trail can
+    // never undo, retry or mis-report a decision the approver was already told
+    // had succeeded.
+    final approved = normalizedStatus == 'approved';
+
+    await _logService.recordActivity(
+      action: approved ? 'Request approved' : 'Request rejected',
+      description:
+          '${_requestTypeDisplay(request)} request for '
+          '${_requestAssetName(request)} was '
+          '${approved ? 'approved' : 'rejected'}.',
+      module: 'Requests',
+      targetId: cleanRequestId,
+      userName: cleanApproverName,
+    );
+  }
+
+  /// Applies an already-validated decision: one branch per request type, each
+  /// committing the asset change and the request's own status together.
+  ///
+  /// Split out of [updateRequestStatus] purely so the audit entry above is
+  /// written once, after whichever branch ran has committed, instead of being
+  /// repeated at every early return in here.
+  Future<void> _applyRequestDecision({
+    required RequestModel request,
+    required DocumentReference<Map<String, dynamic>> requestRef,
+    required String cleanRequestId,
+    required String normalizedStatus,
+    required String remarks,
+    required String cleanApproverName,
+    required String currentUid,
+  }) async {
     // ==========================================================
     // REJECT
     // ==========================================================
@@ -579,41 +595,6 @@ class RequestService {
       remarks: remarks,
       approvedBy: cleanApproverName,
     );
-  }
-
-  // ============================================================
-  // ADMIN REQUEST ACCESS
-  // ============================================================
-
-  Future<void> _validateAdminRequestAccess(
-    RequestModel request,
-    String adminUid,
-  ) async {
-    final receiverId = request.receiverId.trim();
-
-    if (receiverId == adminUid) {
-      return;
-    }
-
-    final assetId = request.assetId.trim();
-
-    if (assetId.isNotEmpty) {
-      final assetSnapshot = await _assets.doc(assetId).get();
-
-      if (assetSnapshot.exists && assetSnapshot.data() != null) {
-        final assetData = assetSnapshot.data()!;
-
-        final ownerId = (assetData['adminId'] ?? assetData['ownerId'] ?? '')
-            .toString()
-            .trim();
-
-        if (ownerId == adminUid) {
-          return;
-        }
-      }
-    }
-
-    throw Exception('You do not have permission to manage this request.');
   }
 
   // ============================================================
@@ -928,6 +909,11 @@ class RequestService {
       ).toMap(),
     );
 
+    await _ensureEditKeepsIdentifiersUnique(
+      documentId: preflight.id,
+      proposed: proposedData,
+    );
+
     final approverUid = _currentUid;
 
     await runGuardedTransaction(_firestore, (transaction) async {
@@ -965,6 +951,48 @@ class RequestService {
         'approvedDate': FieldValue.serverTimestamp(),
       });
     });
+  }
+
+  /// Refuses an approval that would give two assets the same Asset ID or the
+  /// same serial number.
+  ///
+  /// The edit form runs checkDuplicateAssetId/checkDuplicateSerial before it
+  /// saves, but an approval writes straight to the asset and skipped them: a
+  /// request filed while the identifier was still free, or two Pending requests
+  /// naming the same one, both used to be approvable. Run as the approving
+  /// manager, who may read the whole collection.
+  ///
+  /// [proposed] holds only the fields the requester actually changed, so an
+  /// identifier that was not touched is not re-checked against itself.
+  Future<void> _ensureEditKeepsIdentifiersUnique({
+    required String documentId,
+    required Map<String, dynamic> proposed,
+  }) async {
+    final assetId = _stringValue(proposed['assetId']);
+
+    if (assetId.isNotEmpty &&
+        await _assetService.checkDuplicateAssetId(
+          assetId,
+          excludeDocumentId: documentId,
+        )) {
+      throw Exception(
+        'Asset ID "$assetId" already belongs to another asset, so this '
+        'request cannot be approved.',
+      );
+    }
+
+    final serialNumber = _stringValue(proposed['serialNumber']);
+
+    if (serialNumber.isNotEmpty &&
+        await _assetService.checkDuplicateSerial(
+          serialNumber,
+          excludeDocumentId: documentId,
+        )) {
+      throw Exception(
+        'Serial number "$serialNumber" already belongs to another asset, so '
+        'this request cannot be approved.',
+      );
+    }
   }
 
   Map<String, dynamic> _requestedChanges({
@@ -1185,11 +1213,16 @@ class RequestService {
 
     final role = await _getCurrentRole();
 
+    if (role.isEmpty) {
+      return 0;
+    }
+
     Query<Map<String, dynamic>> query = _requests;
 
-    if (role == 'admin') {
-      query = query.where('receiverId', isEqualTo: uid);
-    } else if (role == 'user') {
+    // A manager counts every request, because that is what they now see and
+    // may decide. Narrowing an Admin to receiverId made the badge disagree
+    // with the list on the Requests screen.
+    if (role == 'user') {
       query = query.where('requestedBy', isEqualTo: uid);
     }
 
@@ -1207,14 +1240,17 @@ class RequestService {
 
     final role = await _getCurrentRole();
 
+    if (role.isEmpty) {
+      return 0;
+    }
+
     Query<Map<String, dynamic>> query = _requests.where(
       'status',
       isEqualTo: 'Pending',
     );
 
-    if (role == 'admin') {
-      query = query.where('receiverId', isEqualTo: uid);
-    } else if (role == 'user') {
+    // Same scope as [getRequestCount]: a manager counts all of them.
+    if (role == 'user') {
       query = query.where('requestedBy', isEqualTo: uid);
     }
 

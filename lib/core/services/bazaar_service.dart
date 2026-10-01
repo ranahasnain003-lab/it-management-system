@@ -1,5 +1,4 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 
 class BazaarModel {
   final String id;
@@ -8,6 +7,7 @@ class BazaarModel {
   final String contactPerson;
   final String contactNumber;
   final String address;
+  final String bazaarType;
   final bool isActive;
   final DateTime? createdAt;
   final DateTime? lastUpdated;
@@ -19,6 +19,7 @@ class BazaarModel {
     this.contactPerson = '',
     this.contactNumber = '',
     this.address = '',
+    this.bazaarType = '',
     this.isActive = true,
     this.createdAt,
     this.lastUpdated,
@@ -28,6 +29,10 @@ class BazaarModel {
     Map<String, dynamic> data,
     String documentId,
   ) {
+    // The field pairs below are read BOTH ways round on purpose. One legacy
+    // production document carries `city`/`type` and has no `location`/
+    // `bazaarType` at all, so reading only the newer name would show that
+    // Bazaar without its city.
     return BazaarModel(
       id: documentId,
       name: _stringValue(data['name'] ?? data['bazaarName']),
@@ -35,6 +40,7 @@ class BazaarModel {
       contactPerson: _stringValue(data['contactPerson'] ?? data['contactName']),
       contactNumber: _stringValue(data['contactNumber'] ?? data['phone']),
       address: _stringValue(data['address']),
+      bazaarType: _stringValue(data['bazaarType'] ?? data['type']),
       isActive: _boolValue(data['isActive'] ?? data['status'], fallback: true),
       createdAt: _dateValue(data['createdAt']),
       lastUpdated: _dateValue(data['lastUpdated'] ?? data['updatedAt']),
@@ -125,422 +131,8 @@ class BazaarService {
   static const String _collection = 'bazaars';
 
   // ===========================================================================
-  // PUNJAB MASTER BAZAARS
-  //
-  // IMPORTANT:
-  // These are the existing 64 bazaars already present in the project.
-  // Do not remove or rename them.
-  // ===========================================================================
-
-  static const List<Map<String, String>> _punjabBazaarSeedData = [
-    // -------------------------------------------------------------------------
-    // LAHORE
-    // -------------------------------------------------------------------------
-    {
-      'name': 'China Scheme Bazaar',
-      'location': 'Lahore',
-      'address': 'China Scheme, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Chung Bazaar',
-      'location': 'Lahore',
-      'address': 'Chung, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Harbanspura Bazaar',
-      'location': 'Lahore',
-      'address': 'Harbanspura, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Mian Plaza Johar Town Bazaar',
-      'location': 'Lahore',
-      'address': 'Johar Town, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Raiwind Bazaar',
-      'location': 'Lahore',
-      'address': 'Raiwind, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Sabzazar Bazaar',
-      'location': 'Lahore',
-      'address': 'Sabzazar, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Sher Shah Colony Bazaar',
-      'location': 'Lahore',
-      'address': 'Sher Shah Colony, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Thokar Niaz Baig Bazaar',
-      'location': 'Lahore',
-      'address': 'Thokar Niaz Baig, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Township Bazaar',
-      'location': 'Lahore',
-      'address': 'Township, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Wahdat Colony Bazaar',
-      'location': 'Lahore',
-      'address': 'Wahdat Colony, Lahore',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-
-    // -------------------------------------------------------------------------
-    // OTHER PUNJAB MODEL / SAHULAT BAZAARS
-    // -------------------------------------------------------------------------
-    {
-      'name': 'Bahawalpur Bazaar',
-      'location': 'Bahawalpur',
-      'address': 'Bahawalpur',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Chakwal Bazaar',
-      'location': 'Chakwal',
-      'address': 'Chakwal',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Bhera Bazaar',
-      'location': 'Sargodha',
-      'address': 'Bhera, Sargodha',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Sargodha Bazaar',
-      'location': 'Sargodha',
-      'address': 'Sargodha',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Faisalabad Jhang Road Bazaar',
-      'location': 'Faisalabad',
-      'address': 'Jhang Road, Faisalabad',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Faisalabad Millat Road Bazaar',
-      'location': 'Faisalabad',
-      'address': 'Millat Road, Faisalabad',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Gujrat Bazaar',
-      'location': 'Gujrat',
-      'address': 'Gujrat',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Gujranwala Bazaar',
-      'location': 'Gujranwala',
-      'address': 'Gujranwala',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Hafizabad Bazaar',
-      'location': 'Hafizabad',
-      'address': 'Hafizabad',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Jhang Bazaar',
-      'location': 'Jhang',
-      'address': 'Jhang',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Kasur Bazaar',
-      'location': 'Kasur',
-      'address': 'Kasur',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Jauharabad Bazaar',
-      'location': 'Khushab',
-      'address': 'Jauharabad, Khushab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Layyah Bazaar',
-      'location': 'Layyah',
-      'address': 'Layyah',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Chur Harpal Bazaar',
-      'location': 'Rawalpindi',
-      'address': 'Chur Harpal, Rawalpindi',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Lodhran Bazaar',
-      'location': 'Lodhran',
-      'address': 'Lodhran',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Jampur Bazaar',
-      'location': 'Rajanpur',
-      'address': 'Jampur, Rajanpur',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Toba Tek Singh Bazaar',
-      'location': 'Toba Tek Singh',
-      'address': 'Toba Tek Singh',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Sahiwal Bazaar',
-      'location': 'Sahiwal',
-      'address': 'Sahiwal',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'D.G. Khan Bazaar',
-      'location': 'Dera Ghazi Khan',
-      'address': 'Dera Ghazi Khan',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Farooqabad Bazaar',
-      'location': 'Sheikhupura',
-      'address': 'Farooqabad, Sheikhupura',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Sialkot Bazaar',
-      'location': 'Sialkot',
-      'address': 'Sialkot',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Vehari Bazaar',
-      'location': 'Vehari',
-      'address': 'Vehari',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Mianwali Bazaar',
-      'location': 'Mianwali',
-      'address': 'Mianwali',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Pakpattan Bazaar',
-      'location': 'Pakpattan',
-      'address': 'Pakpattan',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Bhakkar Bazaar',
-      'location': 'Bhakkar',
-      'address': 'Bhakkar',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Taunsa Shareef Bazaar',
-      'location': 'Taunsa Shareef',
-      'address': 'Taunsa Shareef',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-
-    // -------------------------------------------------------------------------
-    // ADDITIONAL SAHULAT BAZAARS
-    // -------------------------------------------------------------------------
-    {
-      'name': 'Chunian Bazaar',
-      'location': 'Chunian',
-      'address': 'Chunian, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Pattoki Bazaar',
-      'location': 'Pattoki',
-      'address': 'Pattoki, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Khanewal Bazaar',
-      'location': 'Khanewal',
-      'address': 'Khanewal, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Muzaffargarh Bazaar',
-      'location': 'Muzaffargarh',
-      'address': 'Muzaffargarh, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Wazirabad Bazaar',
-      'location': 'Wazirabad',
-      'address': 'Wazirabad, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Jaranwala Bazaar',
-      'location': 'Jaranwala',
-      'address': 'Jaranwala, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Chiniot Bazaar',
-      'location': 'Chiniot',
-      'address': 'Chiniot, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Bhalwal Bazaar',
-      'location': 'Bhalwal',
-      'address': 'Bhalwal, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-    {
-      'name': 'Okara Bazaar',
-      'location': 'Okara',
-      'address': 'Okara, Punjab',
-      'bazaarType': 'Sahulat Bazaar',
-    },
-
-    // -------------------------------------------------------------------------
-    // SAHULAT ON-THE-GO - LAHORE
-    // -------------------------------------------------------------------------
-    {
-      'name': 'Sahulat on-the-Go - Multan Road',
-      'location': 'Lahore',
-      'address': 'Multan Road, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Hanjarwal',
-      'location': 'Lahore',
-      'address': 'Hanjarwal, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Manga Mandi',
-      'location': 'Lahore',
-      'address': 'Manga Mandi, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - G-1 Market',
-      'location': 'Lahore',
-      'address': 'G-1 Market, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Faisal Town',
-      'location': 'Lahore',
-      'address': 'Faisal Town, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Moon Market',
-      'location': 'Lahore',
-      'address': 'Moon Market, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Bedian Road',
-      'location': 'Lahore',
-      'address': 'Bedian Road, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - E-Millat Road',
-      'location': 'Lahore',
-      'address': 'E-Millat Road, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Gulshan Ravi',
-      'location': 'Lahore',
-      'address': 'Gulshan Ravi, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Shahdara',
-      'location': 'Lahore',
-      'address': 'Shahdara, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Shadman',
-      'location': 'Lahore',
-      'address': 'Shadman, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Singh Pura',
-      'location': 'Lahore',
-      'address': 'Singh Pura, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Madar-e-Millat Road',
-      'location': 'Lahore',
-      'address': 'Madar-e-Millat Road, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Madina Market',
-      'location': 'Lahore',
-      'address': 'Madina Market, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Sundar Road',
-      'location': 'Lahore',
-      'address': 'Sundar Road, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Kotha Pind',
-      'location': 'Lahore',
-      'address': 'Kotha Pind, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Kharak Nala',
-      'location': 'Lahore',
-      'address': 'Kharak Nala, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Awan Town',
-      'location': 'Lahore',
-      'address': 'Awan Town, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-    {
-      'name': 'Sahulat on-the-Go - Valencia',
-      'location': 'Lahore',
-      'address': 'Valencia, Lahore',
-      'bazaarType': 'Sahulat on-the-Go',
-    },
-  ];
-
-  // ===========================================================================
   // ALL BAZAARS
   // ===========================================================================
-
-  // Master data is restored once per Super Admin session (see App), never
-  // from read streams: only a Super Admin may write Bazaars, so seeding from
-  // a stream made the whole Bazaar list fail for Admins and Users.
 
   Stream<List<BazaarModel>> getBazaars() {
     return _firestore.collection(_collection).snapshots().map(_parseBazaars);
@@ -582,12 +174,29 @@ class BazaarService {
   // CREATE BAZAAR
   // ===========================================================================
 
+  /// Creates a Bazaar with a SINGLE write, because every active role may add
+  /// a Bazaar but only a manager may update one: a create-then-update pair
+  /// would fail halfway through for a User and leave a half-configured
+  /// Bazaar behind.
+  ///
+  /// [isActive] is only ever set to false by a manager; the Add dialogs hide
+  /// the toggle for everyone else, so a Bazaar added by a User is active and
+  /// immediately usable as a transfer destination.
+  ///
+  /// [createdBy] carries a default so that adding the field did not break
+  /// every existing caller at compile time; the value is still mandatory in
+  /// practice, because the Firestore rule requires createdBy to equal the
+  /// signed-in uid and both Add dialogs refuse to write before the profile
+  /// is loaded.
   Future<String> createBazaar({
     required String name,
     String location = '',
     String contactPerson = '',
     String contactNumber = '',
     String address = '',
+    String createdBy = '',
+    String createdByName = '',
+    bool isActive = true,
   }) async {
     final cleanName = name.trim();
     final cleanLocation = location.trim();
@@ -596,34 +205,55 @@ class BazaarService {
       throw Exception('Bazaar name is required.');
     }
 
-    final alreadyExists = await bazaarExists(
-      cleanName,
-      location: cleanLocation,
-    );
+    // The 65 Bazaars already in production have random document ids, so the
+    // deterministic id below cannot detect a duplicate of any of them. Every
+    // existing name is compared with the same normalised key instead.
+    await _assertNameIsFree(cleanName, cleanLocation);
 
-    if (alreadyExists) {
-      throw Exception('A Bazaar with this name already exists.');
+    final docRef = _firestore
+        .collection(_collection)
+        .doc(_newDocumentId(cleanName));
+
+    try {
+      await _firestore.runTransaction((transaction) async {
+        // A plain set() would silently overwrite an existing Bazaar when the
+        // writer is a manager, so the target document is read first and inside
+        // the transaction, where the check cannot be raced.
+        final existing = await transaction.get(docRef);
+
+        if (existing.exists) {
+          throw Exception('A Bazaar with this name already exists.');
+        }
+
+        transaction.set(docRef, {
+          'name': cleanName,
+          'bazaarName': cleanName,
+          'location': cleanLocation,
+          'city': cleanLocation,
+          'contactPerson': contactPerson.trim(),
+          'contactNumber': contactNumber.trim(),
+          'address': address.trim(),
+          'isActive': isActive,
+          'status': isActive ? 'Active' : 'Disabled',
+          'bazaarType': 'Sahulat Bazaar',
+          'type': 'Sahulat Bazaar',
+          'createdBy': createdBy.trim(),
+          'createdByName': createdByName.trim(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'lastUpdated': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+    } on FirebaseException catch (error) {
+      // A transaction needs a live connection, while the plain set() this
+      // replaced was queued offline. The behaviour change is explained to the
+      // user instead of surfacing as a generic failure.
+      if (error.code == 'unavailable' || error.code == 'deadline-exceeded') {
+        throw Exception('You need a connection to add a Bazaar.');
+      }
+
+      rethrow;
     }
-
-    final docRef = _firestore.collection(_collection).doc();
-
-    await docRef.set({
-      'name': cleanName,
-      'bazaarName': cleanName,
-      'location': cleanLocation,
-      'city': cleanLocation,
-      'contactPerson': contactPerson.trim(),
-      'contactNumber': contactNumber.trim(),
-      'address': address.trim(),
-      'isActive': true,
-      'status': 'Active',
-      'isMaster': false,
-      'bazaarType': 'Sahulat Bazaar',
-      'type': 'Sahulat Bazaar',
-      'createdAt': FieldValue.serverTimestamp(),
-      'lastUpdated': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
 
     return docRef.id;
   }
@@ -754,7 +384,11 @@ class BazaarService {
     String location = '',
     String? excludeBazaarId,
   }) async {
-    final cleanName = _normalize(name);
+    // The same key as the create path on purpose: if an edit could rename a
+    // Bazaar to "Township-Bazaar" while a create treats that as the existing
+    // "Township Bazaar", the two paths would disagree about what a duplicate
+    // is and leave a pair of documents create then refuses forever.
+    final cleanName = bazaarNameKey(name);
     final cleanLocation = _normalize(location);
 
     if (cleanName.isEmpty) {
@@ -770,7 +404,9 @@ class BazaarService {
 
       final data = doc.data();
 
-      final existingName = _normalize(data['name'] ?? data['bazaarName']);
+      final existingName = bazaarNameKey(
+        BazaarModel._stringValue(data['name'] ?? data['bazaarName']),
+      );
 
       final existingLocation = _normalize(data['location'] ?? data['city']);
 
@@ -786,145 +422,87 @@ class BazaarService {
     });
   }
 
-  /// Number of Punjab master Bazaars defined by the application.
-  static int get masterBazaarCount => _punjabBazaarSeedData.length;
-
-  /// Deterministic document ID for a master Bazaar. Two devices restoring
-  /// the same missing master concurrently write the same document instead
-  /// of creating duplicates, and a renamed master is still recognised.
-  static String masterBazaarDocumentId(String name, String location) {
-    final slug = _bazaarKey(name, location)
-        .replaceAll(RegExp(r'[^a-z0-9|]+'), '-')
-        .replaceAll('|', '__')
-        .replaceAll(RegExp(r'-+'), '-');
-
-    return 'master__$slug';
-  }
-
   // ===========================================================================
-  // SEED / RESTORE MASTER BAZAARS
-  //
-  // IMPORTANT:
-  // This ONLY ADDS missing master bazaars.
-  //
-  // It NEVER deletes existing bazaars.
-  // It NEVER disables existing bazaars.
-  // It NEVER modifies the user's manually created bazaar.
+  // DUPLICATE NAME GUARD
   // ===========================================================================
 
-  Future<int> seedPunjabBazaars() async {
-    final collection = _firestore.collection(_collection);
+  /// Throws when any existing Bazaar carries the same normalised name key.
+  ///
+  /// The comparison ignores case, spacing and punctuation, so "Township
+  /// Bazaar", "township  bazaar" and "Township-Bazaar" are one Bazaar. When
+  /// the match sits in a different city that city is named, because two
+  /// Bazaars with one name in two cities is the case users report as a bug.
+  Future<void> _assertNameIsFree(String name, String location) async {
+    final key = bazaarNameKey(name);
 
-    final snapshot = await collection.get();
+    if (key.isEmpty) {
+      return;
+    }
 
-    debugPrint(
-      'BAZAAR DEBUG: Existing Firestore documents = '
-      '${snapshot.docs.length}',
-    );
-
-    final existingExactKeys = <String>{};
-    final existingNameKeys = <String>{};
-    final existingDocIds = snapshot.docs.map((doc) => doc.id).toSet();
+    final snapshot = await _firestore.collection(_collection).get();
 
     for (final doc in snapshot.docs) {
       final data = doc.data();
 
-      final existingName = _normalize(data['name'] ?? data['bazaarName']);
+      final existingName = BazaarModel._stringValue(
+        data['name'] ?? data['bazaarName'],
+      );
 
-      final existingLocation = _normalize(data['location'] ?? data['city']);
-
-      if (existingName.isEmpty) {
+      if (bazaarNameKey(existingName) != key) {
         continue;
       }
 
-      existingExactKeys.add(_bazaarKey(existingName, existingLocation));
+      final existingLocation = BazaarModel._stringValue(
+        data['location'] ?? data['city'],
+      );
 
-      existingNameKeys.add(existingName);
-    }
-
-    final missingBazaars = <Map<String, String>>[];
-
-    for (final seed in _punjabBazaarSeedData) {
-      final name = (seed['name'] ?? '').trim();
-      final location = (seed['location'] ?? '').trim();
-
-      if (name.isEmpty) {
-        continue;
+      if (existingLocation.isNotEmpty &&
+          _normalize(existingLocation) != _normalize(location)) {
+        throw Exception(
+          'A Bazaar named "$existingName" already exists in $existingLocation.',
+        );
       }
 
-      final normalizedName = _normalize(name);
-      final normalizedLocation = _normalize(location);
+      throw Exception('A Bazaar with this name already exists.');
+    }
+  }
 
-      final exactKey = _bazaarKey(normalizedName, normalizedLocation);
+  // ===========================================================================
+  // DETERMINISTIC DOCUMENT ID
+  // ===========================================================================
 
-      // Name-only matching is intentional.
-      //
-      // If the user already has the same Bazaar in Firestore,
-      // do not create another copy just because its city/address
-      // was entered differently.
-      if (existingExactKeys.contains(exactKey) ||
-          existingNameKeys.contains(normalizedName) ||
-          existingDocIds.contains(masterBazaarDocumentId(name, location))) {
-        continue;
-      }
+  /// Comparison key for a Bazaar name: lower case, punctuation dropped and
+  /// spaces collapsed to a single '_'.
+  ///
+  /// Punctuation becomes a separator rather than being deleted outright, so
+  /// "Township-Bazaar" and "Township Bazaar" share one key. Deleting it would
+  /// key them differently and let the same Bazaar be added twice.
+  static String bazaarNameKey(String name) {
+    final cleaned = name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
 
-      missingBazaars.add(seed);
+    return cleaned.replaceAll(' ', '_');
+  }
 
-      existingExactKeys.add(exactKey);
-      existingNameKeys.add(normalizedName);
+  /// Document id for a NEW Bazaar. It is derived from the name so the same
+  /// name can never be created twice, not even by two devices at once.
+  ///
+  /// Only new documents use it: the existing production Bazaars keep their
+  /// random ids, which every movement record already points at.
+  String _newDocumentId(String name) {
+    final key = bazaarNameKey(name);
+
+    // A name written entirely in a non-Latin script normalises to an empty
+    // key; such a Bazaar gets a random id and relies on the name check above.
+    if (key.isEmpty) {
+      return _firestore.collection(_collection).doc().id;
     }
 
-    debugPrint(
-      'BAZAAR DEBUG: Master records in code = '
-      '${_punjabBazaarSeedData.length}',
-    );
-
-    debugPrint(
-      'BAZAAR DEBUG: Missing master bazaars = '
-      '${missingBazaars.length}',
-    );
-
-    if (missingBazaars.isEmpty) {
-      return 0;
-    }
-
-    final batch = _firestore.batch();
-
-    for (final seed in missingBazaars) {
-      final name = (seed['name'] ?? '').trim();
-      final location = (seed['location'] ?? '').trim();
-      final address = (seed['address'] ?? '').trim();
-      final bazaarType = (seed['bazaarType'] ?? 'Sahulat Bazaar').trim();
-
-      final docRef = collection.doc(masterBazaarDocumentId(name, location));
-
-      batch.set(docRef, {
-        'name': name,
-        'bazaarName': name,
-        'location': location,
-        'city': location,
-        'contactPerson': '',
-        'contactNumber': '',
-        'address': address,
-        'isActive': true,
-        'status': 'Active',
-        'isMaster': true,
-        'bazaarType': bazaarType,
-        'type': bazaarType,
-        'createdAt': FieldValue.serverTimestamp(),
-        'lastUpdated': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    }
-
-    await batch.commit();
-
-    debugPrint(
-      'BAZAAR DEBUG: Successfully restored '
-      '${missingBazaars.length} missing master bazaars.',
-    );
-
-    return missingBazaars.length;
+    // Firestore allows 1500 bytes per document id, but a readable id is
+    // capped well below that.
+    return 'bz_${key.length > 90 ? key.substring(0, 90) : key}';
   }
 
   // ===========================================================================
@@ -943,19 +521,14 @@ class BazaarService {
         final bazaar = BazaarModel.fromFirestore(data, doc.id);
 
         if (bazaar.name.trim().isEmpty) {
-          debugPrint(
-            'BAZAAR DEBUG: Ignoring empty-name document: '
-            '${doc.id}',
-          );
           continue;
         }
 
         bazaars.add(bazaar);
-      } catch (e) {
-        debugPrint(
-          'BAZAAR DEBUG: Failed to parse Bazaar '
-          '${doc.id}: $e',
-        );
+      } catch (_) {
+        // A single malformed document must not take the whole Bazaar list
+        // down: it is skipped so every other Bazaar still reaches the UI.
+        continue;
       }
     }
     bazaars.sort(_compareBazaars);
@@ -990,11 +563,5 @@ class BazaarService {
       ' ',
     );
   }
-  // ===========================================================================
-  // BAZAAR KEY
-  // ===========================================================================
-  static String _bazaarKey(String name, String location) {
-    return '${_normalize(name)}|${_normalize(location)}';
-  }
-   }  
+   }
    

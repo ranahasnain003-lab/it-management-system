@@ -142,7 +142,10 @@ class _WebShellState extends State<WebShell> {
           Expanded(
             child: Column(
               children: [
-                _TopBar(showMenuButton: !wide && !medium, location: widget.location),
+                _TopBar(
+                  showMenuButton: !wide && !medium,
+                  location: widget.location,
+                ),
                 Expanded(
                   child: ColoredBox(
                     color: Theme.of(context).scaffoldBackgroundColor,
@@ -189,7 +192,9 @@ class _ProfileGate extends StatelessWidget {
       );
     }
 
-    return const Center(child: WebLoadingState(message: 'Loading your workspace...'));
+    return const Center(
+      child: WebLoadingState(message: 'Loading your workspace...'),
+    );
   }
 }
 
@@ -231,35 +236,43 @@ class _Sidebar extends StatelessWidget {
     for (final item in webNavigation) {
       if (!item.isVisible(users)) continue;
 
-      final visibleChildren = item.children.where((c) => c.isVisible(users)).toList();
+      final visibleChildren = item.children
+          .where((c) => c.isVisible(users))
+          .toList();
 
       if (item.children.isNotEmpty && visibleChildren.isEmpty) continue;
 
       if (item.children.isEmpty) {
-        entries.add(_NavTile(
-          item: item,
-          depth: 0,
-          collapsed: collapsed,
-          selected: _isSelected(item.path!),
-          onTap: () => onNavigate(item.path!),
-        ));
+        entries.add(
+          _NavTile(
+            item: item,
+            depth: 0,
+            collapsed: collapsed,
+            selected: _isSelected(item.path!),
+            onTap: () => onNavigate(item.path!),
+          ),
+        );
         continue;
       }
 
       if (collapsed) {
         // Collapsed rail: children are shown directly as icons.
-        entries.add(Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 18),
-          child: Divider(height: 1, color: colors.outlineVariant),
-        ));
+        entries.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 18),
+            child: Divider(height: 1, color: colors.outlineVariant),
+          ),
+        );
         for (final child in visibleChildren) {
-          entries.add(_NavTile(
-            item: child,
-            depth: 0,
-            collapsed: true,
-            selected: _isSelected(child.path!),
-            onTap: () => onNavigate(child.path!),
-          ));
+          entries.add(
+            _NavTile(
+              item: child,
+              depth: 0,
+              collapsed: true,
+              selected: _isSelected(child.path!),
+              onTap: () => onNavigate(child.path!),
+            ),
+          );
         }
         continue;
       }
@@ -272,15 +285,24 @@ class _Sidebar extends StatelessWidget {
           padding: const EdgeInsets.only(top: 2),
           child: InkWell(
             borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+            // Expanding and collapsing a group is a pointer action, so it gets
+            // the same hover cue as the entries inside it.
+            hoverColor: colors.onSurface.withValues(alpha: 0.04),
             onTap: () => onToggleGroup(item.label),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Container(
+              // A group header is tapped as often as the entries under it, so
+              // it gets the same 44px target rather than the 38px its padding
+              // used to produce.
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(
                 children: [
                   Icon(
                     item.icon,
                     size: 20,
-                    color: hasSelectedChild ? colors.primary : colors.onSurfaceVariant,
+                    color: hasSelectedChild
+                        ? colors.primary
+                        : colors.onSurfaceVariant,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -291,14 +313,20 @@ class _Sidebar extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: hasSelectedChild ? colors.onSurface : colors.onSurfaceVariant,
+                        color: hasSelectedChild
+                            ? colors.onSurface
+                            : colors.onSurfaceVariant,
                       ),
                     ),
                   ),
                   AnimatedRotation(
                     turns: expanded ? 0.5 : 0,
                     duration: const Duration(milliseconds: 150),
-                    child: Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: colors.onSurfaceVariant),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 18,
+                      color: colors.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -313,7 +341,9 @@ class _Sidebar extends StatelessWidget {
             margin: const EdgeInsets.only(left: 21, top: 2, bottom: 4),
             padding: const EdgeInsets.only(left: 8),
             decoration: BoxDecoration(
-              border: Border(left: BorderSide(color: colors.outlineVariant, width: 1.5)),
+              border: Border(
+                left: BorderSide(color: colors.outlineVariant, width: 1.5),
+              ),
             ),
             child: Column(
               children: [
@@ -345,25 +375,28 @@ class _Sidebar extends StatelessWidget {
               // A short, fixed menu: built eagerly (not lazily) so every
               // permitted entry always exists, even when scrolled off-screen.
               child: SingleChildScrollView(
-                padding: EdgeInsets.symmetric(vertical: 10, horizontal: collapsed ? 10 : 12),
+                padding: EdgeInsets.symmetric(
+                  vertical: 10,
+                  horizontal: collapsed ? 10 : 12,
+                ),
                 child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (!collapsed)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                      child: Text(
-                        'MENU',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.1,
-                          color: colors.onSurfaceVariant,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!collapsed)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                        child: Text(
+                          'MENU',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.1,
+                            color: colors.onSurfaceVariant,
+                          ),
                         ),
                       ),
-                    ),
-                  ...entries,
-                ],
+                    ...entries,
+                  ],
                 ),
               ),
             ),
@@ -393,7 +426,9 @@ class _Brand extends StatelessWidget {
         border: Border(bottom: BorderSide(color: colors.outlineVariant)),
       ),
       child: Row(
-        mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+        mainAxisAlignment: collapsed
+            ? MainAxisAlignment.center
+            : MainAxisAlignment.start,
         children: [
           Container(
             width: 38,
@@ -402,7 +437,9 @@ class _Brand extends StatelessWidget {
               borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.18),
+                  // The theme's own shadow colour, so the mark does not carry
+                  // a hard black edge of its own in either theme.
+                  color: colors.shadow.withValues(alpha: 0.18),
                   blurRadius: 10,
                   offset: const Offset(0, 3),
                 ),
@@ -440,7 +477,10 @@ class _Brand extends StatelessWidget {
                     'Asset Management',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 11.5, color: colors.onSurfaceVariant),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: colors.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -473,7 +513,9 @@ class _NavTile extends StatelessWidget {
     final colors = theme.colorScheme;
 
     final foreground = selected ? colors.primary : colors.onSurfaceVariant;
-    final background = selected ? AppColors.tint(colors.primary, theme.brightness) : Colors.transparent;
+    final background = selected
+        ? AppColors.tint(colors.primary, theme.brightness)
+        : Colors.transparent;
 
     final tile = Padding(
       padding: const EdgeInsets.symmetric(vertical: 1.5),
@@ -482,15 +524,25 @@ class _NavTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
         child: InkWell(
           borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+          // Web has a pointer: without a hover colour the sidebar gives no
+          // sign that a row is clickable until it is already clicked.
+          hoverColor: colors.onSurface.withValues(alpha: 0.04),
           onTap: onTap,
           child: SizedBox(
-            height: depth == 0 ? 40 : 36,
+            // Both levels get the same 44px target - a nested entry used to be
+            // 36px, which is a small thing to hit precisely. The depth is
+            // still read from the indent, the icon and the type size.
+            height: 44,
             child: collapsed
                 ? Center(child: Icon(item.icon, size: 22, color: foreground))
                 : Row(
                     children: [
                       SizedBox(width: depth == 0 ? 12 : 10),
-                      Icon(item.icon, size: depth == 0 ? 20 : 18, color: foreground),
+                      Icon(
+                        item.icon,
+                        size: depth == 0 ? 20 : 18,
+                        color: foreground,
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
@@ -499,7 +551,9 @@ class _NavTile extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: depth == 0 ? 14 : 13.5,
-                            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                            fontWeight: selected
+                                ? FontWeight.w700
+                                : FontWeight.w500,
                             color: selected ? colors.primary : colors.onSurface,
                           ),
                         ),
@@ -509,7 +563,10 @@ class _NavTile extends StatelessWidget {
                           width: 6,
                           height: 6,
                           margin: const EdgeInsets.only(right: 12),
-                          decoration: BoxDecoration(color: colors.primary, shape: BoxShape.circle),
+                          decoration: BoxDecoration(
+                            color: colors.primary,
+                            shape: BoxShape.circle,
+                          ),
                         ),
                     ],
                   ),
@@ -531,7 +588,9 @@ class _AccountSummary extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final profile = users.currentUserProfile;
-    final name = profile?.name.trim().isNotEmpty == true ? profile!.name.trim() : (profile?.email ?? '');
+    final name = profile?.name.trim().isNotEmpty == true
+        ? profile!.name.trim()
+        : (profile?.email ?? '');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -547,13 +606,20 @@ class _AccountSummary extends StatelessWidget {
                   profile?.email ?? '',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: colors.onSurface),
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: colors.onSurface,
+                  ),
                 ),
                 Text(
                   PermissionService.roleLabel(users.currentUserRole),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11.5, color: colors.onSurfaceVariant),
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: colors.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -600,14 +666,27 @@ class _LogoutTile extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
 
     final tile = Padding(
-      padding: EdgeInsets.fromLTRB(collapsed ? 10 : 12, 4, collapsed ? 10 : 12, 12),
+      padding: EdgeInsets.fromLTRB(
+        collapsed ? 10 : 12,
+        4,
+        collapsed ? 10 : 12,
+        12,
+      ),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+        hoverColor: colors.error.withValues(alpha: 0.06),
         onTap: () => webLogout(context),
         child: SizedBox(
-          height: 42,
+          // Matching the navigation rows above, so the rail reads as one list.
+          height: 44,
           child: collapsed
-              ? Center(child: Icon(Icons.logout_rounded, size: 21, color: colors.error))
+              ? Center(
+                  child: Icon(
+                    Icons.logout_rounded,
+                    size: 21,
+                    color: colors.error,
+                  ),
+                )
               : Row(
                   children: [
                     const SizedBox(width: 12),
@@ -615,7 +694,11 @@ class _LogoutTile extends StatelessWidget {
                     const SizedBox(width: 12),
                     Text(
                       'Logout',
-                      style: TextStyle(color: colors.error, fontWeight: FontWeight.w600, fontSize: 14),
+                      style: TextStyle(
+                        color: colors.error,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
                     ),
                   ],
                 ),
@@ -666,7 +749,9 @@ class _TopBar extends StatelessWidget {
     final profile = users.currentUserProfile;
     final wideBar = MediaQuery.sizeOf(context).width >= 700;
 
-    final name = profile?.name.trim().isNotEmpty == true ? profile!.name.trim() : (profile?.email ?? '');
+    final name = profile?.name.trim().isNotEmpty == true
+        ? profile!.name.trim()
+        : (profile?.email ?? '');
     final role = PermissionService.roleLabel(users.currentUserRole);
     final (group, page) = _titleFor(location);
 
@@ -697,7 +782,11 @@ class _TopBar extends StatelessWidget {
                       group,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: colors.onSurfaceVariant),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: colors.onSurfaceVariant,
+                      ),
                     ),
                   Text(
                     page,
@@ -748,8 +837,20 @@ class _TopBar extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(name, style: TextStyle(fontWeight: FontWeight.w700, color: colors.onSurface)),
-                            Text(profile?.email ?? '', style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant)),
+                            Text(
+                              name,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: colors.onSurface,
+                              ),
+                            ),
+                            Text(
+                              profile?.email ?? '',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -759,11 +860,23 @@ class _TopBar extends StatelessWidget {
                 const PopupMenuDivider(),
                 const PopupMenuItem(
                   value: 'settings',
-                  child: Row(children: [Icon(Icons.settings_outlined, size: 19), SizedBox(width: 10), Text('Settings & Profile')]),
+                  child: Row(
+                    children: [
+                      Icon(Icons.settings_outlined, size: 19),
+                      SizedBox(width: 10),
+                      Text('Settings & Profile'),
+                    ],
+                  ),
                 ),
                 const PopupMenuItem(
                   value: 'logout',
-                  child: Row(children: [Icon(Icons.logout_rounded, size: 19), SizedBox(width: 10), Text('Logout')]),
+                  child: Row(
+                    children: [
+                      Icon(Icons.logout_rounded, size: 19),
+                      SizedBox(width: 10),
+                      Text('Logout'),
+                    ],
+                  ),
                 ),
               ],
               child: Container(
@@ -784,13 +897,34 @@ class _TopBar extends StatelessWidget {
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: colors.onSurface)),
-                            Text(role, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.5, color: colors.onSurfaceVariant)),
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                                color: colors.onSurface,
+                              ),
+                            ),
+                            Text(
+                              role,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: colors.onSurfaceVariant,
+                              ),
+                            ),
                           ],
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: colors.onSurfaceVariant),
+                      Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 18,
+                        color: colors.onSurfaceVariant,
+                      ),
                     ],
                   ],
                 ),
@@ -812,7 +946,13 @@ class _TopBar extends StatelessWidget {
       }
     }
 
-    if (location.startsWith('/import-assets')) return ('Inventory', 'Import Assets');
+    if (location.startsWith('/import-assets')) {
+      return ('Inventory', 'Import Assets');
+    }
+
+    if (location.startsWith('/ai-assistant/settings')) {
+      return ('AI Assistant', 'AI Assistant server');
+    }
 
     return (null, 'PSBA IT Inventory');
   }

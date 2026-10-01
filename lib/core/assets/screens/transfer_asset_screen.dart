@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../models/asset_model.dart';
+import '../../providers/bazaar_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/bazaar_service.dart';
 import '../../services/deployment_service.dart';
@@ -47,11 +48,8 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
   String? _selectedDestinationId;
   String? _selectedDestinationName;
 
-  bool _isLoadingBazaars = true;
   bool _isLoadingSources = false;
   bool _isTransferring = false;
-
-  List<Map<String, String>> _bazaars = <Map<String, String>>[];
 
   List<_LocationStock> _sources = <_LocationStock>[];
 
@@ -74,7 +72,17 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _loadBazaars();
+
+      // The Bazaar list comes from the shared live stream, so a Bazaar added
+      // from any screen (or by another user) appears in the Destination
+      // dropdown without reopening this screen.
+      context.read<BazaarProvider>().listenToBazaars();
+
+      final assetDocumentId = _selectedAssetDocumentId;
+
+      if (assetDocumentId != null) {
+        _loadSourcesForAsset(assetDocumentId);
+      }
     });
   }
 
@@ -118,93 +126,6 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
     }
 
     return FirebaseAuth.instance.currentUser?.email ?? '';
-  }
-
-  // ===========================================================================
-  // LOAD ACTIVE BAZAARS
-  // ===========================================================================
-
-  Future<void> _loadBazaars() async {
-    if (mounted) {
-      setState(() {
-        _isLoadingBazaars = true;
-      });
-    }
-
-    try {
-      /*
-       * Bazaar Master uses `isActive` as the source of truth.
-       *
-       * Only active bazaars are allowed as transfer destinations.
-       */
-      // All Bazaars are read and filtered with the shared BazaarModel status
-      // logic, so legacy documents that only carry `status: 'Active'` are not
-      // wrongly excluded and disabled Bazaars never appear.
-      final snapshot = await FirebaseFirestore.instance
-          .collection('bazaars')
-          .get();
-
-      final bazaars = <Map<String, String>>[];
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-
-        if (!BazaarModel.fromFirestore(data, doc.id).isActive) {
-          continue;
-        }
-
-        final name = (data['name'] ?? data['bazaarName'] ?? '')
-            .toString()
-            .trim();
-
-        if (name.isEmpty) {
-          continue;
-        }
-
-        final city = (data['city'] ?? data['location'] ?? '').toString().trim();
-
-        bazaars.add(<String, String>{'id': doc.id, 'name': name, 'city': city});
-      }
-
-      bazaars.sort(
-        (a, b) => (a['name'] ?? '').toLowerCase().compareTo(
-          (b['name'] ?? '').toLowerCase(),
-        ),
-      );
-
-      if (!mounted) return;
-
-      setState(() {
-        _bazaars = bazaars;
-        _isLoadingBazaars = false;
-
-        /*
-         * If the currently selected destination was disabled while
-         * this screen was open, clear it.
-         */
-        if (_selectedDestinationId != null &&
-            _selectedDestinationId!.trim().isNotEmpty &&
-            !_bazaars.any((bazaar) => bazaar['id'] == _selectedDestinationId)) {
-          _selectedDestinationId = null;
-          _selectedDestinationName = null;
-        }
-      });
-
-      if (_selectedAssetDocumentId != null) {
-        await _loadSourcesForAsset(_selectedAssetDocumentId!);
-      }
-    } catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        _isLoadingBazaars = false;
-      });
-
-      _showMessage(
-        'Unable to load Bazaars: ${_cleanErrorMessage(e)}',
-        isError: true,
-      );
-    }
   }
 
   // ===========================================================================
@@ -485,6 +406,10 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
     if (!destinationIsHeadOffice) {
       final destinationIsActive = await _verifyDestinationBazaarIsActive();
 
+      // The screen can be popped while that read is in flight, and both the
+      // message and the setState below would then run on a dead State.
+      if (!mounted) return;
+
       if (!destinationIsActive) {
         _showMessage(
           'The selected Bazaar is no longer active. '
@@ -492,7 +417,12 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
           isError: true,
         );
 
-        await _loadBazaars();
+        // The live stream drops the disabled Bazaar on its own; only the
+        // stale selection has to be cleared here.
+        setState(() {
+          _selectedDestinationId = null;
+          _selectedDestinationName = null;
+        });
         return;
       }
     }
@@ -1421,7 +1351,11 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
       );
     }
 
-    if (_isLoadingBazaars) {
+    // Watched, not fetched once: a Bazaar added while this screen is open
+    // shows up in the list immediately.
+    final bazaarProvider = context.watch<BazaarProvider>();
+
+    if (bazaarProvider.isLoading && bazaarProvider.bazaars.isEmpty) {
       return InputDecorator(
         decoration: InputDecoration(
           labelText: 'Destination *',
@@ -1437,6 +1371,31 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
             SizedBox(width: 12),
             Text('Loading active locations...'),
           ],
+        ),
+      );
+    }
+
+    final bazaarError = bazaarProvider.errorMessage;
+
+    // A refused or failed Bazaar stream leaves the list empty, which would
+    // otherwise look exactly like "Head Office is the only destination".
+    // The reason is shown instead, with a way to start the stream again.
+    if (bazaarError != null && bazaarProvider.bazaars.isEmpty) {
+      return InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Destination *',
+          prefixIcon: const Icon(Icons.location_on_outlined),
+          errorText: bazaarError,
+        ),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => context.read<BazaarProvider>().listenToBazaars(
+              forceRestart: true,
+            ),
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Retry'),
+          ),
         ),
       );
     }
@@ -1457,12 +1416,14 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
      * Only active Bazaars loaded from Bazaar Master
      * are added as possible destinations.
      */
-    for (final bazaar in _bazaars) {
-      final id = bazaar['id']?.trim() ?? '';
+    for (final bazaar in bazaarProvider.activeBazaars) {
+      final id = bazaar.id.trim();
 
-      final name = bazaar['name']?.trim() ?? '';
+      final name = bazaar.name.trim();
 
-      final city = bazaar['city']?.trim() ?? '';
+      // BazaarModel reads `location` and the legacy `city` field both ways
+      // round, so the oldest production Bazaar still shows its city here.
+      final city = bazaar.location.trim();
 
       if (id.isEmpty || name.isEmpty) {
         continue;

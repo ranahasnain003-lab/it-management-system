@@ -23,7 +23,7 @@ class UserService {
   /// Soft-deleted accounts are kept (so a leftover Firebase Auth account can
   /// never re-register itself through public signup) but hidden from lists.
   static bool _isDeletedStatus(UserModel user) {
-    return user.status.trim().toLowerCase() == 'deleted';
+    return PermissionService.normalizeStatus(user.status) == 'deleted';
   }
 
   Stream<List<UserModel>> getUsers() {
@@ -485,8 +485,14 @@ class UserService {
         throw Exception('The selected Admin account could not be found.');
       }
 
-      if (!selectedAdmin.isAdmin) {
-        throw Exception('The selected account is not an Admin.');
+      // The rules accept a User whose createdBy is an active Admin OR the
+      // acting Super Admin itself, so a Super Admin may keep the new User
+      // under its own name instead of having to pick an Admin.
+      if (!_canOwnUsers(selectedAdmin, actingUid: cleanSuperAdminUid)) {
+        throw Exception(
+          'The selected account cannot own Users. Choose an active Admin '
+          '(or your own Super Admin account).',
+        );
       }
 
       if (!selectedAdmin.isActive) {
@@ -548,10 +554,13 @@ class UserService {
   // ASSIGN EXISTING USER TO ADMIN
   // ============================================================
 
+  /// [actingUid] is the account performing the change. It is needed because a
+  /// Super Admin may also own Users, but only its own account qualifies.
   Future<void> assignUserToAdmin({
     required String userUid,
     required String adminUid,
     String? adminName,
+    String? actingUid,
   }) async {
     final cleanUserUid = userUid.trim();
     final cleanAdminUid = adminUid.trim();
@@ -577,12 +586,14 @@ class UserService {
 
     final admin = await getUserById(cleanAdminUid);
 
-    if (admin == null || !admin.isAdmin) {
-      throw Exception('The selected account is not an Admin.');
+    // A Super Admin may be a User's owner too: the rules let a Super Admin
+    // be the createdBy of a User, and only a Super Admin reaches this method.
+    if (admin == null || !_canOwnUsers(admin, actingUid: actingUid)) {
+      throw Exception('The selected account is not an Admin or Super Admin.');
     }
 
     if (!admin.isActive) {
-      throw Exception('The selected Admin account is not active.');
+      throw Exception('The selected account is not active.');
     }
 
     final data = <String, dynamic>{
@@ -672,35 +683,19 @@ class UserService {
       final currentData = currentSnapshot.data()!;
       final targetData = targetSnapshot.data()!;
 
-      final currentRole = PermissionService.normalizeRole(
-        (currentData['role'] ?? '').toString(),
-      );
-
-      final targetRole = PermissionService.normalizeRole(
-        (targetData['role'] ?? '').toString(),
-      );
-
-      if (!PermissionService.isSuperAdmin(currentRole)) {
+      if (!PermissionService.isSuperAdmin(_roleOf(currentData))) {
         throw Exception(
           'Only the current Super Admin can transfer Super Admin ownership.',
         );
       }
 
-      if (targetRole != 'admin') {
+      if (!PermissionService.isAdmin(_roleOf(targetData))) {
         throw Exception(
           'Super Admin can only be transferred to an existing Admin account.',
         );
       }
 
-      final targetStatus = (targetData['status'] ?? '')
-          .toString()
-          .trim()
-          .toLowerCase();
-
-      final targetIsActive =
-          targetStatus == 'active' || targetStatus == 'approved';
-
-      if (!targetIsActive) {
+      if (!_isActiveStatusValue(targetData['status'])) {
         throw Exception(
           'The selected Admin account must be active before becoming Super Admin.',
         );
@@ -774,17 +769,18 @@ class UserService {
       final targetData = targetSnapshot.data();
 
       if (actorData == null ||
-          !PermissionService.isSuperAdmin(
-            PermissionService.normalizeRole('${actorData['role'] ?? ''}'),
-          )) {
-        throw Exception('Only a Super Admin can appoint another Super Admin.');
+          !PermissionService.isSuperAdmin(_roleOf(actorData)) ||
+          !_isActiveStatusValue(actorData['status'])) {
+        throw Exception(
+          'Only an active Super Admin can appoint another Super Admin.',
+        );
       }
 
       if (targetData == null) {
         throw Exception('The selected account could not be found.');
       }
 
-      if ('${targetData['role'] ?? ''}'.trim() != 'admin') {
+      if (!PermissionService.isAdmin(_roleOf(targetData))) {
         throw Exception(
           'Only an existing Admin account can become Super Admin. '
           'Make the account an Admin first.',
@@ -848,7 +844,7 @@ class UserService {
       final targetData = targetSnapshot.data();
 
       if (actorData == null ||
-          '${actorData['role'] ?? ''}'.trim() != 'super_admin' ||
+          !PermissionService.isSuperAdmin(_roleOf(actorData)) ||
           !_isActiveStatusValue(actorData['status'])) {
         throw Exception('Only an active Super Admin can remove a Super Admin.');
       }
@@ -857,7 +853,7 @@ class UserService {
         throw Exception('The selected account could not be found.');
       }
 
-      if ('${targetData['role'] ?? ''}'.trim() != 'super_admin') {
+      if (!PermissionService.isSuperAdmin(_roleOf(targetData))) {
         throw Exception('The selected account is not a Super Admin.');
       }
 
@@ -884,8 +880,33 @@ class UserService {
   }
 
   static bool _isActiveStatusValue(Object? status) {
-    final value = '${status ?? ''}'.trim().toLowerCase();
-    return value == 'active' || value == 'approved';
+    return PermissionService.isActiveStatus('${status ?? ''}');
+  }
+
+  /// The stored role of a raw profile document, read the way the Firestore
+  /// rules read it (`roleOf`): trimmed and lower-cased. A transaction compares
+  /// against this instead of the raw string, so a profile saved by hand as
+  /// 'Admin' is not silently treated as an unknown role by the app while the
+  /// rules accept it.
+  static String _roleOf(Map<String, dynamic> data) {
+    return PermissionService.normalizeRole('${data['role'] ?? ''}');
+  }
+
+  /// Whether [account] may be the `createdBy` owner of a User account.
+  ///
+  /// An active Admin always may. The acting Super Admin may own Users too -
+  /// the rules accept `createdBy == request.auth.uid` from a Super Admin -
+  /// but another Super Admin's account is not offered as an owner, because
+  /// that write would be refused.
+  static bool _canOwnUsers(UserModel account, {String? actingUid}) {
+    if (account.isAdmin) {
+      return true;
+    }
+
+    return account.isSuperAdmin &&
+        actingUid != null &&
+        actingUid.trim().isNotEmpty &&
+        account.uid.trim() == actingUid.trim();
   }
 
   static String _displayName(Map<String, dynamic> data) {
@@ -1020,12 +1041,18 @@ class UserService {
 
       final admin = await getUserById(adminId);
 
-      if (admin == null || !admin.isAdmin) {
-        throw Exception('The selected account is not an Admin.');
+      // An active Admin, or the Super Admin doing the update: both are
+      // accepted as a User's owner by the rules.
+      if (admin == null ||
+          !_canOwnUsers(
+            admin,
+            actingUid: FirebaseAuth.instance.currentUser?.uid,
+          )) {
+        throw Exception('The selected account cannot own Users.');
       }
 
       if (!admin.isActive) {
-        throw Exception('The selected Admin account is not active.');
+        throw Exception('The selected account is not active.');
       }
 
       updateData['createdBy'] = admin.uid;
@@ -1191,6 +1218,10 @@ class UserService {
     'disabled': 'disabled',
     'blocked': 'blocked',
     'deleted': 'deleted',
+
+    // Listed so this repair pass can never admit a self-registered account:
+    // only a Super Admin (or the managing Admin) activates a pending one.
+    'pending': 'pending',
   };
 
   Future<int> standardizeLegacyProfiles() async {
@@ -1201,7 +1232,7 @@ class UserService {
       final data = doc.data();
       final storedRole = '${data['role'] ?? ''}'.trim();
 
-      if (storedRole == 'super_admin') {
+      if (PermissionService.isSuperAdmin(storedRole)) {
         continue;
       }
 
@@ -1250,9 +1281,29 @@ class UserService {
   // CHANGE USER STATUS
   // ============================================================
 
+  /// Admits a self-registered account.
+  ///
+  /// Writes ONLY status + updatedAt: the ADMIN UPDATE rule accepts a
+  /// 'pending' -> 'active' change on that key set alone, so an Admin can admit
+  /// the Users it manages. Any wider write would be refused for an Admin.
+  Future<void> activateUser(String uid) async {
+    final cleanUid = uid.trim();
+
+    if (cleanUid.isEmpty) {
+      throw ArgumentError('User UID is required.');
+    }
+
+    await _userCollection.doc(cleanUid).update({
+      'status': 'active',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
   Future<void> changeUserStatus(String uid, String status) async {
     final cleanUid = uid.trim();
-    final cleanStatus = status.trim().toLowerCase();
+
+    // Stored in the canonical form the rules compare against.
+    final cleanStatus = PermissionService.normalizeStatus(status);
 
     if (cleanUid.isEmpty) {
       throw ArgumentError('User UID is required.');
@@ -1385,10 +1436,7 @@ class UserService {
         continue;
       }
 
-      if (item == 'user' ||
-          item == 'employee' ||
-          item == 'normal_user' ||
-          item == 'normal user') {
+      if (item == 'user') {
         if (!uniqueRoles.contains('user')) {
           uniqueRoles.add('user');
         }

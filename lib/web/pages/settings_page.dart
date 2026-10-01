@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/providers/theme_provider.dart';
@@ -339,6 +340,32 @@ class _WebSettingsPageState extends State<WebSettingsPage> {
       ),
     );
 
+    // Everyone can open it: the page shows the connection read-only, and only
+    // Admin / Super Admin can change where questions are sent.
+    final aiAssistant = WebSection(
+      title: 'AI Assistant',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          subheading(
+            'AI Assistant server',
+            helper: users.isSuperAdmin || users.isAdmin
+                ? 'The laptop that runs the private AI Assistant: its address, API key and certificate.'
+                : 'Connection status of the private AI Assistant.',
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: () => context.go('/ai-assistant/settings'),
+              icon: const Icon(Icons.smart_toy_outlined),
+              label: const Text('Open AI Assistant server settings'),
+            ),
+          ),
+        ],
+      ),
+    );
+
     return WebPage(
       title: 'Settings',
       children: [
@@ -346,14 +373,26 @@ class _WebSettingsPageState extends State<WebSettingsPage> {
           builder: (context, c) => c.maxWidth < 1000
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [profileCard, const SizedBox(height: AppSpacing.lg), preferences],
+                  children: [
+                    profileCard,
+                    const SizedBox(height: AppSpacing.lg),
+                    preferences,
+                    const SizedBox(height: AppSpacing.lg),
+                    aiAssistant,
+                  ],
                 )
               : Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(flex: 3, child: profileCard),
                     const SizedBox(width: AppSpacing.lg),
-                    Expanded(flex: 2, child: preferences),
+                    Expanded(
+                      flex: 2,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [preferences, const SizedBox(height: AppSpacing.lg), aiAssistant],
+                      ),
+                    ),
                   ],
                 ),
         ),

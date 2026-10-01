@@ -361,3 +361,106 @@ test('an invented action is stripped before it ever reaches the app', async () =
   assert.equal(response.status, 200);
   assert.equal((await response.json()).intent, null);
 });
+
+// ===========================================================================
+// WHAT GEMINI'S OWN REFUSALS ARE REPORTED AS
+// ===========================================================================
+//
+// Every upstream failure used to come back as "The assistant could not be
+// reached", which sends whoever is looking at it hunting for a network fault.
+// The three that are NOT network faults now say what they are. This matters:
+// the free tier's daily allowance is counted per model (measured at 20/day for
+// gemini-3.6-flash), so a working deployment really does start answering 429.
+
+/** Makes Gemini refuse with [status] instead of answering. */
+function stubGeminiStatus(status, body = {}) {
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+
+    if (target === ID_TOKEN_JWKS) return { ok: true, json: async () => jwks };
+
+    if (target.includes('generativelanguage.googleapis.com')) {
+      return {
+        ok: false,
+        status,
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+      };
+    }
+
+    throw new Error(`unexpected fetch to ${target}`);
+  };
+}
+
+test("Gemini's rate limit is reported as a quota notice, not as an outage", async () => {
+  try {
+    stubGeminiStatus(429, {
+      error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'quota' },
+    });
+
+    const response = await post(goodBody());
+    const body = await response.json();
+
+    assert.equal(response.status, 429);
+    assert.equal(body.error.code, 'resource-exhausted');
+    // The app turns exactly this code into its "try again shortly" note.
+    assert.match(body.error.message, /wait a minute|try again/i);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a rejected API key is reported as a configuration problem', async () => {
+  try {
+    stubGeminiStatus(400, {
+      error: { code: 400, message: 'API key not valid. Please pass a valid API key.' },
+    });
+
+    const response = await post(goodBody());
+    const body = await response.json();
+
+    assert.equal(response.status, 503);
+    assert.match(body.error.message, /Gemini API key/i);
+    // It must NOT read as a passing network problem.
+    assert.doesNotMatch(body.error.message, /could not be reached/i);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('an unknown model name names the model and the setting to check', async () => {
+  try {
+    stubGeminiStatus(404, {
+      error: { code: 404, message: 'models/gemini-nope is not found' },
+    });
+
+    const response = await post(goodBody(), {
+      environment: env({ AI_MODEL: 'gemini-nope' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 503);
+    assert.match(body.error.message, /gemini-nope/);
+    assert.match(body.error.message, /AI_MODEL/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a genuine transport failure still reads as one', async () => {
+  try {
+    globalThis.fetch = async (url) => {
+      const target = String(url);
+      if (target === ID_TOKEN_JWKS) return { ok: true, json: async () => jwks };
+      throw new Error('connection reset');
+    };
+
+    const response = await post(goodBody());
+    const body = await response.json();
+
+    assert.equal(response.status, 503);
+    assert.match(body.error.message, /could not be reached/i);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

@@ -1,6 +1,8 @@
 import '../../models/asset_model.dart';
 import '../../models/deployment_model.dart';
 import '../services/bazaar_service.dart' show BazaarModel;
+import '../services/category_service.dart' show CategoryService;
+import 'small_talk.dart';
 
 /// Everything the assistant is allowed to talk about, captured from the
 /// providers the signed-in account already listens to.
@@ -29,6 +31,7 @@ class InventorySnapshot {
     this.bazaarDataLoaded = true,
     this.inventoryLoading = false,
     this.holders = const <String, String>{},
+    this.categories = const <String>[],
   });
 
   final List<AssetModel> assets;
@@ -73,6 +76,28 @@ class InventorySnapshot {
   /// Only the display name ever leaves the app: [toFacts] never emits an
   /// account id or an email address.
   final Map<String, String> holders;
+
+  /// The asset categories the app itself offers, when the caller has a
+  /// catalogue to hand.
+  ///
+  /// Categories are records now rather than a fixed list in the Add Asset
+  /// form, so there is no constant left to check a typed category against.
+  /// Read [knownCategories] rather than this: a category may already be in use
+  /// on an asset without having been added to the catalogue, and refusing one
+  /// that is plainly in the inventory would be wrong.
+  final List<String> categories;
+
+  /// Every category this account can see, whether it came from the catalogue
+  /// or from an asset that already uses it.
+  ///
+  /// Merged by [CategoryService.mergeCategoryNames], which is what the Add
+  /// Asset form and the importer use, so all three offer the same options and
+  /// spell them the same way - a category typed in lower case is written back
+  /// as the rest of the inventory writes it.
+  List<String> get knownCategories => CategoryService.mergeCategoryNames(
+    catalogue: categories,
+    assetCategories: assets.map((asset) => asset.category),
+  );
 
   /// The display name of whoever holds [asset], or an empty string.
   String holderOf(AssetModel asset) {
@@ -195,32 +220,6 @@ class InventorySnapshot {
       ...assets.where((a) => a.id != focus?.id).take(maxAssets),
     ];
 
-    Map<String, dynamic> assetFacts(AssetModel a) => {
-      'assetId': a.assetId,
-      'name': a.name,
-      'category': a.category,
-      'status': a.status,
-      'condition': a.condition,
-      'quantity': a.quantity,
-      'headOffice': a.calculatedHeadOfficeQuantity,
-      'atBazaars': a.calculatedDeployedQuantity,
-      'assigned': a.calculatedAssignedQuantity,
-      'unitPrice': a.purchasePrice,
-      'totalValue': a.purchasePrice * a.quantity,
-      if (a.brand.trim().isNotEmpty) 'brand': a.brand,
-      if (a.model.trim().isNotEmpty) 'model': a.model,
-      if (a.serialNumber.trim().isNotEmpty) 'serialNumber': a.serialNumber,
-      if (a.location.trim().isNotEmpty) 'location': a.location,
-      'isAssigned': (a.assignedTo ?? '').trim().isNotEmpty,
-      if (a.warrantyMonths > 0) 'warrantyMonths': a.warrantyMonths,
-      if (a.purchaseDate != null)
-        'purchaseDate': a.purchaseDate!.toIso8601String().split('T').first,
-    };
-    // Note: the holder's account id is deliberately NOT sent outside the app,
-    // and neither is anyone's email address. "Who has it" is answered from the
-    // display name in `assignments` below, which is the least that can be sent
-    // and still answer the question.
-
     final focusMovements = focus == null
         ? const <Map<String, dynamic>>[]
         : movementsForAsset(focus).take(10).map((m) => {
@@ -306,18 +305,8 @@ class InventorySnapshot {
     var expiringSoon = 0;
 
     for (final asset in assets) {
-      final bought = asset.purchaseDate;
-      if (bought == null || asset.warrantyMonths <= 0) continue;
-
-      final months = bought.month + asset.warrantyMonths;
-      final year = bought.year + (months - 1) ~/ 12;
-      final month = (months - 1) % 12 + 1;
-
-      // Day 0 of the next month is the last day of this one. Without this, a
-      // warranty bought on the 31st would expire on the 1st of the month
-      // after the one it actually runs to.
-      final lastDay = DateTime(year, month + 1, 0).day;
-      final ends = DateTime(year, month, bought.day < lastDay ? bought.day : lastDay);
+      final ends = warrantyEnds(asset);
+      if (ends == null) continue;
 
       final days = ends.difference(today).inDays;
       if (days < 0) {
@@ -455,6 +444,54 @@ class InventorySnapshot {
       if (focusMovements.isNotEmpty) 'focusAssetMovements': focusMovements,
     };
   }
+
+  /// One asset as the language model may see it.
+  ///
+  /// Shared by [toFacts] and the Local AI context, so both describe an asset
+  /// with the same fields and the same stock figures.
+  ///
+  /// Note: the holder's account id is deliberately NOT sent outside the app,
+  /// and neither is anyone's email address. "Who has it" is answered from the
+  /// display name in `assignments`, which is the least that can be sent and
+  /// still answer the question.
+  static Map<String, dynamic> assetFacts(AssetModel a) => {
+    'assetId': a.assetId,
+    'name': a.name,
+    'category': a.category,
+    'status': a.status,
+    'condition': a.condition,
+    'quantity': a.quantity,
+    'headOffice': a.calculatedHeadOfficeQuantity,
+    'atBazaars': a.calculatedDeployedQuantity,
+    'assigned': a.calculatedAssignedQuantity,
+    'unitPrice': a.purchasePrice,
+    'totalValue': a.purchasePrice * a.quantity,
+    if (a.brand.trim().isNotEmpty) 'brand': a.brand,
+    if (a.model.trim().isNotEmpty) 'model': a.model,
+    if (a.serialNumber.trim().isNotEmpty) 'serialNumber': a.serialNumber,
+    if (a.location.trim().isNotEmpty) 'location': a.location,
+    'isAssigned': (a.assignedTo ?? '').trim().isNotEmpty,
+    if (a.warrantyMonths > 0) 'warrantyMonths': a.warrantyMonths,
+    if (a.purchaseDate != null)
+      'purchaseDate': a.purchaseDate!.toIso8601String().split('T').first,
+  };
+
+  /// The day [asset]'s warranty runs out, or null when either its purchase
+  /// date or its warranty period is not recorded.
+  static DateTime? warrantyEnds(AssetModel asset) {
+    final bought = asset.purchaseDate;
+    if (bought == null || asset.warrantyMonths <= 0) return null;
+
+    final months = bought.month + asset.warrantyMonths;
+    final year = bought.year + (months - 1) ~/ 12;
+    final month = (months - 1) % 12 + 1;
+
+    // Day 0 of the next month is the last day of this one. Without this, a
+    // warranty bought on the 31st would expire on the 1st of the month
+    // after the one it actually runs to.
+    final lastDay = DateTime(year, month + 1, 0).day;
+    return DateTime(year, month, bought.day < lastDay ? bought.day : lastDay);
+  }
 }
 
 /// What the assistant replied, plus what it was talking about so a follow-up
@@ -523,6 +560,14 @@ class InventoryAssistant {
     if (q.isEmpty) {
       return const AssistantReply('Ask me anything about the inventory.');
     }
+
+    // "Hello", "Assalam o Alaikum", "How are you?": conversation, not a
+    // question about a figure, so it is answered as such instead of falling
+    // through every rule to "which figure do you need?". Only a message that
+    // is nothing BUT small talk counts, and the reply names no figure. The
+    // conversation's asset and Bazaar are kept for the next follow-up.
+    final smallTalk = SmallTalk.read(question);
+    if (smallTalk != null) return AssistantReply(smallTalk.reply);
 
     if (_has(q, ['help', 'what can you', 'kya kar sakt', 'madad'])) {
       return AssistantReply(_help(data));

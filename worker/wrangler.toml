@@ -21,7 +21,27 @@ FIREBASE_PROJECT_ID = "it-inventory-8e690"
 FIREBASE_PROJECT_NUMBER = "315288299970"
 
 # Which Gemini model answers. Any free Flash model can be named here.
-AI_MODEL = "gemini-3.6-flash"
+#
+# READ THIS BEFORE CHANGING IT. The free tier's real constraint is a daily
+# request allowance counted PER MODEL, not per key:
+#
+#   quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier
+#
+# Measured 2026-09-27: gemini-3.6-flash and gemini-3.8-flash both allowed 20
+# requests per DAY. Twenty questions is not an assistant, and it fails with
+# HTTP 429, which reads as an outage rather than as a limit. The Lite model
+# served 26+ in one run without refusing, so it is the only free option with
+# usable headroom. Check your own numbers at https://ai.dev/rate-limit.
+#
+# The trade-off, stated plainly: on a question the app's own engine does not
+# recognise, Lite is weaker at multi-record reasoning - it missed the working
+# printers at Head Office and reported only the damaged ones. Given the same
+# question WITH the app's computed answer attached, which is what the app
+# sends whenever its engine understands the question, Lite answered correctly.
+#
+# To trade volume back for accuracy, set "gemini-3.8-flash" and live with 20
+# requests a day. A paid tier removes the cap entirely.
+AI_MODEL = "gemini-3.5-flash-lite"
 
 # Set to "false" ONLY while the Android build is side-loaded as an APK rather
 # than installed from Google Play: the Play Integrity provider issues App

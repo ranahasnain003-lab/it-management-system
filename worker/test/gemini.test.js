@@ -18,6 +18,10 @@ import {
   selectModel,
   buildGeminiBody,
   readGeminiReply,
+  callModel,
+  RETRYABLE_STATUSES,
+  MAX_ATTEMPTS,
+  RETRY_DELAY_MS,
 } from '../src/gemini.js';
 
 import {
@@ -40,8 +44,13 @@ const PROMPT = {
 // ===========================================================================
 
 test('the default is a stable free-tier Flash model', () => {
-  assert.deepEqual(selectModel({}), { model: 'gemini-3.6-flash' });
-  assert.equal(DEFAULT_MODEL, 'gemini-3.6-flash');
+  // A Lite model, because the free tier's daily allowance is counted PER
+  // MODEL and both gemini-3.6-flash and gemini-3.8-flash were measured at 20
+  // requests a day - which is not an assistant. Lite served 26+ in one run
+  // without a refusal. See the note on DEFAULT_MODEL for the accuracy
+  // trade-off and how to reverse it.
+  assert.deepEqual(selectModel({}), { model: 'gemini-3.5-flash-lite' });
+  assert.equal(DEFAULT_MODEL, 'gemini-3.5-flash-lite');
 });
 
 test('the model can be moved without a code change', () => {
@@ -339,4 +348,191 @@ test('an empty or malformed response body is survivable', () => {
   assert.equal(readGeminiReply({ candidates: [] }).raw, null);
   assert.equal(readGeminiReply({ candidates: [{}] }).raw, null);
   assert.equal(readGeminiReply({ candidates: [{ content: {} }] }).raw, null);
+});
+
+// ===========================================================================
+// TRANSIENT REFUSALS
+// ===========================================================================
+//
+// Why these exist: the Gemini free tier really does answer 503 UNAVAILABLE
+// ("this model is currently experiencing high demand") a large share of the
+// time. Measured against the live API, a single attempt failed twice before
+// succeeding on the third. Without a retry the assistant looks broken even
+// though the key, the model and the body are all correct.
+
+/** Serves the given responses in order, and counts the calls. */
+function stubFetch(responses) {
+  const calls = [];
+
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), body: init && init.body });
+    const next = responses[Math.min(calls.length - 1, responses.length - 1)];
+
+    return {
+      ok: next.status === 200,
+      status: next.status,
+      json: async () => next.body ?? {},
+      text: async () => JSON.stringify(next.body ?? {}),
+    };
+  };
+
+  return calls;
+}
+
+const ANSWER = {
+  candidates: [
+    {
+      finishReason: 'STOP',
+      content: {
+        parts: [
+          {
+            functionCall: {
+              name: TOOL_NAME,
+              args: { needsClarification: false, answer: '57 units.' },
+            },
+          },
+        ],
+      },
+    },
+  ],
+};
+
+test('a transient 503 is retried and the answer still gets through', async () => {
+  const realFetch = globalThis.fetch;
+
+  try {
+    const calls = stubFetch([
+      { status: 503, body: { error: { status: 'UNAVAILABLE', message: 'high demand' } } },
+      { status: 200, body: ANSWER },
+    ]);
+
+    const reply = await callModel({
+      model: 'gemini-3.6-flash',
+      apiKey: 'k',
+      system: 'rules',
+      messages: [{ role: 'user', content: 'total inventory kitni hai?' }],
+    });
+
+    assert.equal(calls.length, 2, 'the busy attempt should have been retried');
+    assert.equal(reply.raw.answer, '57 units.');
+    assert.equal(reply.truncated, false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('retrying gives up after MAX_ATTEMPTS rather than hammering Google', async () => {
+  const realFetch = globalThis.fetch;
+
+  try {
+    const calls = stubFetch([
+      { status: 503, body: { error: { status: 'UNAVAILABLE', message: 'high demand' } } },
+    ]);
+
+    await assert.rejects(
+      callModel({
+        model: 'gemini-3.6-flash',
+        apiKey: 'k',
+        system: 'rules',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+      (error) => error.status === 503,
+    );
+
+    assert.equal(calls.length, MAX_ATTEMPTS);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a rate limit is transient, so it is retried too', async () => {
+  const realFetch = globalThis.fetch;
+
+  try {
+    const calls = stubFetch([
+      { status: 429, body: { error: { status: 'RESOURCE_EXHAUSTED' } } },
+      { status: 200, body: ANSWER },
+    ]);
+
+    const reply = await callModel({
+      model: 'gemini-3.6-flash',
+      apiKey: 'k',
+      system: 'rules',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+
+    assert.equal(calls.length, 2);
+    assert.equal(reply.raw.answer, '57 units.');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a rejected key is NOT retried - it would fail identically every time', async () => {
+  const realFetch = globalThis.fetch;
+
+  try {
+    const calls = stubFetch([
+      {
+        status: 400,
+        body: { error: { status: 'INVALID_ARGUMENT', message: 'API key not valid.' } },
+      },
+    ]);
+
+    await assert.rejects(
+      callModel({
+        model: 'gemini-3.6-flash',
+        apiKey: 'wrong',
+        system: 'rules',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+      (error) => error.status === 400 && /API key not valid/.test(error.detail || ''),
+    );
+
+    assert.equal(calls.length, 1, 'a bad key must not be sent three times');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a wrong model name is NOT retried either', async () => {
+  const realFetch = globalThis.fetch;
+
+  try {
+    const calls = stubFetch([
+      { status: 404, body: { error: { status: 'NOT_FOUND', message: 'model not found' } } },
+    ]);
+
+    await assert.rejects(
+      callModel({
+        model: 'gemini-does-not-exist',
+        apiKey: 'k',
+        system: 'rules',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+      (error) => error.status === 404,
+    );
+
+    assert.equal(calls.length, 1);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('the retryable set covers the transient statuses and nothing more', () => {
+  for (const status of [429, 500, 502, 503, 504]) {
+    assert.equal(RETRYABLE_STATUSES.has(status), true, `${status} should retry`);
+  }
+
+  for (const status of [200, 400, 401, 403, 404]) {
+    assert.equal(RETRYABLE_STATUSES.has(status), false, `${status} must not retry`);
+  }
+
+  // The waits have to fit inside the caller's 15s abort, with room left for
+  // the attempt that follows the last wait.
+  let waited = 0;
+  for (let attempt = 1; attempt < MAX_ATTEMPTS; attempt++) {
+    waited += RETRY_DELAY_MS * attempt;
+  }
+  assert.ok(waited < 5000, `total backoff ${waited}ms must stay well under 15s`);
 });

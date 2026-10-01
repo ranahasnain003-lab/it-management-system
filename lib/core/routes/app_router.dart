@@ -28,8 +28,56 @@ import '../profile/screens/app_info_screen.dart';
 import '../settings/screens/settings_screen.dart';
 import '../settings/screens/location_management_screen.dart';
 import '../admin/screens/deployments_screen.dart';
+import '../ai/local/screens/local_ai_screen.dart';
+import '../ai/local/screens/local_ai_settings_screen.dart';
 
 class AppRouter {
+  /// One page transition for every screen in the app.
+  ///
+  /// These routes used plain builders, so each screen arrived with whatever
+  /// the platform happened to do - a long slide here, nothing at all there -
+  /// and moving around felt uneven rather than quick. Every route now goes
+  /// through this one helper, so the whole app moves the same way and a route
+  /// added later inherits it simply by calling [_page] instead of returning
+  /// its screen directly.
+  ///
+  /// The motion is deliberately small: a fade plus a slide of a few pixels
+  /// reads as the page settling into place, where a full-width slide reads as
+  /// waiting for it. The reverse is shorter still, because going back should
+  /// feel like undoing rather than like travelling.
+  ///
+  /// [state.pageKey] is passed on so go_router keeps its own page identity -
+  /// without it, re-entering the same path would rebuild the screen from
+  /// scratch instead of animating.
+  static Page<void> _page(GoRouterState state, Widget child) {
+    return CustomTransitionPage<void>(
+      key: state.pageKey,
+      transitionDuration: const Duration(milliseconds: 200),
+      reverseTransitionDuration: const Duration(milliseconds: 160),
+      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+        final eased = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        );
+
+        return FadeTransition(
+          opacity: eased,
+          child: SlideTransition(
+            // A fraction of the page height, not a fixed number of pixels, so
+            // the same transition reads identically on a phone and a tablet.
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.015),
+              end: Offset.zero,
+            ).animate(eased),
+            child: child,
+          ),
+        );
+      },
+      child: child,
+    );
+  }
+
   /// Creates the application router.
   ///
   /// [userProvider] drives re-evaluation of the route guard whenever the
@@ -76,8 +124,8 @@ class AppRouter {
         GoRoute(
           path: '/',
           name: 'splash',
-          builder: (context, state) {
-            return const SplashScreen();
+          pageBuilder: (context, state) {
+            return _page(state, const SplashScreen());
           },
         ),
 
@@ -87,8 +135,8 @@ class AppRouter {
         GoRoute(
           path: '/login',
           name: 'login',
-          builder: (context, state) {
-            return const LoginScreen();
+          pageBuilder: (context, state) {
+            return _page(state, const LoginScreen());
           },
         ),
 
@@ -98,8 +146,8 @@ class AppRouter {
         GoRoute(
           path: '/signup',
           name: 'signup',
-          builder: (context, state) {
-            return const signup.SignupScreen();
+          pageBuilder: (context, state) {
+            return _page(state, const signup.SignupScreen());
           },
         ),
 
@@ -109,9 +157,12 @@ class AppRouter {
         GoRoute(
           path: '/forgot-password',
           name: 'forgot-password',
-          builder: (context, state) {
-            return ForgotPasswordScreen(
-              initialEmail: state.uri.queryParameters['email'],
+          pageBuilder: (context, state) {
+            return _page(
+              state,
+              ForgotPasswordScreen(
+                initialEmail: state.uri.queryParameters['email'],
+              ),
             );
           },
         ),
@@ -128,189 +179,212 @@ class AppRouter {
           observers: [assistantModalObserver],
           builder: (context, state, child) => AiAssistantOverlay(child: child),
           routes: [
-          // ============================================================
-          // DASHBOARD
-          // ============================================================
-          GoRoute(
-            path: '/dashboard',
-            name: 'dashboard',
-            builder: (context, state) {
-              return const DashboardScreen();
-            },
-          ),
+            // ============================================================
+            // DASHBOARD
+            // ============================================================
+            GoRoute(
+              path: '/dashboard',
+              name: 'dashboard',
+              pageBuilder: (context, state) {
+                return _page(state, const DashboardScreen());
+              },
+            ),
 
-          // ============================================================
-          // EXISTING DEPLOYMENTS ROUTE
-          // ============================================================
-          GoRoute(
-            path: '/deployments',
-            name: 'deployments',
-            builder: (context, state) {
-              return const DeploymentsScreen();
-            },
-          ),
+            // ============================================================
+            // EXISTING DEPLOYMENTS ROUTE
+            // ============================================================
+            GoRoute(
+              path: '/deployments',
+              name: 'deployments',
+              pageBuilder: (context, state) {
+                return _page(state, const DeploymentsScreen());
+              },
+            ),
 
-          // ============================================================
-          // CURRENTLY AT BAZAARS
-          // ============================================================
-          GoRoute(
-            path: '/currently-at-bazaars',
-            name: 'currently-at-bazaars',
-            builder: (context, state) {
-              return const CurrentlyAtBazaarsScreen();
-            },
-          ),
+            // ============================================================
+            // CURRENTLY AT BAZAARS
+            // ============================================================
+            GoRoute(
+              path: '/currently-at-bazaars',
+              name: 'currently-at-bazaars',
+              pageBuilder: (context, state) {
+                return _page(state, const CurrentlyAtBazaarsScreen());
+              },
+            ),
 
-          // ============================================================
-          // DEPLOYMENT / MOVEMENT HISTORY
-          // ============================================================
-          GoRoute(
-            path: '/deployment-history',
-            name: 'deployment-history',
-            builder: (context, state) {
-              return const DeploymentHistoryScreen();
-            },
-          ),
+            // ============================================================
+            // DEPLOYMENT / MOVEMENT HISTORY
+            // ============================================================
+            GoRoute(
+              path: '/deployment-history',
+              name: 'deployment-history',
+              pageBuilder: (context, state) {
+                return _page(state, const DeploymentHistoryScreen());
+              },
+            ),
 
-          // ============================================================
-          // PROFILE
-          // ============================================================
-          GoRoute(
-            path: '/profile',
-            name: 'profile',
-            builder: (context, state) {
-              return const ProfileScreen();
-            },
-          ),
+            // ============================================================
+            // PROFILE
+            // ============================================================
+            GoRoute(
+              path: '/profile',
+              name: 'profile',
+              pageBuilder: (context, state) {
+                return _page(state, const ProfileScreen());
+              },
+            ),
 
-          // ============================================================
-          // PERSONAL INFORMATION
-          // ============================================================
-          GoRoute(
-            path: '/personal-information',
-            name: 'personal-information',
-            builder: (context, state) {
-              return const PersonalInformationScreen();
-            },
-          ),
+            // ============================================================
+            // PERSONAL INFORMATION
+            // ============================================================
+            GoRoute(
+              path: '/personal-information',
+              name: 'personal-information',
+              pageBuilder: (context, state) {
+                return _page(state, const PersonalInformationScreen());
+              },
+            ),
 
-          // ============================================================
-          // CHANGE PASSWORD
-          // ============================================================
-          GoRoute(
-            path: '/change-password',
-            name: 'change-password',
-            builder: (context, state) {
-              return const ChangePasswordScreen();
-            },
-          ),
+            // ============================================================
+            // CHANGE PASSWORD
+            // ============================================================
+            GoRoute(
+              path: '/change-password',
+              name: 'change-password',
+              pageBuilder: (context, state) {
+                return _page(state, const ChangePasswordScreen());
+              },
+            ),
 
-          // ============================================================
-          // SECURITY
-          // ============================================================
-          GoRoute(
-            path: '/security',
-            name: 'security',
-            builder: (context, state) {
-              return const SecurityScreen();
-            },
-          ),
+            // ============================================================
+            // SECURITY
+            // ============================================================
+            GoRoute(
+              path: '/security',
+              name: 'security',
+              pageBuilder: (context, state) {
+                return _page(state, const SecurityScreen());
+              },
+            ),
 
-          // ============================================================
-          // APP INFORMATION
-          // ============================================================
-          GoRoute(
-            path: '/app-info',
-            name: 'app-info',
-            builder: (context, state) {
-              return const AppInfoScreen();
-            },
-          ),
+            // ============================================================
+            // APP INFORMATION
+            // ============================================================
+            GoRoute(
+              path: '/app-info',
+              name: 'app-info',
+              pageBuilder: (context, state) {
+                return _page(state, const AppInfoScreen());
+              },
+            ),
 
-          // ============================================================
-          // SETTINGS
-          // ============================================================
-          GoRoute(
-            path: '/settings',
-            name: 'settings',
-            builder: (context, state) {
-              return const SettingsScreen();
-            },
-          ),
+            // ============================================================
+            // SETTINGS
+            // ============================================================
+            GoRoute(
+              path: '/settings',
+              name: 'settings',
+              pageBuilder: (context, state) {
+                return _page(state, const SettingsScreen());
+              },
+            ),
 
-          // ============================================================
-          // LOCATION MANAGEMENT
-          // ============================================================
-          GoRoute(
-            path: '/locations',
-            name: 'locations',
-            builder: (context, state) {
-              return const LocationManagementScreen();
-            },
-          ),
+            // ============================================================
+            // LOCAL AI ASSISTANT
+            // ============================================================
+            //
+            // Answers come from the Local AI server on the organisation's own
+            // laptop. Inside the authenticated shell like every other screen, so
+            // it inherits the same session and route guards.
+            GoRoute(
+              path: '/ai-assistant',
+              name: 'ai-assistant',
+              pageBuilder: (context, state) {
+                return _page(state, const LocalAiScreen());
+              },
+            ),
 
-          // ============================================================
-          // ASSETS
-          // ============================================================
-          GoRoute(
-            path: '/assets',
-            name: 'assets',
-            builder: (context, state) {
-              final extra = state.extra;
+            GoRoute(
+              path: '/ai-assistant/settings',
+              name: 'ai-assistant-settings',
+              pageBuilder: (context, state) {
+                return _page(state, const LocalAiSettingsScreen());
+              },
+            ),
 
-              String initialStatus = 'All';
+            // ============================================================
+            // LOCATION MANAGEMENT
+            // ============================================================
+            GoRoute(
+              path: '/locations',
+              name: 'locations',
+              pageBuilder: (context, state) {
+                return _page(state, const LocationManagementScreen());
+              },
+            ),
 
-              if (extra is String && extra.trim().isNotEmpty) {
-                initialStatus = extra.trim();
-              }
+            // ============================================================
+            // ASSETS
+            // ============================================================
+            GoRoute(
+              path: '/assets',
+              name: 'assets',
+              pageBuilder: (context, state) {
+                final extra = state.extra;
 
-              return AssetsScreen(initialStatus: initialStatus);
-            },
-          ),
+                String initialStatus = 'All';
 
-          // ============================================================
-          // IMPORT INVENTORY
-          // ============================================================
-          GoRoute(
-            path: '/import-assets',
-            name: 'import-assets',
-            builder: (context, state) {
-              return const ImportAssetsScreen();
-            },
-          ),
+                if (extra is String && extra.trim().isNotEmpty) {
+                  initialStatus = extra.trim();
+                }
 
-          // ============================================================
-          // USERS
-          // ============================================================
-          GoRoute(
-            path: '/users',
-            name: 'users',
-            builder: (context, state) {
-              return const UsersScreen();
-            },
-          ),
+                return _page(state, AssetsScreen(initialStatus: initialStatus));
+              },
+            ),
 
-          // ============================================================
-          // REQUESTS
-          // ============================================================
-          GoRoute(
-            path: '/requests',
-            name: 'requests',
-            builder: (context, state) {
-              return const RequestsScreen();
-            },
-          ),
+            // ============================================================
+            // IMPORT INVENTORY
+            // ============================================================
+            GoRoute(
+              path: '/import-assets',
+              name: 'import-assets',
+              pageBuilder: (context, state) {
+                return _page(state, const ImportAssetsScreen());
+              },
+            ),
 
-          // ============================================================
-          // NOTIFICATIONS
-          // ============================================================
-          GoRoute(
-            path: '/notifications',
-            name: 'notifications',
-            builder: (context, state) {
-              return const NotificationsScreen();
-            },
-          ),
+            // ============================================================
+            // USERS
+            // ============================================================
+            GoRoute(
+              path: '/users',
+              name: 'users',
+              pageBuilder: (context, state) {
+                return _page(state, const UsersScreen());
+              },
+            ),
+
+            // ============================================================
+            // REQUESTS
+            // ============================================================
+            GoRoute(
+              path: '/requests',
+              name: 'requests',
+              pageBuilder: (context, state) {
+                return _page(state, const RequestsScreen());
+              },
+            ),
+
+            // ============================================================
+            // NOTIFICATIONS
+            // ============================================================
+            GoRoute(
+              path: '/notifications',
+              name: 'notifications',
+              pageBuilder: (context, state) {
+                return _page(state, const NotificationsScreen());
+              },
+            ),
           ],
         ),
       ],

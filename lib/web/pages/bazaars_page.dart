@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -6,12 +8,26 @@ import '../../core/providers/bazaar_provider.dart';
 import '../../core/providers/deployment_provider.dart';
 import '../../core/providers/user_provider.dart';
 import '../../core/services/bazaar_service.dart';
+import '../../core/services/permission_service.dart';
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 import '../export/table_export.dart';
 import '../widgets/web_common.dart';
 import '../widgets/web_data_table.dart';
 
 enum BazaarView { all, active, disabled }
+
+/// [cleanError] passes an unrecognised failure through verbatim, so a raw
+/// platform code (`[cloud_firestore/...]`) or a very long internal message
+/// could reach the screen. The mapped, business-readable sentences are the
+/// point of the helper and are kept; only those two cases are replaced.
+String _friendlyError(Object error) {
+  final cleaned = cleanError(error);
+
+  return cleaned.startsWith('[') || cleaned.length > 180
+      ? 'Something went wrong. Please try again.'
+      : cleaned;
+}
 
 /// Bazaar MASTER (the list of Bazaars). Stock currently at Bazaars is a
 /// separate page: /transfers/current-stock.
@@ -25,17 +41,69 @@ class WebBazaarsPage extends StatefulWidget {
 }
 
 class _WebBazaarsPageState extends State<WebBazaarsPage> {
+  /// How long typing has to pause before the table is filtered again.
+  ///
+  /// Filtering walks every Bazaar and rebuilds every visible row, so doing it
+  /// per keystroke made a long list stutter under fast typing. Short enough
+  /// that the results still feel immediate.
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
+
+  final TextEditingController _search = TextEditingController();
+
+  Timer? _searchTimer;
+
   String _query = '';
   String _city = 'All';
 
   final BazaarService _service = BazaarService();
 
   @override
+  void dispose() {
+    _searchTimer?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Holds the newest text and applies it once typing stops, so the filter
+  /// runs on the final query rather than on every prefix of it.
+  void _onQueryChanged(String value) {
+    _searchTimer?.cancel();
+    _searchTimer = Timer(_searchDebounce, () {
+      if (!mounted || value == _query) return;
+      setState(() => _query = value);
+    });
+  }
+
+  /// Resets everything the toolbar can hide rows with. The pending debounce is
+  /// dropped first, otherwise a keystroke from just before the tap would put
+  /// the search term straight back. The sidebar view (All / Active / Disabled)
+  /// is part of the route, not of the toolbar, so it is left alone.
+  void _clearFilters() {
+    _searchTimer?.cancel();
+    _search.clear();
+    setState(() {
+      _query = '';
+      _city = 'All';
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final provider = context.watch<BazaarProvider>();
     final users = context.watch<UserProvider>();
     final movements = context.watch<DeploymentProvider>();
-    final canManage = users.isSuperAdmin;
+    final profile = users.currentUserProfile;
+
+    // Adding a Bazaar is open to every active role; editing and disabling one
+    // stays with the managers, exactly as the Firestore rules allow.
+    final canAdd = PermissionService.canAddBazaar(
+      profile?.role,
+      roles: profile?.roles,
+    );
+    final canManage = PermissionService.canManageBazaars(
+      profile?.role,
+      roles: profile?.roles,
+    );
     final colors = Theme.of(context).colorScheme;
     final muted = TextStyle(fontSize: 13, color: colors.onSurfaceVariant);
 
@@ -94,9 +162,9 @@ class _WebBazaarsPageState extends State<WebBazaarsPage> {
           icon: const Icon(Icons.local_shipping_rounded),
           label: const Text('Current Bazaar Stock'),
         ),
-        if (canManage)
+        if (canAdd)
           FilledButton.icon(
-            onPressed: () => _editBazaar(context),
+            onPressed: () => _editBazaar(context, canManage: canManage),
             icon: const Icon(Icons.add_business_rounded),
             label: const Text('Add Bazaar'),
           ),
@@ -105,8 +173,9 @@ class _WebBazaarsPageState extends State<WebBazaarsPage> {
         WebToolbar(
           children: [
             WebSearchField(
+              controller: _search,
               hint: 'Search name, city, address, contact…',
-              onChanged: (v) => setState(() => _query = v),
+              onChanged: _onQueryChanged,
             ),
             WebFilterDropdown<String>(
               label: 'City',
@@ -114,140 +183,237 @@ class _WebBazaarsPageState extends State<WebBazaarsPage> {
               items: {'All': 'All cities', for (final c in cities) c: c},
               onChanged: (v) => setState(() => _city = v),
             ),
+            // Offered only while something is actually hiding rows, so the
+            // toolbar stays as it was in the common case. Driven from the
+            // controller rather than from the debounced query, so it appears
+            // and clears on the keystroke instead of a quarter second later.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _search,
+              builder: (context, value, _) {
+                final filtered = value.text.trim().isNotEmpty || _city != 'All';
+
+                if (!filtered) return const SizedBox.shrink();
+
+                return TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                  label: const Text('Clear filters'),
+                );
+              },
+            ),
           ],
         ),
-        if (provider.errorMessage != null && provider.bazaars.isEmpty)
-          Card(
-            child: WebMessageState(
-              icon: Icons.error_outline_rounded,
-              title: 'Unable to load Bazaars',
-              message: cleanError(provider.errorMessage!),
-              isError: true,
-              action: FilledButton(
-                onPressed: () => provider.listenToBazaars(forceRestart: true),
-                child: const Text('Retry'),
-              ),
-            ),
-          )
-        else if (provider.isLoading && provider.bazaars.isEmpty)
-          const Card(child: WebLoadingState(message: 'Loading Bazaars...'))
-        else ...[
-          if (provider.bazaars.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.md),
-              child: Wrap(
-                spacing: AppSpacing.sm,
-                runSpacing: AppSpacing.sm,
-                children: [
-                  _SummaryPill(label: 'Total', value: provider.totalBazaars, tone: AppColors.bazaar),
-                  _SummaryPill(label: 'Active', value: provider.activeBazaarCount, tone: AppColors.success),
-                  _SummaryPill(label: 'Disabled', value: provider.inactiveBazaarCount, tone: AppColors.neutral),
-                  _SummaryPill(
-                    label: 'Units at Bazaars',
-                    value: stockByBazaar.values.fold<int>(0, (t, v) => t + v),
-                    tone: AppColors.quantity,
+        // One crossfade between the four things this page can show. A failed
+        // read is drawn as a failure with a way out, never as an empty Bazaar
+        // master; a master that really is empty gets its own invitation, and
+        // rows hidden by the view or the filters are reported by the table.
+        AppStateSwitcher(
+          child: provider.errorMessage != null && provider.bazaars.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('error'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppErrorState(
+                      title: 'Unable to load Bazaars',
+                      message: _friendlyError(provider.errorMessage!),
+                      onRetry: () => provider.listenToBazaars(forceRestart: true),
+                    ),
                   ),
-                ],
-              ),
-            ),
-          WebDataTable<BazaarModel>(
-            rows: rows,
-            initialSortColumn: 0,
-            emptyMessage: 'No Bazaars match the current view.',
-            columns: [
-              WebColumn(
-                label: 'Bazaar',
-                minWidth: 180,
-                cell: (b) => Row(
-                  mainAxisSize: MainAxisSize.min,
+                )
+              : provider.isLoading && provider.bazaars.isEmpty
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: double.infinity,
+                  child: WebTableSkeleton(columns: 7),
+                )
+              : provider.bazaars.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('no-bazaars'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppEmptyState(
+                      icon: Icons.storefront_outlined,
+                      title: 'No Bazaars yet',
+                      message:
+                          'Bazaars are the destinations stock can be sent to. '
+                          'Add the first one to start transferring.',
+                      // The existing gate decides whether this account may
+                      // add one at all; without it the invitation is left out
+                      // rather than offering an action Firestore would refuse.
+                      action: canAdd
+                          ? FilledButton.icon(
+                              onPressed: () => _editBazaar(context, canManage: canManage),
+                              icon: const Icon(Icons.add_business_rounded),
+                              label: const Text('Add Bazaar'),
+                            )
+                          : null,
+                    ),
+                  ),
+                )
+              : Column(
+                  key: const ValueKey('rows'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _BazaarAvatar(active: b.isActive),
-                    const SizedBox(width: AppSpacing.md),
-                    Flexible(
-                      child: Text(
-                        b.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontWeight: FontWeight.w600, color: colors.onSurface),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                      child: Wrap(
+                        spacing: AppSpacing.sm,
+                        runSpacing: AppSpacing.sm,
+                        children: [
+                          _SummaryPill(label: 'Total', value: provider.totalBazaars, tone: AppColors.bazaar),
+                          _SummaryPill(label: 'Active', value: provider.activeBazaarCount, tone: AppColors.success),
+                          _SummaryPill(label: 'Disabled', value: provider.inactiveBazaarCount, tone: AppColors.neutral),
+                          _SummaryPill(
+                            label: 'Units at Bazaars',
+                            value: stockByBazaar.values.fold<int>(0, (t, v) => t + v),
+                            tone: AppColors.quantity,
+                          ),
+                        ],
                       ),
+                    ),
+                    WebDataTable<BazaarModel>(
+                      rows: rows,
+                      initialSortColumn: 0,
+                      emptyMessage: 'No Bazaars match the current view.',
+                      columns: [
+                        WebColumn(
+                          label: 'Bazaar',
+                          minWidth: 180,
+                          cell: (b) => Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _BazaarAvatar(active: b.isActive),
+                              const SizedBox(width: AppSpacing.md),
+                              // A long Bazaar name is ellipsised instead of
+                              // overflowing the cell at tablet width.
+                              Flexible(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 260),
+                                  child: Text(
+                                    b.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontWeight: FontWeight.w600, color: colors.onSurface),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          sortValue: (b) => b.name.toLowerCase(),
+                        ),
+                        WebColumn(
+                          label: 'City',
+                          cell: (b) => ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 180),
+                            child: Text(
+                              b.location.isEmpty ? '—' : b.location,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          sortValue: (b) => b.location.toLowerCase(),
+                        ),
+                        WebColumn(
+                          label: 'Address',
+                          cell: (b) => ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 260),
+                            child: Text(
+                              b.address.isEmpty ? '—' : b.address,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: muted,
+                            ),
+                          ),
+                        ),
+                        WebColumn(
+                          label: 'Contact',
+                          cell: (b) {
+                            if (b.contactPerson.isEmpty && b.contactNumber.isEmpty) {
+                              return Text('—', style: muted);
+                            }
+
+                            final person = Text(
+                              b.contactPerson,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            );
+
+                            if (b.contactPerson.isEmpty || b.contactNumber.isEmpty) {
+                              return ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 200),
+                                child: b.contactPerson.isEmpty
+                                    ? Text(
+                                        b.contactNumber,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      )
+                                    : person,
+                              );
+                            }
+
+                            return ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 200),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  person,
+                                  Text(
+                                    b.contactNumber,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: muted,
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                        WebColumn(
+                          label: 'Units at Bazaar',
+                          numeric: true,
+                          cell: (b) {
+                            final units = stockByBazaar[b.id] ?? 0;
+                            return Text(
+                              '$units',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontFeatures: const [FontFeature.tabularFigures()],
+                                color: units == 0 ? colors.onSurfaceVariant.withValues(alpha: 0.7) : colors.onSurface,
+                              ),
+                            );
+                          },
+                          sortValue: (b) => stockByBazaar[b.id] ?? 0,
+                        ),
+                        WebColumn(label: 'Status', cell: (b) => WebStatusChip(b.isActive ? 'Active' : 'Disabled'), sortValue: (b) => b.isActive ? 0 : 1),
+                        WebColumn(label: 'Updated', cell: (b) => Text(formatDate(b.lastUpdated ?? b.createdAt), style: muted)),
+                      ],
+                      actions: canManage
+                          ? (b) => Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Edit',
+                                  onPressed: () =>
+                                      _editBazaar(context, bazaar: b, canManage: true),
+                                  icon: Icon(Icons.edit_outlined, size: 20, color: colors.onSurfaceVariant),
+                                ),
+                                IconButton(
+                                  tooltip: b.isActive ? 'Disable' : 'Enable',
+                                  onPressed: () => _toggle(context, b),
+                                  icon: Icon(
+                                    b.isActive ? Icons.block_rounded : Icons.check_circle_outline_rounded,
+                                    size: 20,
+                                    color: b.isActive ? AppColors.error : AppColors.success,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : null,
                     ),
                   ],
                 ),
-                sortValue: (b) => b.name.toLowerCase(),
-              ),
-              WebColumn(label: 'City', cell: (b) => Text(b.location.isEmpty ? '—' : b.location), sortValue: (b) => b.location.toLowerCase()),
-              WebColumn(
-                label: 'Address',
-                cell: (b) => ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 260),
-                  child: Text(
-                    b.address.isEmpty ? '—' : b.address,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: muted,
-                  ),
-                ),
-              ),
-              WebColumn(
-                label: 'Contact',
-                cell: (b) {
-                  if (b.contactPerson.isEmpty && b.contactNumber.isEmpty) {
-                    return Text('—', style: muted);
-                  }
-                  if (b.contactPerson.isEmpty || b.contactNumber.isEmpty) {
-                    return Text(b.contactPerson.isEmpty ? b.contactNumber : b.contactPerson);
-                  }
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(b.contactPerson),
-                      Text(b.contactNumber, style: muted),
-                    ],
-                  );
-                },
-              ),
-              WebColumn(
-                label: 'Units at Bazaar',
-                numeric: true,
-                cell: (b) {
-                  final units = stockByBazaar[b.id] ?? 0;
-                  return Text(
-                    '$units',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                      color: units == 0 ? colors.onSurfaceVariant.withValues(alpha: 0.7) : colors.onSurface,
-                    ),
-                  );
-                },
-                sortValue: (b) => stockByBazaar[b.id] ?? 0,
-              ),
-              WebColumn(label: 'Status', cell: (b) => WebStatusChip(b.isActive ? 'Active' : 'Disabled'), sortValue: (b) => b.isActive ? 0 : 1),
-              WebColumn(label: 'Updated', cell: (b) => Text(formatDate(b.lastUpdated ?? b.createdAt), style: muted)),
-            ],
-            actions: canManage
-                ? (b) => Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: 'Edit',
-                        onPressed: () => _editBazaar(context, bazaar: b),
-                        icon: Icon(Icons.edit_outlined, size: 20, color: colors.onSurfaceVariant),
-                      ),
-                      IconButton(
-                        tooltip: b.isActive ? 'Disable' : 'Enable',
-                        onPressed: () => _toggle(context, b),
-                        icon: Icon(
-                          b.isActive ? Icons.block_rounded : Icons.check_circle_outline_rounded,
-                          size: 20,
-                          color: b.isActive ? AppColors.error : AppColors.success,
-                        ),
-                      ),
-                    ],
-                  )
-                : null,
-          ),
-        ],
+        ),
       ],
     );
   }
@@ -276,15 +442,27 @@ class _WebBazaarsPageState extends State<WebBazaarsPage> {
       await _service.updateBazaarStatus(bazaarId: bazaar.id, isActive: enabling);
       if (context.mounted) showWebToast(context, '${bazaar.name} ${enabling ? 'enabled' : 'disabled'}.');
     } catch (e) {
-      if (context.mounted) showWebToast(context, cleanError(e), isError: true);
+      if (context.mounted) showWebToast(context, _friendlyError(e), isError: true);
     }
   }
 
-  Future<void> _editBazaar(BuildContext context, {BazaarModel? bazaar}) async {
+  Future<void> _editBazaar(
+    BuildContext context, {
+    BazaarModel? bazaar,
+    required bool canManage,
+  }) async {
+    final profile = context.read<UserProvider>().currentUserProfile;
+
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _BazaarFormDialog(bazaar: bazaar, service: _service),
+      builder: (_) => _BazaarFormDialog(
+        bazaar: bazaar,
+        service: _service,
+        canManage: canManage,
+        createdBy: profile?.uid ?? '',
+        createdByName: profile?.name ?? '',
+      ),
     );
   }
 }
@@ -357,10 +535,23 @@ class _SummaryPill extends StatelessWidget {
 }
 
 class _BazaarFormDialog extends StatefulWidget {
-  const _BazaarFormDialog({this.bazaar, required this.service});
+  const _BazaarFormDialog({
+    this.bazaar,
+    required this.service,
+    required this.canManage,
+    required this.createdBy,
+    required this.createdByName,
+  });
 
   final BazaarModel? bazaar;
   final BazaarService service;
+
+  /// Only a manager may disable a Bazaar, so the Active switch is hidden for
+  /// everyone else instead of offering a choice Firestore would reject.
+  final bool canManage;
+
+  final String createdBy;
+  final String createdByName;
 
   @override
   State<_BazaarFormDialog> createState() => _BazaarFormDialogState();
@@ -397,19 +588,31 @@ class _BazaarFormDialogState extends State<_BazaarFormDialog> {
       _error = null;
     });
 
+    // The Firestore rule requires createdBy to equal the signed-in uid, so a
+    // write sent before the profile arrives is refused and would be reported
+    // as a missing permission.
+    if (widget.bazaar == null && widget.createdBy.trim().isEmpty) {
+      setState(() {
+        _saving = false;
+        _error = 'Your profile is still loading. Please try again in a moment.';
+      });
+      return;
+    }
+
     try {
       if (widget.bazaar == null) {
-        final id = await widget.service.createBazaar(
+        // One write only: a User may add a Bazaar but may not update one, so
+        // a follow-up status write would be denied for them.
+        await widget.service.createBazaar(
           name: _name.text,
           location: _city.text,
           address: _address.text,
           contactPerson: _person.text,
           contactNumber: _phone.text,
+          createdBy: widget.createdBy,
+          createdByName: widget.createdByName,
+          isActive: _active,
         );
-
-        if (!_active) {
-          await widget.service.updateBazaarStatus(bazaarId: id, isActive: false);
-        }
       } else {
         await widget.service.updateBazaar(
           bazaarId: widget.bazaar!.id,
@@ -423,13 +626,16 @@ class _BazaarFormDialogState extends State<_BazaarFormDialog> {
       }
 
       if (!mounted) return;
-      Navigator.pop(context);
+      // The toast is raised BEFORE the pop: it reaches the messenger while
+      // this dialog is still in the tree, and the snack bar itself belongs to
+      // the messenger, so it stays on screen once the dialog is gone.
       showWebToast(context, widget.bazaar == null ? 'Bazaar added.' : 'Bazaar updated.');
+      Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        _error = cleanError(e);
+        _error = _friendlyError(e);
       });
     }
   }
@@ -549,24 +755,26 @@ class _BazaarFormDialogState extends State<_BazaarFormDialog> {
                       Expanded(child: phoneField),
                     ],
                   ),
-                const SizedBox(height: AppSpacing.lg),
-                Container(
-                  decoration: BoxDecoration(
-                    color: colors.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                    border: Border.all(color: colors.outlineVariant),
-                  ),
-                  child: SwitchListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-                    shape: RoundedRectangleBorder(
+                if (widget.canManage) ...[
+                  const SizedBox(height: AppSpacing.lg),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: colors.surfaceContainerLow,
                       borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                      border: Border.all(color: colors.outlineVariant),
                     ),
-                    title: const Text('Active'),
-                    subtitle: const Text('Only active Bazaars can receive new transfers.'),
-                    value: _active,
-                    onChanged: _saving ? null : (v) => setState(() => _active = v),
+                    child: SwitchListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                      ),
+                      title: const Text('Active'),
+                      subtitle: const Text('Only active Bazaars can receive new transfers.'),
+                      value: _active,
+                      onChanged: _saving ? null : (v) => setState(() => _active = v),
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),

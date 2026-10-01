@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,6 +8,7 @@ import '../../core/providers/asset_provider.dart';
 import '../../core/providers/deployment_provider.dart';
 import '../../core/providers/user_provider.dart';
 import '../../core/services/deployment_service.dart';
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 import '../../models/asset_model.dart';
 import '../../models/deployment_model.dart';
@@ -48,6 +51,25 @@ class WebNewTransferPage extends StatelessWidget {
   }
 }
 
+/// [cleanError] passes an unrecognised failure through verbatim, so a raw
+/// platform code (`[cloud_firestore/...]`) or a very long internal message
+/// could reach the screen. The mapped, business-readable sentences are the
+/// point of the helper and are kept; only those two cases are replaced.
+String _friendlyError(Object error) {
+  final cleaned = cleanError(error);
+
+  return cleaned.startsWith('[') || cleaned.length > 180
+      ? 'Something went wrong. Please try again.'
+      : cleaned;
+}
+
+/// How long typing has to pause before a table is filtered again.
+///
+/// Filtering walks every record and rebuilds every visible row, so doing it
+/// per keystroke made a long movement history stutter under fast typing.
+/// Short enough that the results still feel immediate.
+const Duration _searchDebounce = Duration(milliseconds: 250);
+
 // =============================================================================
 // TRANSFER HISTORY
 // =============================================================================
@@ -60,10 +82,45 @@ class WebTransferHistoryPage extends StatefulWidget {
 }
 
 class _WebTransferHistoryPageState extends State<WebTransferHistoryPage> {
+  final TextEditingController _search = TextEditingController();
+
+  Timer? _searchTimer;
+
   String _query = '';
   String _kind = 'all';
   String _status = 'all';
   DateTimeRange? _range;
+
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Holds the newest text and applies it once typing stops, so the filter
+  /// runs on the final query rather than on every prefix of it.
+  void _onQueryChanged(String value) {
+    _searchTimer?.cancel();
+    _searchTimer = Timer(_searchDebounce, () {
+      if (!mounted || value == _query) return;
+      setState(() => _query = value);
+    });
+  }
+
+  /// Resets everything the toolbar can hide rows with, the date range
+  /// included. The pending debounce is dropped first, otherwise a keystroke
+  /// from just before the tap would put the search term straight back.
+  void _clearFilters() {
+    _searchTimer?.cancel();
+    _search.clear();
+    setState(() {
+      _query = '';
+      _kind = 'all';
+      _status = 'all';
+      _range = null;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -103,7 +160,11 @@ class _WebTransferHistoryPageState extends State<WebTransferHistoryPage> {
       children: [
         WebToolbar(
           children: [
-            WebSearchField(hint: 'Search asset, Bazaar, person…', onChanged: (v) => setState(() => _query = v)),
+            WebSearchField(
+              controller: _search,
+              hint: 'Search asset, Bazaar, person…',
+              onChanged: _onQueryChanged,
+            ),
             WebFilterDropdown<String>(
               label: 'Movement',
               value: _kind,
@@ -137,28 +198,62 @@ class _WebTransferHistoryPageState extends State<WebTransferHistoryPage> {
             ),
             if (_range != null)
               TextButton(onPressed: () => setState(() => _range = null), child: const Text('Clear dates')),
+            // Offered only while a filter other than the date range is hiding
+            // rows, so it never doubles up with "Clear dates" above. Driven
+            // from the controller rather than from the debounced query, so it
+            // appears and clears on the keystroke instead of a quarter second
+            // later.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _search,
+              builder: (context, value, _) {
+                final filtered = value.text.trim().isNotEmpty ||
+                    _kind != 'all' ||
+                    _status != 'all';
+
+                if (!filtered) return const SizedBox.shrink();
+
+                return TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                  label: const Text('Clear filters'),
+                );
+              },
+            ),
           ],
         ),
-        if (provider.error != null && provider.deployments.isEmpty)
-          Card(
-            child: WebMessageState(
-              icon: Icons.error_outline_rounded,
-              title: 'Unable to load movement history',
-              message: cleanError(provider.error!),
-              isError: true,
-              action: FilledButton(onPressed: provider.listenToDeployments, child: const Text('Retry')),
-            ),
-          )
-        else if (provider.isLoading && provider.deployments.isEmpty)
-          const Card(child: WebLoadingState(message: 'Loading movement history...'))
-        else
-          WebDataTable<DeploymentModel>(
-            rows: rows,
-            initialSortColumn: 0,
-            initialSortAscending: false,
-            emptyMessage: 'No movements match the filters.',
-            columns: _movementColumns,
-          ),
+        // One crossfade between the three things this page can show. A failed
+        // read is drawn as a failure with a way out, never as an empty history
+        // - the table's own empty state says that instead.
+        AppStateSwitcher(
+          child: provider.error != null && provider.deployments.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('error'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppErrorState(
+                      title: 'Unable to load movement history',
+                      message: _friendlyError(provider.error!),
+                      onRetry: provider.listenToDeployments,
+                    ),
+                  ),
+                )
+              : provider.isLoading && provider.deployments.isEmpty
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: double.infinity,
+                  child: WebTableSkeleton(columns: 9),
+                )
+              : WebDataTable<DeploymentModel>(
+                  key: const ValueKey('rows'),
+                  rows: rows,
+                  initialSortColumn: 0,
+                  initialSortAscending: false,
+                  emptyMessage: provider.deployments.isEmpty
+                      ? 'No stock has been moved yet.'
+                      : 'No movements match the filters.',
+                  columns: _movementColumns,
+                ),
+        ),
       ],
     );
   }
@@ -188,8 +283,10 @@ final List<WebColumn<DeploymentModel>> _movementColumns = [
     cell: (m) => _TwoLine(primary: m.assetName, secondary: m.assetId),
     sortValue: (m) => m.assetName.toLowerCase(),
   ),
-  WebColumn(label: 'From', cell: (m) => Text(m.fromLocation), sortValue: (m) => m.fromLocation.toLowerCase()),
-  WebColumn(label: 'To', cell: (m) => Text(m.toBazaarName ?? m.toLocation), sortValue: (m) => (m.toBazaarName ?? m.toLocation).toLowerCase()),
+  // Bazaar names can be long, so both ends of the route are bounded and
+  // ellipsised rather than pushing the row wider than the viewport.
+  WebColumn(label: 'From', cell: (m) => _Place(m.fromLocation), sortValue: (m) => m.fromLocation.toLowerCase()),
+  WebColumn(label: 'To', cell: (m) => _Place(m.toBazaarName ?? m.toLocation), sortValue: (m) => (m.toBazaarName ?? m.toLocation).toLowerCase()),
   WebColumn(label: 'Qty', numeric: true, cell: (m) => _Qty(m.originalQuantity ?? m.quantity, strong: true), sortValue: (m) => m.originalQuantity ?? m.quantity),
   WebColumn(label: 'Still There', numeric: true, cell: (m) => _Qty(m.isActive ? m.quantity : 0)),
   WebColumn(label: 'Status', cell: (m) => WebStatusChip(m.status), sortValue: (m) => m.status.toLowerCase()),
@@ -210,7 +307,29 @@ class _Muted extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
       style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant),
+    );
+  }
+}
+
+/// One end of a movement route: a location or Bazaar name, bounded so a long
+/// one is ellipsised instead of widening the row.
+class _Place extends StatelessWidget {
+  const _Place(this.name);
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 220),
+      child: Text(
+        name.isEmpty ? '—' : name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
     );
   }
 }
@@ -373,6 +492,10 @@ class WebCurrentBazaarStockPage extends StatefulWidget {
 }
 
 class _WebCurrentBazaarStockPageState extends State<WebCurrentBazaarStockPage> {
+  final TextEditingController _search = TextEditingController();
+
+  Timer? _searchTimer;
+
   String _query = '';
   String _bazaar = 'all';
 
@@ -380,6 +503,35 @@ class _WebCurrentBazaarStockPageState extends State<WebCurrentBazaarStockPage> {
   final Set<String> _busy = {};
 
   final DeploymentService _service = DeploymentService();
+
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Holds the newest text and applies it once typing stops, so the filter
+  /// runs on the final query rather than on every prefix of it.
+  void _onQueryChanged(String value) {
+    _searchTimer?.cancel();
+    _searchTimer = Timer(_searchDebounce, () {
+      if (!mounted || value == _query) return;
+      setState(() => _query = value);
+    });
+  }
+
+  /// Resets everything the toolbar can hide rows with. The pending debounce is
+  /// dropped first, otherwise a keystroke from just before the tap would put
+  /// the search term straight back.
+  void _clearFilters() {
+    _searchTimer?.cancel();
+    _search.clear();
+    setState(() {
+      _query = '';
+      _bazaar = 'all';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -444,7 +596,11 @@ class _WebCurrentBazaarStockPageState extends State<WebCurrentBazaarStockPage> {
       children: [
         WebToolbar(
           children: [
-            WebSearchField(hint: 'Search Bazaar or asset…', onChanged: (v) => setState(() => _query = v)),
+            WebSearchField(
+              controller: _search,
+              hint: 'Search Bazaar or asset…',
+              onChanged: _onQueryChanged,
+            ),
             WebFilterDropdown<String>(
               label: 'Bazaar',
               value: _bazaar,
@@ -452,89 +608,150 @@ class _WebCurrentBazaarStockPageState extends State<WebCurrentBazaarStockPage> {
               items: {'all': 'All Bazaars', for (final e in bazaarNames.entries) e.key: e.value},
               onChanged: (v) => setState(() => _bazaar = v),
             ),
+            // Offered only while something is actually hiding rows, so the
+            // toolbar stays as it was in the common case. Driven from the
+            // controller rather than from the debounced query, so it appears
+            // and clears on the keystroke instead of a quarter second later.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _search,
+              builder: (context, value, _) {
+                final filtered = value.text.trim().isNotEmpty || _bazaar != 'all';
+
+                if (!filtered) return const SizedBox.shrink();
+
+                return TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                  label: const Text('Clear filters'),
+                );
+              },
+            ),
           ],
         ),
-        if (provider.error != null && provider.deployments.isEmpty)
-          Card(
-            child: WebMessageState(icon: Icons.error_outline_rounded, title: 'Unable to load Bazaar stock', message: cleanError(provider.error!), isError: true),
-          )
-        else if (provider.isLoading && provider.deployments.isEmpty)
-          const Card(child: WebLoadingState())
-        else ...[
-          if (grouped.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.md),
-              child: Wrap(
-                spacing: AppSpacing.sm,
-                runSpacing: AppSpacing.sm,
-                children: [
-                  _SummaryPill(label: 'Units', value: totalUnits, tone: AppColors.bazaar),
-                  _SummaryPill(label: 'Bazaars', value: rows.map((r) => r.bazaarId).toSet().length, tone: AppColors.info),
-                  _SummaryPill(label: 'Stock lines', value: rows.length, tone: AppColors.quantity),
-                ],
-              ),
-            ),
-          WebDataTable<_StockRow>(
-            rows: rows,
-            initialSortColumn: 0,
-            emptyMessage: _query.trim().isNotEmpty || _bazaar != 'all'
-                ? 'No Bazaar stock matches your search or filter.'
-                : 'No stock is currently at any Bazaar.',
-            columns: [
-              WebColumn(
-                label: 'Bazaar',
-                minWidth: 170,
-                cell: (r) => Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: AppColors.tint(AppColors.bazaar, theme.brightness),
-                        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-                      ),
-                      child: Icon(
-                        Icons.storefront_rounded,
-                        size: 17,
-                        color: AppColors.onTint(AppColors.bazaar, theme.brightness),
-                      ),
+        // One crossfade between the three things this page can show. A failed
+        // read is drawn as a failure with a way out, never as "no stock at any
+        // Bazaar" - the table's own empty state says that instead.
+        AppStateSwitcher(
+          child: provider.error != null && provider.deployments.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('error'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppErrorState(
+                      title: 'Unable to load Bazaar stock',
+                      message: _friendlyError(provider.error!),
+                      // Bazaar stock is derived from the movement records, so
+                      // restarting that listener is this page's whole load.
+                      onRetry: provider.listenToDeployments,
                     ),
-                    const SizedBox(width: AppSpacing.md),
-                    Text(r.bazaarName, style: TextStyle(fontWeight: FontWeight.w600, color: theme.colorScheme.onSurface)),
+                  ),
+                )
+              : provider.isLoading && provider.deployments.isEmpty
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: double.infinity,
+                  child: WebTableSkeleton(columns: 5),
+                )
+              : Column(
+                  key: const ValueKey('rows'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (grouped.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: Wrap(
+                          spacing: AppSpacing.sm,
+                          runSpacing: AppSpacing.sm,
+                          children: [
+                            _SummaryPill(label: 'Units', value: totalUnits, tone: AppColors.bazaar),
+                            _SummaryPill(label: 'Bazaars', value: rows.map((r) => r.bazaarId).toSet().length, tone: AppColors.info),
+                            _SummaryPill(label: 'Stock lines', value: rows.length, tone: AppColors.quantity),
+                          ],
+                        ),
+                      ),
+                    WebDataTable<_StockRow>(
+                      rows: rows,
+                      initialSortColumn: 0,
+                      emptyMessage: _query.trim().isNotEmpty || _bazaar != 'all'
+                          ? 'No Bazaar stock matches your search or filter.'
+                          : 'No stock is currently at any Bazaar.',
+                      columns: [
+                        WebColumn(
+                          label: 'Bazaar',
+                          minWidth: 170,
+                          cell: (r) => Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 32,
+                                height: 32,
+                                decoration: BoxDecoration(
+                                  color: AppColors.tint(AppColors.bazaar, theme.brightness),
+                                  borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+                                ),
+                                child: Icon(
+                                  Icons.storefront_rounded,
+                                  size: 17,
+                                  color: AppColors.onTint(AppColors.bazaar, theme.brightness),
+                                ),
+                              ),
+                              const SizedBox(width: AppSpacing.md),
+                              // A long Bazaar name is ellipsised instead of
+                              // overflowing the cell at tablet width.
+                              Flexible(
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 240),
+                                  child: Text(
+                                    r.bazaarName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontWeight: FontWeight.w600, color: theme.colorScheme.onSurface),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          sortValue: (r) => r.bazaarName.toLowerCase(),
+                        ),
+                        WebColumn(label: 'Asset ID', cell: (r) => _Muted(r.assetId), sortValue: (r) => r.assetId.toLowerCase()),
+                        WebColumn(
+                          label: 'Asset',
+                          minWidth: 160,
+                          cell: (r) => ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 260),
+                            child: Text(r.assetName, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ),
+                          sortValue: (r) => r.assetName.toLowerCase(),
+                        ),
+                        WebColumn(label: 'Quantity', numeric: true, cell: (r) => _Qty(r.quantity, strong: true), sortValue: (r) => r.quantity),
+                        WebColumn(label: 'Last Movement', cell: (r) => _Muted(formatDateTime(r.lastMovement)), sortValue: (r) => r.lastMovement?.millisecondsSinceEpoch),
+                      ],
+                      actions: canMove
+                          ? (r) {
+                              final key = '${r.bazaarId}|${r.assetDocumentId}';
+                              final busy = _busy.contains(key);
+
+                              return Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextButton.icon(
+                                    onPressed: busy ? null : () => _return(context, r, key),
+                                    icon: const Icon(Icons.keyboard_return_rounded, size: 18),
+                                    label: Text(busy ? 'Returning…' : 'Return'),
+                                  ),
+                                  TextButton.icon(
+                                    onPressed: busy ? null : () => _transfer(context, r),
+                                    icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                                    label: const Text('Transfer'),
+                                  ),
+                                ],
+                              );
+                            }
+                          : null,
+                    ),
                   ],
                 ),
-                sortValue: (r) => r.bazaarName.toLowerCase(),
-              ),
-              WebColumn(label: 'Asset ID', cell: (r) => _Muted(r.assetId), sortValue: (r) => r.assetId.toLowerCase()),
-              WebColumn(label: 'Asset', minWidth: 160, cell: (r) => Text(r.assetName), sortValue: (r) => r.assetName.toLowerCase()),
-              WebColumn(label: 'Quantity', numeric: true, cell: (r) => _Qty(r.quantity, strong: true), sortValue: (r) => r.quantity),
-              WebColumn(label: 'Last Movement', cell: (r) => _Muted(formatDateTime(r.lastMovement)), sortValue: (r) => r.lastMovement?.millisecondsSinceEpoch),
-            ],
-            actions: canMove
-                ? (r) {
-                    final key = '${r.bazaarId}|${r.assetDocumentId}';
-                    final busy = _busy.contains(key);
-
-                    return Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TextButton.icon(
-                          onPressed: busy ? null : () => _return(context, r, key),
-                          icon: const Icon(Icons.keyboard_return_rounded, size: 18),
-                          label: Text(busy ? 'Returning…' : 'Return'),
-                        ),
-                        TextButton.icon(
-                          onPressed: busy ? null : () => _transfer(context, r),
-                          icon: const Icon(Icons.swap_horiz_rounded, size: 18),
-                          label: const Text('Transfer'),
-                        ),
-                      ],
-                    );
-                  }
-                : null,
-          ),
-        ],
+        ),
       ],
     );
   }
@@ -604,7 +821,7 @@ class _WebCurrentBazaarStockPageState extends State<WebCurrentBazaarStockPage> {
 
       if (context.mounted) showWebToast(context, '$quantity unit(s) returned to Head Office.');
     } catch (e) {
-      if (context.mounted) showWebToast(context, cleanError(e), isError: true);
+      if (context.mounted) showWebToast(context, _friendlyError(e), isError: true);
     } finally {
       if (mounted) setState(() => _busy.remove(key));
     }

@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../../models/notification_model.dart';
 import '../../providers/notification_provider.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
 
 class NotificationsScreen extends StatefulWidget {
@@ -181,110 +182,84 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       ),
       body: Consumer<NotificationProvider>(
         builder: (context, provider, _) {
-          if (provider.isLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
+          // One switcher for all four states, so the skeleton fades into the
+          // list instead of being swapped out in a single frame.
+          return AppStateSwitcher(child: _buildBodyState(context, provider));
+        },
+      ),
+    );
+  }
 
-          // A failed load must not be presented as "no notifications".
-          if (provider.notifications.isEmpty && provider.errorMessage != null) {
-            return Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(AppSpacing.xl),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 64,
-                        height: 64,
-                        decoration: BoxDecoration(
-                          color: AppColors.tint(colors.error, colors.brightness),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.error_outline_rounded,
-                          size: 32,
-                          color: colors.error,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      Text(
-                        'Unable to load notifications',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: colors.onSurface,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
-                      Text(
-                        provider.errorMessage!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 13,
-                          height: 1.45,
-                          color: colors.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      FilledButton.icon(
-                        onPressed: _refreshNotifications,
-                        icon: const Icon(Icons.refresh_rounded),
-                        label: const Text('Retry'),
-                      ),
-                    ],
+  Widget _buildBodyState(
+    BuildContext context,
+    NotificationProvider provider,
+  ) {
+    if (provider.isLoading) {
+      return const AppListSkeleton(key: ValueKey('notifications-loading'));
+    }
+
+    final error = provider.errorMessage;
+
+    // A failed load must not be presented as "no notifications".
+    if (provider.notifications.isEmpty &&
+        error != null &&
+        error.trim().isNotEmpty) {
+      // NotificationProvider already turns a Firebase code into a sentence,
+      // so the stored message is shown as it is.
+      return AppErrorState(
+        key: const ValueKey('notifications-error'),
+        title: 'Unable to load notifications',
+        message: error.trim(),
+        onRetry: _refreshNotifications,
+      );
+    }
+
+    if (provider.notifications.isEmpty) {
+      return _buildEmptyState(context);
+    }
+
+    return RefreshIndicator(
+      key: const ValueKey('notifications-content'),
+      onRefresh: _refreshNotifications,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Keep cards readable on tablets by centring a max width.
+          final horizontalPadding = constraints.maxWidth > 932
+              ? (constraints.maxWidth - 900) / 2
+              : AppSpacing.lg;
+
+          return ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              AppSpacing.lg,
+              horizontalPadding,
+              AppSpacing.xxl,
+            ),
+            itemCount: provider.notifications.length + 1,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+                  child: _buildSummaryHeader(context, provider),
+                );
+              }
+
+              final notification = provider.notifications[index - 1];
+
+              // A card draws an icon tile, chips and a menu; its own layer
+              // keeps scrolling from repainting all of that.
+              return RepaintBoundary(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                  child: _buildNotificationCard(
+                    context,
+                    provider,
+                    notification,
                   ),
                 ),
-              ),
-            );
-          }
-
-          if (provider.notifications.isEmpty) {
-            return _buildEmptyState(context);
-          }
-
-          return RefreshIndicator(
-            onRefresh: _refreshNotifications,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                // Keep cards readable on tablets by centring a max width.
-                final horizontalPadding = constraints.maxWidth > 932
-                    ? (constraints.maxWidth - 900) / 2
-                    : AppSpacing.lg;
-
-                return ListView.builder(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: EdgeInsets.fromLTRB(
-                    horizontalPadding,
-                    AppSpacing.lg,
-                    horizontalPadding,
-                    AppSpacing.xxl,
-                  ),
-                  itemCount: provider.notifications.length + 1,
-                  itemBuilder: (context, index) {
-                    if (index == 0) {
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-                        child: _buildSummaryHeader(context, provider),
-                      );
-                    }
-
-                    final notification = provider.notifications[index - 1];
-
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                      child: _buildNotificationCard(
-                        context,
-                        provider,
-                        notification,
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+              );
+            },
           );
         },
       ),
@@ -378,17 +353,22 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Widget _buildChip(BuildContext context, String label) {
     final colors = Theme.of(context).colorScheme;
 
+    // Same pill shape and tinted border the status chips use elsewhere, so a
+    // chip reads the same way on every screen.
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
         color: AppColors.tint(colors.primary, colors.brightness),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
       ),
       child: Text(
         label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
-          color: colors.primary,
-          fontSize: 11,
+          color: AppColors.onTint(colors.primary, colors.brightness),
+          fontSize: 12,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -414,6 +394,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ),
       ),
       child: InkWell(
+        // Matching the card's own corners keeps the ripple inside them.
+        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
         onTap: () {
           _handleNotificationTap(provider, notification);
         },
@@ -614,61 +596,24 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Widget _buildEmptyState(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
+    // Still scrollable, so pull-to-refresh works on an empty inbox too.
     return RefreshIndicator(
+      key: const ValueKey('notifications-empty'),
       onRefresh: _refreshNotifications,
-      child: ListView(
+      child: CustomScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
-        children: [
-          const SizedBox(height: 96),
-          Center(
-            child: Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: AppColors.tint(colors.primary, colors.brightness),
-                shape: BoxShape.circle,
+        slivers: [
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: AppEmptyState(
+              icon: Icons.notifications_none_rounded,
+              title: 'All caught up',
+              message: 'There are no new notifications to review.',
+              action: OutlinedButton.icon(
+                onPressed: _refreshNotifications,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Refresh'),
               ),
-              child: Icon(
-                Icons.notifications_none_rounded,
-                size: 38,
-                color: colors.primary,
-              ),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xl),
-          Center(
-            child: Text(
-              'All Caught Up',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: colors.onSurface,
-                fontSize: 19,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.3,
-              ),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Center(
-            child: Text(
-              'There are no new notifications to review.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13.5,
-                color: colors.onSurfaceVariant,
-                height: 1.45,
-              ),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xl),
-          Center(
-            child: OutlinedButton.icon(
-              onPressed: _refreshNotifications,
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Refresh'),
             ),
           ),
         ],

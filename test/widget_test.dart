@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:it_management_system/core/routes/route_guard.dart';
@@ -247,15 +249,51 @@ void main() {
     });
   });
 
-  group('Bazaar master data', () {
-    test('master dataset has 64 Bazaars with unique deterministic ids', () {
-      expect(BazaarService.masterBazaarCount, 64);
+  group('Bazaars', () {
+    test('no hard-coded Bazaar list ships anywhere in the app', () {
+      // Every Bazaar lives in Firestore. A seeded copy inside the app would
+      // re-create Bazaars that were deliberately removed, so neither the
+      // service nor any caller may carry a Bazaar list, a seeding entry point
+      // or a leftover debug print. The whole of lib/ is checked, because the
+      // seeder used to be called from app.dart rather than from the service.
+      const forbidden = [
+        'seedPunjabBazaars',
+        '_punjabBazaarSeedData',
+        'masterBazaarCount',
+        'masterBazaarDocumentId',
+        'BAZAAR DEBUG',
+      ];
 
-      final id1 = BazaarService.masterBazaarDocumentId('Township Bazaar', 'Lahore');
-      final id2 = BazaarService.masterBazaarDocumentId('  township   bazaar ', 'LAHORE');
+      for (final entity in Directory('lib').listSync(recursive: true)) {
+        if (entity is! File || !entity.path.endsWith('.dart')) {
+          continue;
+        }
 
-      expect(id1, id2);
-      expect(id1, isNot(contains('/')));
+        final source = entity.readAsStringSync();
+
+        for (final name in forbidden) {
+          expect(
+            source.contains(name),
+            isFalse,
+            reason: '$name found in ${entity.path}',
+          );
+        }
+      }
+    });
+
+    test('the name key ignores case, spacing and punctuation', () {
+      // Two Bazaars whose names differ only in case, spacing or punctuation
+      // are one Bazaar, and the key also has to be safe as a document id.
+      expect(
+        BazaarService.bazaarNameKey('  township   BAZAAR '),
+        BazaarService.bazaarNameKey('Township-Bazaar!'),
+      );
+      expect(BazaarService.bazaarNameKey('Township Bazaar'), 'township_bazaar');
+      expect(
+        BazaarService.bazaarNameKey('Lahore/Bazaar'),
+        isNot(contains('/')),
+      );
+      expect(BazaarService.bazaarNameKey('   '), isEmpty);
     });
 
     test('isActive understands isActive flag and legacy status field', () {

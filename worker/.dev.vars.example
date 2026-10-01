@@ -1,0 +1,29 @@
+# Local development secrets for `wrangler dev`. COPY THIS FILE to `.dev.vars`
+# and put your own key in it:
+#
+#   cd worker
+#   cp .dev.vars.example .dev.vars
+#
+# `.dev.vars` is git-ignored and never leaves this machine. The key is read by
+# the Worker process only - it is never sent to the Flutter app, never compiled
+# into the APK, and never appears in the repository.
+#
+# Get a free key from https://aistudio.google.com/apikey  (no card, no billing
+# account). Paste it after the `=` with no quotes and no spaces.
+GEMINI_API_KEY=PASTE_YOUR_GEMINI_API_KEY_HERE
+
+# Which model answers. Any Flash model on the free tier works; this one is the
+# balanced default and is what wrangler.toml ships with.
+AI_MODEL=gemini-3.5-flash-lite
+
+# OFF for local development, and only for local development.
+#
+# App Check's Play Integrity provider issues tokens only to builds installed
+# from Google Play. A debug build on an Android emulator cannot produce one, so
+# with enforcement on, every single call would be refused with
+# `failed-precondition` - which looks exactly like a broken key.
+#
+# The Worker still refuses anyone without a valid, signed-in, email-verified
+# Firebase account, and still applies the per-account daily cap. The committed
+# wrangler.toml keeps this "true" for the real deployment.
+AI_REQUIRE_APP_CHECK=false

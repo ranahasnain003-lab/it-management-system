@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +10,7 @@ import '../../providers/user_provider.dart';
 import '../../services/bazaar_service.dart';
 import '../../services/deployment_service.dart';
 import '../../services/permission_service.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
 import 'transfer_asset_screen.dart';
@@ -39,6 +42,11 @@ class _CurrentlyAtBazaarsScreenState extends State<CurrentlyAtBazaarsScreen> {
   // Rows that represent several Active movement records merged for display.
   final Set<String> _mergedRowIds = <String>{};
 
+  // Searching here re-groups every Active movement by Bazaar, so running it
+  // on each keystroke made typing stutter on a busy inventory. It now runs
+  // once the typing settles.
+  Timer? _searchDebounce;
+
   @override
   void initState() {
     super.initState();
@@ -59,6 +67,10 @@ class _CurrentlyAtBazaarsScreenState extends State<CurrentlyAtBazaarsScreen> {
 
   @override
   void dispose() {
+    // Cancelled first: a pending timer firing after dispose would call
+    // setState on a dead State.
+    _searchDebounce?.cancel();
+
     _searchController
       ..removeListener(_onSearchChanged)
       ..dispose();
@@ -67,10 +79,20 @@ class _CurrentlyAtBazaarsScreenState extends State<CurrentlyAtBazaarsScreen> {
   }
 
   void _onSearchChanged() {
-    if (!mounted) return;
+    final query = _searchController.text.trim().toLowerCase();
 
-    setState(() {
-      _searchQuery = _searchController.text.trim().toLowerCase();
+    if (query == _searchQuery) {
+      return;
+    }
+
+    _searchDebounce?.cancel();
+
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+
+      setState(() {
+        _searchQuery = query;
+      });
     });
   }
 
@@ -170,7 +192,16 @@ class _CurrentlyAtBazaarsScreenState extends State<CurrentlyAtBazaarsScreen> {
   }
 
   void _clearSearch() {
+    // Clearing is a deliberate act, not typing, so it takes effect at once
+    // instead of waiting out the debounce.
+    _searchDebounce?.cancel();
     _searchController.clear();
+
+    if (!mounted || _searchQuery.isEmpty) return;
+
+    setState(() {
+      _searchQuery = '';
+    });
   }
 
   void _clearBazaarFilter() {
@@ -226,115 +257,126 @@ class _CurrentlyAtBazaarsScreenState extends State<CurrentlyAtBazaarsScreen> {
       body: StreamBuilder<List<DeploymentModel>>(
         stream: _deploymentsStream,
         builder: (context, deploymentSnapshot) {
-          if (deploymentSnapshot.connectionState == ConnectionState.waiting &&
-              !deploymentSnapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (deploymentSnapshot.hasError) {
-            return _buildErrorState(deploymentSnapshot.error.toString());
-          }
-
-          final allDeployments = deploymentSnapshot.data ?? <DeploymentModel>[];
-
-          final deployments = _filterDeployments(allDeployments);
-
           return StreamBuilder<List<BazaarModel>>(
             stream: _bazaarsStream,
             builder: (context, bazaarSnapshot) {
-              if (bazaarSnapshot.connectionState == ConnectionState.waiting &&
-                  !bazaarSnapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-
-              if (bazaarSnapshot.hasError) {
-                return _buildErrorState(bazaarSnapshot.error.toString());
-              }
-
-              final bazaars = bazaarSnapshot.data ?? <BazaarModel>[];
-
-              debugPrint(
-                'ALL BAZAARS SCREEN: Received ${bazaars.length} bazaars',
-              );
-
-              final filteredBazaars = _filterBazaars(bazaars);
-
-              return SafeArea(
-                child: Column(
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: colors.surface,
-                        border: Border(
-                          bottom: BorderSide(color: colors.outlineVariant),
-                        ),
-                      ),
-                      padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                      child: Center(
-                        heightFactor: 1,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 900),
-                          child: LayoutBuilder(
-                            builder: (context, constraints) {
-                              final isWide = constraints.maxWidth >= 600;
-
-                              return Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  _buildSummary(allDeployments, bazaars),
-                                  if (isWide)
-                                    Padding(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        AppSpacing.lg,
-                                        AppSpacing.xs,
-                                        AppSpacing.lg,
-                                        0,
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          if (bazaars.isNotEmpty) ...[
-                                            Expanded(
-                                              child: _buildBazaarFilter(
-                                                bazaars,
-                                                padded: false,
-                                              ),
-                                            ),
-                                            const SizedBox(
-                                              width: AppSpacing.md,
-                                            ),
-                                          ],
-                                          Expanded(
-                                            child: _buildSearchBar(
-                                              padded: false,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    )
-                                  else ...[
-                                    _buildBazaarFilter(bazaars),
-                                    _buildSearchBar(),
-                                  ],
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: _buildBazaarInventory(
-                        deployments,
-                        filteredBazaars,
-                      ),
-                    ),
-                  ],
-                ),
+              // Loading, failed and loaded all live in the same slot, so they
+              // fade into one another: the skeleton showing the shape of the
+              // Bazaar cards, then the cards themselves.
+              return AppStateSwitcher(
+                child: _buildStateArea(deploymentSnapshot, bazaarSnapshot),
               );
             },
           );
         },
+      ),
+    );
+  }
+
+  /// Whichever of loading, failed or loaded applies to the two streams.
+  ///
+  /// Both streams are read together, because this screen is only meaningful
+  /// with both: a refused Bazaar read used to look exactly like a Bazaar
+  /// Master with nothing in it, and a bare spinner said nothing about which
+  /// of the two was still on its way.
+  Widget _buildStateArea(
+    AsyncSnapshot<List<DeploymentModel>> deploymentSnapshot,
+    AsyncSnapshot<List<BazaarModel>> bazaarSnapshot,
+  ) {
+    if (deploymentSnapshot.hasError || bazaarSnapshot.hasError) {
+      final error = deploymentSnapshot.error ?? bazaarSnapshot.error!;
+
+      return AppErrorState(
+        key: const ValueKey('error'),
+        title: 'Could not load Bazaar stock',
+        message: _cleanErrorMessage(error),
+        onRetry: () {
+          setState(_createStreams);
+        },
+      );
+    }
+
+    final isFirstLoad = !deploymentSnapshot.hasData || !bazaarSnapshot.hasData;
+
+    if (isFirstLoad) {
+      return const AppListSkeleton(key: ValueKey('loading'), rows: 4);
+    }
+
+    final allDeployments = deploymentSnapshot.data ?? <DeploymentModel>[];
+    final bazaars = bazaarSnapshot.data ?? <BazaarModel>[];
+
+    final deployments = _filterDeployments(allDeployments);
+    final filteredBazaars = _filterBazaars(bazaars);
+
+    final colors = Theme.of(context).colorScheme;
+
+    return KeyedSubtree(
+      key: const ValueKey('content'),
+      child: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: colors.surface,
+                border: Border(
+                  bottom: BorderSide(color: colors.outlineVariant),
+                ),
+              ),
+              padding: const EdgeInsets.only(bottom: AppSpacing.md),
+              child: Center(
+                heightFactor: 1,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 900),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isWide = constraints.maxWidth >= 600;
+
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildSummary(allDeployments, bazaars),
+                          if (isWide)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                AppSpacing.lg,
+                                AppSpacing.xs,
+                                AppSpacing.lg,
+                                0,
+                              ),
+                              child: Row(
+                                children: [
+                                  if (bazaars.isNotEmpty) ...[
+                                    Expanded(
+                                      child: _buildBazaarFilter(
+                                        bazaars,
+                                        padded: false,
+                                      ),
+                                    ),
+                                    const SizedBox(width: AppSpacing.md),
+                                  ],
+                                  Expanded(
+                                    child: _buildSearchBar(padded: false),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else ...[
+                            _buildBazaarFilter(bazaars),
+                            _buildSearchBar(),
+                          ],
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: _buildBazaarInventory(deployments, filteredBazaars),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -652,7 +694,11 @@ class _CurrentlyAtBazaarsScreenState extends State<CurrentlyAtBazaarsScreen> {
 
         final bazaarDeployments = groups[bazaar.id] ?? <DeploymentModel>[];
 
-        return _buildBazaarCard(bazaar, bazaarDeployments);
+        // A Bazaar card carries a whole stock table; the boundary stops a
+        // scroll from repainting the cards that did not change.
+        return RepaintBoundary(
+          child: _buildBazaarCard(bazaar, bazaarDeployments),
+        );
       },
     );
   }
@@ -1334,140 +1380,57 @@ class _CurrentlyAtBazaarsScreenState extends State<CurrentlyAtBazaarsScreen> {
     required bool hasActiveDeployments,
     required bool hasBazaars,
   }) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-
     final isSearchEmpty = _searchQuery.trim().isEmpty;
 
     final hasBazaarFilter = _selectedBazaarId.isNotEmpty;
 
-    String title;
-    String message;
-
+    // Each dead end names the one thing that would end it: clearing the
+    // filter, adding a Bazaar, or transferring stock out to one. "Nothing
+    // here" on its own leaves the reader with nowhere to go.
     if (hasBazaars && (!isSearchEmpty || hasBazaarFilter)) {
-      title = 'No Matching Bazaars';
-      message =
-          'No Bazaar or deployed asset matches the selected filter or search.';
-    } else if (!hasBazaars) {
-      title = 'No Bazaars Found';
-      message = 'No Bazaars have been added to Bazaar Master yet.';
-    } else if (!hasActiveDeployments) {
-      title = 'No Deployed Stock';
-      message = 'There are no assets currently deployed to any Bazaar.';
-    } else {
-      title = 'No Bazaars Found';
-      message = 'No Bazaar matches the selected filter.';
+      return AppEmptyState(
+        icon: Icons.search_off_rounded,
+        title: 'No matching Bazaars',
+        message: 'No Bazaar or deployed asset matches this search and filter.',
+        action: OutlinedButton.icon(
+          onPressed: () {
+            _clearSearch();
+            _clearBazaarFilter();
+          },
+          icon: const Icon(Icons.clear_rounded, size: 18),
+          label: const Text('Clear filters'),
+        ),
+      );
     }
 
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.primary, theme.brightness),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  hasBazaars && (!isSearchEmpty || hasBazaarFilter)
-                      ? Icons.search_off_rounded
-                      : Icons.store_outlined,
-                  size: 30,
-                  color: colors.primary,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                title,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: colors.onSurface,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-              ),
-              if (!isSearchEmpty || hasBazaarFilter) ...[
-                const SizedBox(height: AppSpacing.xl),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    _clearSearch();
-                    _clearBazaarFilter();
-                  },
-                  icon: const Icon(Icons.clear_rounded),
-                  label: const Text('Clear Filters'),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+    if (!hasBazaars) {
+      return const AppEmptyState(
+        icon: Icons.store_outlined,
+        title: 'No Bazaars yet',
+        message:
+            'Add a Bazaar in Bazaar Master first - stock can only be sent to '
+            'a Bazaar that exists.',
+      );
+    }
 
-  Widget _buildErrorState(String error) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
+    if (!hasActiveDeployments) {
+      return const AppEmptyState(
+        icon: Icons.inventory_2_outlined,
+        title: 'No stock at Bazaars',
+        message:
+            'Nothing is deployed right now. Transfer an asset to a Bazaar and '
+            'it will be listed here until it comes back.',
+      );
+    }
 
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.error, theme.brightness),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.cloud_off_rounded,
-                  size: 30,
-                  color: colors.error,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Unable to Load Bazaar Inventory',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: colors.onSurface,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _cleanErrorMessage(error),
-                textAlign: TextAlign.center,
-                style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              FilledButton.icon(
-                onPressed: () {
-                  setState(() {});
-                },
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
+    return AppEmptyState(
+      icon: Icons.store_outlined,
+      title: 'No Bazaars shown',
+      message: 'No Bazaar matches the selected filter.',
+      action: OutlinedButton.icon(
+        onPressed: _clearBazaarFilter,
+        icon: const Icon(Icons.clear_rounded, size: 18),
+        label: const Text('Clear filter'),
       ),
     );
   }

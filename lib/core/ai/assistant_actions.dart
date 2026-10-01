@@ -230,17 +230,35 @@ class ActionResult {
   final String message;
 }
 
+/// The role, reduced to one of the three values firestore.rules accepts, or an
+/// empty string when it is none of them.
+///
+/// Both halves come from [PermissionService] rather than being spelled out
+/// again here: [PermissionService.normalizeRole] is already exactly the rules'
+/// own `role.trim().toLowerCase()` with no alias mapping, and
+/// [PermissionService.isMainRole] is already the "one of the three" check. A
+/// second copy of either would be one more place to drift from the rules, and
+/// a role the rules reject must yield no capabilities at all - otherwise the
+/// assistant offers changes that come straight back as permission-denied.
+String canonicalAssistantRole(String? role) {
+  final normalized = PermissionService.normalizeRole(role);
+
+  return PermissionService.isMainRole(normalized) ? normalized : '';
+}
+
 /// What the signed-in account is allowed to do, read once from the profile.
 ///
-/// This is a thin, testable view over [PermissionService]; it defines no new
-/// rules. Firestore rules and the services remain the real enforcement - this
-/// only decides what the assistant will offer, so the user is told "you cannot
-/// do that" instead of watching a write get rejected.
+/// The three canonical roles decide everything here, because they are what
+/// firestore.rules reads. Firestore rules and the services remain the real
+/// enforcement - this only decides what the assistant will offer, so the user
+/// is told "you cannot do that" instead of watching a write get rejected.
 class AssistantPermissions {
   const AssistantPermissions({
     required this.role,
     this.uid = '',
     this.displayName = '',
+    this.status = 'active',
+    this.createdBy = '',
     this.roles = const <String>[],
     this.customPermissions = const <String>[],
   });
@@ -251,57 +269,73 @@ class AssistantPermissions {
   final String role;
   final String uid;
   final String displayName;
+
+  /// The account's stored status.
+  ///
+  /// Defaults to active because the one place that builds this from a live
+  /// profile - `buildAssistantPermissions` - always passes the stored value,
+  /// and returns [none] for a profile that has not loaded. A caller that only
+  /// has a role therefore describes an account in use, not a pending one.
+  final String status;
+
+  /// The uid of whoever created this account: for a User, the Admin they
+  /// belong to. See [resolveAssetOwnerUid].
+  final String createdBy;
+
+  /// The `roles` array as stored, and any per-account permission strings.
+  ///
+  /// Both are mirrors kept for the older screens. Neither grants anything
+  /// here, on purpose: firestore.rules reads the single `role` field, so an
+  /// entry in either list would only buy the user a permission-denied.
   final List<String> roles;
   final List<String> customPermissions;
 
-  bool get isSuperAdmin => PermissionService.isSuperAdmin(role);
-  bool get isAdmin => PermissionService.isAdmin(role);
-  bool get isNormalUser => PermissionService.isUser(role);
+  /// The role as the rules read it, or an empty string for a role nobody
+  /// recognises - which is treated as no access rather than as a User.
+  String get canonicalRole => canonicalAssistantRole(role);
+
+  /// Whether the account may act at all.
+  ///
+  /// [PermissionService.isActiveStatus] is the app's one answer to "may this
+  /// account act": 'active' and 'approved' pass, and 'pending' does not, so a
+  /// self-registered account can do nothing until it is activated.
+  bool get isActive =>
+      canonicalRole.isNotEmpty && PermissionService.isActiveStatus(status);
+
+  bool get isSuperAdmin =>
+      isActive && canonicalRole == PermissionService.superAdminRole;
+
+  bool get isAdmin => isActive && canonicalRole == PermissionService.adminRole;
+
+  bool get isNormalUser =>
+      isActive && canonicalRole == PermissionService.userRole;
+
+  /// Super Admin and Admin: the roles that change inventory directly.
+  bool get _manages => isSuperAdmin || isAdmin;
 
   String get roleLabel => PermissionService.roleLabel(role);
 
-  bool get canAddAsset => PermissionService.canCreateAsset(
-    role,
-    roles: roles,
-    permissions: customPermissions,
-  );
+  /// Every active role may register an asset; a User's asset is filed under
+  /// the Admin they belong to. See [resolveAssetOwnerUid].
+  bool get canAddAsset => isActive;
 
-  bool get canEditAsset => PermissionService.canEditAsset(
-    role,
-    roles: roles,
-    permissions: customPermissions,
-  );
+  bool get canEditAsset => _manages;
 
-  bool get canTransfer => PermissionService.canTransferAsset(
-    role,
-    roles: roles,
-    permissions: customPermissions,
-  );
+  bool get canTransfer => _manages;
 
-  bool get canAssign => PermissionService.canAssignAsset(
-    role,
-    roles: roles,
-    permissions: customPermissions,
-  );
+  bool get canAssign => _manages;
 
-  bool get canReturn => PermissionService.canReturnAsset(
-    role,
-    roles: roles,
-    permissions: customPermissions,
-  );
+  bool get canReturn => _manages;
 
-  bool get canChangeStatus => PermissionService.canChangeAssetStatus(
-    role,
-    roles: roles,
-    permissions: customPermissions,
-  );
+  bool get canChangeStatus => _manages;
 
-  /// Bazaars are locations; the app already gates them on manage_locations.
-  bool get canManageBazaars => PermissionService.canManageLocations(
-    role,
-    roles: roles,
-    permissions: customPermissions,
-  );
+  /// Every active role may add a Bazaar: the list is shared, and adding to it
+  /// takes nothing away.
+  bool get canAddBazaar => isActive;
+
+  /// Editing or disabling an existing Bazaar is a manager's change, because it
+  /// alters a record other accounts already depend on.
+  bool get canManageBazaars => _manages;
 
   /// Whether this account files changes as requests for an Admin to approve.
   bool get worksThroughRequests => isNormalUser;
@@ -326,8 +360,34 @@ class AssistantPermissions {
     if (canAssign || worksThroughRequests) 'assign',
     if (canReturn || worksThroughRequests) 'unassign',
     if (canChangeStatus || worksThroughRequests) 'updateStatus',
-    if (canManageBazaars) ...['createBazaar', 'disableBazaar'],
+    if (canAddBazaar) 'createBazaar',
+    if (canManageBazaars) 'disableBazaar',
   ];
+}
+
+/// The account a newly created asset must be filed under.
+///
+/// A User does not own inventory: the assets they register belong to the Admin
+/// whose account created theirs, which is what `createdBy` on their profile
+/// holds. A self-registered User has no such Admin, so the asset stays under
+/// their own uid - the same fallback the Add Asset form applies. A Super Admin
+/// or an Admin owns what it creates.
+///
+/// Returns an empty string when there is no signed-in uid to fall back on. The
+/// caller refuses on that rather than writing an asset nobody owns.
+///
+/// This lives beside the permissions so the planner and the executor read the
+/// rule from one place instead of keeping copies of it. The Add Asset form
+/// deliberately keeps its own: it also lets a Super Admin file an asset under
+/// a chosen Admin, which is an input this has nowhere to take, so folding the
+/// form into this would silently drop that choice.
+String resolveAssetOwnerUid(AssistantPermissions permissions) {
+  if (permissions.isNormalUser) {
+    final owner = permissions.createdBy.trim();
+    if (owner.isNotEmpty) return owner;
+  }
+
+  return permissions.uid.trim();
 }
 
 /// A change the language model believes the user asked for.

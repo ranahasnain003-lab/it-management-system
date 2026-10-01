@@ -1,13 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/providers/request_provider.dart';
 import '../../core/providers/user_provider.dart';
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 import '../../models/request_model.dart';
 import '../export/table_export.dart';
 import '../widgets/web_common.dart';
 import '../widgets/web_data_table.dart';
+
+/// A FirebaseException's `toString()` starts with its plugin code, e.g.
+/// `[cloud_firestore/aborted]` - never something to show a user.
+final RegExp _platformCode = RegExp(r'^\[[a-z_]+/');
 
 class WebRequestsPage extends StatefulWidget {
   const WebRequestsPage({super.key, this.focusRequestId});
@@ -20,9 +27,25 @@ class WebRequestsPage extends StatefulWidget {
 }
 
 class _WebRequestsPageState extends State<WebRequestsPage> {
+  /// How long typing has to pause before the table is filtered again.
+  ///
+  /// Filtering walks every request and rebuilds every visible row, so doing it
+  /// per keystroke made a long history stutter under fast typing. Short enough
+  /// that the results still feel immediate.
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
+
+  final TextEditingController _search = TextEditingController();
+
+  Timer? _searchTimer;
+
   String _query = '';
-  late String _status =
+
+  /// The view this page opens on: the pending queue, unless a notification
+  /// sent us to one particular request, which may have any status.
+  late final String _defaultStatus =
       (widget.focusRequestId ?? '').isEmpty ? 'pending' : 'all';
+
+  late String _status = _defaultStatus;
   String _type = 'all';
 
   /// The notification target is opened once, as soon as it has loaded.
@@ -30,6 +53,36 @@ class _WebRequestsPageState extends State<WebRequestsPage> {
 
   /// Requests with an approve/reject in progress (double-click guard).
   final Set<String> _processing = {};
+
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Holds the newest text and applies it once typing stops, so the filter
+  /// runs on the final query rather than on every prefix of it.
+  void _onQueryChanged(String value) {
+    _searchTimer?.cancel();
+    _searchTimer = Timer(_searchDebounce, () {
+      if (!mounted || value == _query) return;
+      setState(() => _query = value);
+    });
+  }
+
+  /// Resets everything the toolbar can hide rows with. The pending debounce is
+  /// dropped first, otherwise a keystroke from just before the tap would put
+  /// the search term straight back.
+  void _clearFilters() {
+    _searchTimer?.cancel();
+    _search.clear();
+    setState(() {
+      _query = '';
+      _status = _defaultStatus;
+      _type = 'all';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -139,7 +192,11 @@ class _WebRequestsPageState extends State<WebRequestsPage> {
         const SizedBox(height: AppSpacing.lg),
         WebToolbar(
           children: [
-            WebSearchField(hint: 'Search asset, requester, reason…', onChanged: (v) => setState(() => _query = v)),
+            WebSearchField(
+              controller: _search,
+              hint: 'Search asset, requester, reason…',
+              onChanged: _onQueryChanged,
+            ),
             WebFilterDropdown<String>(
               key: ValueKey('status-$_status'),
               label: 'Status',
@@ -153,98 +210,135 @@ class _WebRequestsPageState extends State<WebRequestsPage> {
               items: const {'all': 'All types', 'edit': 'Edit', 'delete': 'Delete', 'transfer': 'Transfer'},
               onChanged: (v) => setState(() => _type = v),
             ),
+            // Offered only while something is actually hiding rows, so the
+            // toolbar stays as it was in the common case. Driven from the
+            // controller rather than from the debounced query, so it appears
+            // and clears on the keystroke instead of a quarter second later.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _search,
+              builder: (context, value, _) {
+                final filtered = value.text.trim().isNotEmpty ||
+                    _status != _defaultStatus ||
+                    _type != 'all';
+
+                if (!filtered) return const SizedBox.shrink();
+
+                return TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                  label: const Text('Clear filters'),
+                );
+              },
+            ),
           ],
         ),
-        if (provider.errorMessage != null && provider.requests.isEmpty)
-          WebMessageState(
-            icon: Icons.error_outline_rounded,
-            title: 'Unable to load requests',
-            message: cleanError(provider.errorMessage!),
-            isError: true,
-            action: FilledButton(onPressed: () => provider.listenToRequests(forceRestart: true), child: const Text('Retry')),
-          )
-        else if (provider.isLoading && provider.requests.isEmpty)
-          const WebLoadingState(message: 'Loading requests...')
-        else
-          WebDataTable<RequestModel>(
-            rows: rows,
-            initialSortColumn: 0,
-            initialSortAscending: false,
-            emptyMessage: 'No requests match the filters.',
-            onRowTap: (r) => _showDetails(context, r, canDecide && r.isPending && r.requestedBy != uid),
-            columns: [
-              WebColumn(
-                label: 'Date',
-                cell: (r) => _TwoLineCell(
-                  primary: formatDate(r.requestDate),
-                  secondary: _time(r.requestDate),
-                ),
-                sortValue: (r) => r.requestDate?.millisecondsSinceEpoch,
-              ),
-              WebColumn(label: 'Type', cell: (r) => _TypeBadge(r.requestType), sortValue: (r) => r.requestType.toLowerCase()),
-              WebColumn(
-                label: 'Asset',
-                minWidth: 160,
-                cell: (r) => _TwoLineCell(
-                  primary: r.assetName.isEmpty ? '—' : r.assetName,
-                  secondary: r.assetId,
-                  maxWidth: 260,
-                ),
-                sortValue: (r) => r.assetName.toLowerCase(),
-              ),
-              WebColumn(
-                label: 'Requested By',
-                cell: (r) => _TwoLineCell(
-                  primary: r.requestedUserName.isEmpty ? '—' : r.requestedUserName,
-                  secondary: r.isTransferRequest && r.transferQuantity > 0
-                      ? '${r.transferQuantity} unit(s)'
-                      : '',
-                ),
-                sortValue: (r) => r.requestedUserName.toLowerCase(),
-              ),
-              WebColumn(label: 'Status', cell: (r) => WebStatusChip(r.status), sortValue: (r) => r.status.toLowerCase()),
-              WebColumn(
-                label: 'Decided By',
-                cell: (r) => _TwoLineCell(
-                  primary: r.approvedBy.isEmpty ? '—' : r.approvedBy,
-                  secondary: r.isPending ? '' : formatDate(r.approvedDate),
-                  muted: r.approvedBy.isEmpty,
-                ),
-              ),
-            ],
-            actions: (r) {
-              final mayDecide = canDecide && r.isPending && r.requestedBy != uid;
-              final busy = _processing.contains(r.id);
-
-              return Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: 'View details',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => _showDetails(context, r, mayDecide),
-                    icon: const Icon(Icons.visibility_outlined, size: 20),
-                  ),
-                  if (mayDecide) ...[
-                    const SizedBox(width: AppSpacing.xs),
-                    _DecisionIconButton(
-                      tooltip: 'Approve',
-                      icon: Icons.check_rounded,
-                      tone: AppColors.success,
-                      onPressed: busy ? null : () => _decide(context, r, approve: true),
+        // One crossfade between the three things this page can show. A failed
+        // read is drawn as a failure with a way out, never as an empty queue -
+        // the table's own empty state says that instead.
+        AppStateSwitcher(
+          child: provider.errorMessage != null && provider.requests.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('error'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppErrorState(
+                      title: 'Unable to load requests',
+                      message: _requestError(provider.errorMessage!),
+                      // The same subscription the Refresh action restarts, so
+                      // a User still sees only their own requests afterwards.
+                      onRetry: () => provider.listenToRequests(forceRestart: true),
                     ),
-                    const SizedBox(width: AppSpacing.sm),
-                    _DecisionIconButton(
-                      tooltip: 'Reject',
-                      icon: Icons.close_rounded,
-                      tone: AppColors.error,
-                      onPressed: busy ? null : () => _decide(context, r, approve: false),
+                  ),
+                )
+              : provider.isLoading && provider.requests.isEmpty
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: double.infinity,
+                  child: WebTableSkeleton(columns: 6),
+                )
+              : WebDataTable<RequestModel>(
+                  key: const ValueKey('rows'),
+                  rows: rows,
+                  initialSortColumn: 0,
+                  initialSortAscending: false,
+                  emptyMessage: provider.requests.isEmpty
+                      ? 'No requests have been submitted yet.'
+                      : 'No requests match the filters.',
+                  onRowTap: (r) => _showDetails(context, r, canDecide && r.isPending && r.requestedBy != uid),
+                  columns: [
+                    WebColumn(
+                      label: 'Date',
+                      cell: (r) => _TwoLineCell(
+                        primary: formatDate(r.requestDate),
+                        secondary: _time(r.requestDate),
+                      ),
+                      sortValue: (r) => r.requestDate?.millisecondsSinceEpoch,
+                    ),
+                    WebColumn(label: 'Type', cell: (r) => _TypeBadge(r.requestType), sortValue: (r) => r.requestType.toLowerCase()),
+                    WebColumn(
+                      label: 'Asset',
+                      minWidth: 160,
+                      cell: (r) => _TwoLineCell(
+                        primary: r.assetName.isEmpty ? '—' : r.assetName,
+                        secondary: r.assetId,
+                        maxWidth: 260,
+                      ),
+                      sortValue: (r) => r.assetName.toLowerCase(),
+                    ),
+                    WebColumn(
+                      label: 'Requested By',
+                      cell: (r) => _TwoLineCell(
+                        primary: r.requestedUserName.isEmpty ? '—' : r.requestedUserName,
+                        secondary: r.isTransferRequest && r.transferQuantity > 0
+                            ? '${r.transferQuantity} unit(s)'
+                            : '',
+                      ),
+                      sortValue: (r) => r.requestedUserName.toLowerCase(),
+                    ),
+                    WebColumn(label: 'Status', cell: (r) => WebStatusChip(r.status), sortValue: (r) => r.status.toLowerCase()),
+                    WebColumn(
+                      label: 'Decided By',
+                      cell: (r) => _TwoLineCell(
+                        primary: r.approvedBy.isEmpty ? '—' : r.approvedBy,
+                        secondary: r.isPending ? '' : formatDate(r.approvedDate),
+                        muted: r.approvedBy.isEmpty,
+                      ),
                     ),
                   ],
-                ],
-              );
-            },
-          ),
+                  actions: (r) {
+                    final mayDecide = canDecide && r.isPending && r.requestedBy != uid;
+                    final busy = _processing.contains(r.id);
+
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'View details',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () => _showDetails(context, r, mayDecide),
+                          icon: const Icon(Icons.visibility_outlined, size: 20),
+                        ),
+                        if (mayDecide) ...[
+                          const SizedBox(width: AppSpacing.xs),
+                          _DecisionIconButton(
+                            tooltip: 'Approve',
+                            icon: Icons.check_rounded,
+                            tone: AppColors.success,
+                            onPressed: busy ? null : () => _decide(context, r, approve: true),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          _DecisionIconButton(
+                            tooltip: 'Reject',
+                            icon: Icons.close_rounded,
+                            tone: AppColors.error,
+                            onPressed: busy ? null : () => _decide(context, r, approve: false),
+                          ),
+                        ],
+                      ],
+                    );
+                  },
+                ),
+        ),
       ],
     );
   }
@@ -295,10 +389,24 @@ class _WebRequestsPageState extends State<WebRequestsPage> {
 
       if (context.mounted) showWebToast(context, approve ? 'Request approved.' : 'Request rejected.');
     } catch (e) {
-      if (context.mounted) showWebToast(context, cleanError(e), isError: true);
+      if (context.mounted) showWebToast(context, _requestError(e), isError: true);
     } finally {
       if (mounted) setState(() => _processing.remove(request.id));
     }
+  }
+
+  /// Shared [cleanError] passes an unrecognised exception through verbatim, so
+  /// a contended approval transaction could show the approver
+  /// `[cloud_firestore/aborted] ...`. The business reasons ("This request has
+  /// already been processed.") are the point of the message and are kept; only
+  /// a raw platform code, or an internal message far too long to read on a
+  /// card, becomes one short sentence, as on the mobile screens.
+  String _requestError(Object error) {
+    final cleaned = cleanError(error);
+
+    return _platformCode.hasMatch(cleaned) || cleaned.length > 180
+        ? 'Something went wrong. Please try again.'
+        : cleaned;
   }
 
   Future<void> _showDetails(BuildContext context, RequestModel request, bool mayDecide) {

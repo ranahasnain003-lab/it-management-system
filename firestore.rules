@@ -32,21 +32,48 @@ service cloud.firestore {
     }
 
     // Only these statuses may use the system. 'blocked', 'disabled',
-    // 'inactive' and 'deleted' are all denied.
+    // 'inactive', 'pending' and 'deleted' are all denied. Read in any letter
+    // case and with surrounding spaces trimmed, as the app reads it: a profile
+    // edited by hand in the Firebase console as 'ACTIVE' or ' active ' must
+    // not be let in by the app and refused here.
     function isActiveStatus(data) {
-      return data.get('status', '') in ['active', 'Active', 'approved', 'Approved'];
+      return data.get('status', '').trim().lower() in ['active', 'approved'];
+    }
+
+    // The role STORED on an existing profile, trimmed and in lower case. The
+    // app reads roles case-insensitively, so a profile saved by hand in the
+    // Firebase console as 'Admin' (or ' admin ') was shown as an Administrator
+    // while every rule comparing against 'admin' refused it - the whole
+    // inventory query failed with permission-denied. Only stored values are
+    // read this way: every rule that WRITES a role still requires the exact
+    // lower-case value, and no account may change its own role.
+    function roleOf(data) {
+      return data.get('role', '').trim().lower();
+    }
+
+    // Only these three roles exist. Anything else stored in `role` - a typo, a
+    // value from an older version, a missing field - grants nothing.
+    // PermissionService decides the same way (an unknown role resolves to no
+    // permissions at all), and the rules must never be more permissive than
+    // the screens: an account the app shows as powerless would otherwise still
+    // be able to read the whole inventory through a direct API call.
+    function isKnownRole(data) {
+      return roleOf(data) in ['super_admin', 'admin', 'user'];
     }
 
     // Login refuses unverified email addresses; enforced here too so a
-    // restored session or a direct API call cannot skip that check.
+    // restored session or a direct API call cannot skip that check. The role
+    // is checked here rather than at every call site, so a rule added later
+    // cannot forget it.
     function isActiveUser() {
       return currentUserExists()
         && request.auth.token.email_verified == true
-        && isActiveStatus(currentUser());
+        && isActiveStatus(currentUser())
+        && isKnownRole(currentUser());
     }
 
     function currentRole() {
-      return currentUser().get('role', '');
+      return roleOf(currentUser());
     }
 
     function isSuperAdmin() {
@@ -69,23 +96,22 @@ service cloud.firestore {
     // USER -> ADMIN RELATIONSHIP
     // ============================================================
     //
-    // users/{userId}.createdBy == UID of the Admin (or Super Admin)
-    // whose inventory the User works with.
+    // users/{userId}.createdBy == UID of the Admin (or Super Admin) who
+    // created the account. It no longer decides what a User may READ -
+    // inventory and movement history are organisation-wide - but it still
+    // decides who OWNS an asset a User adds, and who a User's request is
+    // routed to.
     // ============================================================
 
     function currentUserAdminUid() {
       return currentUser().get('createdBy', '');
     }
 
-    function currentUserHasAdmin() {
-      return isUser() && currentUserAdminUid() != '';
-    }
-
     function isActiveAdminUid(uid) {
       return uid is string
         && uid != ''
         && exists(userPath(uid))
-        && get(userPath(uid)).data.get('role', '') == 'admin'
+        && roleOf(get(userPath(uid)).data) == 'admin'
         && isActiveStatus(get(userPath(uid)).data);
     }
 
@@ -100,10 +126,14 @@ service cloud.firestore {
     // ASSET HELPERS
     // ============================================================
 
-    function assetBelongsToCurrentUserAdmin(assetId) {
-      return currentUserHasAdmin()
-        && exists(assetPath(assetId))
-        && get(assetPath(assetId)).data.get('adminId', '') == currentUserAdminUid();
+    // A request may only name inventory that really exists. A User may read
+    // the whole inventory (see /assets below), so a User may also ASK about
+    // any of it - which is all a request is. The asset itself stays
+    // unwritable for a User: only a manager's approval changes it.
+    function assetExists(assetId) {
+      return assetId is string
+        && assetId != ''
+        && exists(assetPath(assetId));
     }
 
     // Owner UID of an asset or movement record; missing or null -> ''.
@@ -193,7 +223,11 @@ service cloud.firestore {
       // ----------------------------------------------------------
       //
       // A newly authenticated account may create ONLY its own
-      // profile as an active, unassigned User.
+      // profile as a PENDING, unassigned User. 'pending' is not an
+      // active status, so a self-registered account can do nothing
+      // until a Super Admin (or the Admin who manages it) activates
+      // it. Accounts created by a Super Admin/Admin below are active
+      // straight away.
       // ----------------------------------------------------------
 
       allow create: if isSignedIn()
@@ -202,7 +236,7 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.role == 'user'
         && validRoles(request.resource.data)
-        && request.resource.data.status == 'active'
+        && request.resource.data.status == 'pending'
         && request.resource.data.createdBy == ''
         && request.resource.data.get('createdByEmail', '') == ''
         && request.resource.data.get('adminId', '') == ''
@@ -277,7 +311,7 @@ service cloud.firestore {
 
       allow update: if isSuperAdmin()
         && userId != request.auth.uid
-        && resource.data.get('role', '') != 'super_admin'
+        && roleOf(resource.data) != 'super_admin'
         && request.resource.data.role in ['admin', 'user']
         && validRoles(request.resource.data)
         // The profile always stays bound to its Firebase Auth account.
@@ -292,11 +326,14 @@ service cloud.firestore {
       // immutable for an Admin.
       // ----------------------------------------------------------
 
-      // Descriptive details, plus the soft delete (status -> 'deleted').
-      // Status changes are otherwise reserved for the Super Admin.
+      // Descriptive details, plus the soft delete (status -> 'deleted') and
+      // activating a self-registered account ('pending' -> 'active') so an
+      // Admin can admit the Users it manages without the Super Admin. Any
+      // other status change (e.g. 'blocked') stays reserved for the Super
+      // Admin.
       allow update: if isAdmin()
         && userId != request.auth.uid
-        && resource.data.get('role', '') == 'user'
+        && roleOf(resource.data) == 'user'
         && resource.data.get('createdBy', '') in [request.auth.uid, '']
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name',
@@ -313,6 +350,10 @@ service cloud.firestore {
         && (
           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status'])
           || request.resource.data.status == 'deleted'
+          || (
+            resource.data.get('status', '').trim().lower() == 'pending'
+            && request.resource.data.status == 'active'
+          )
         );
 
       // ----------------------------------------------------------
@@ -368,7 +409,7 @@ service cloud.firestore {
 
       allow update: if isSuperAdmin()
         && userId != request.auth.uid
-        && resource.data.get('role', '') == 'admin'
+        && roleOf(resource.data) == 'admin'
         && isActiveStatus(resource.data)
         && request.resource.data.role == 'super_admin'
         && validRoles(request.resource.data)
@@ -388,7 +429,7 @@ service cloud.firestore {
 
       allow update: if isSuperAdmin()
         && userId != request.auth.uid
-        && resource.data.get('role', '') == 'super_admin'
+        && roleOf(resource.data) == 'super_admin'
         && request.resource.data.role == 'admin'
         && validRoles(request.resource.data)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -413,20 +454,12 @@ service cloud.firestore {
 
     match /requests/{requestId} {
 
+      // An Admin may already change any inventory directly, so restricting it
+      // to requests about its OWN assets bought nothing: it may approve a
+      // request about any inventory. The guards that matter are below - only a
+      // Pending request, and never one's own.
       function canActOnRequest() {
-        return isSuperAdmin()
-          || (
-            isAdmin()
-            && (
-              resource.data.get('receiverId', '') == request.auth.uid
-              || resource.data.get('assetAdminId', '') == request.auth.uid
-              || (
-                resource.data.get('assetId', '') != ''
-                && exists(assetPath(resource.data.assetId))
-                && get(assetPath(resource.data.assetId)).data.get('adminId', '') == request.auth.uid
-              )
-            )
-          );
+        return isManager();
       }
 
       // ----------------------------------------------------------
@@ -460,9 +493,11 @@ service cloud.firestore {
             isUser()
             && (
               request.resource.data.get('assetId', '') == ''
-              || assetBelongsToCurrentUserAdmin(request.resource.data.assetId)
+              || assetExists(request.resource.data.assetId)
             )
-            // A User's request is routed only to the User's own Admin.
+            // A User's request is routed to the User's own Admin, or left
+            // unrouted ('') for any manager to pick up - which is the only
+            // possibility for a User who is not linked to an Admin.
             && request.resource.data.get('receiverId', '') in ['', currentUserAdminUid()]
           )
         );
@@ -499,20 +534,23 @@ service cloud.firestore {
       // READ
       // ----------------------------------------------------------
       //
-      // Super Admin / Admin: all inventory.
-      // User: only inventory owned by the Admin the User belongs to.
-      // (Uses resource.data so scoped list queries are allowed.)
+      // Inventory is organisation-wide: every ACTIVE account reads all
+      // of it, so a User can look anything up without being scoped to
+      // one Admin. Writes below stay restricted - a User may only
+      // create, never update or delete.
       // ----------------------------------------------------------
 
-      allow read: if isManager();
-
-      allow read: if currentUserHasAdmin()
-        && resource.data.adminId == currentUserAdminUid();
+      allow read: if isActiveUser();
 
       // ----------------------------------------------------------
       // CREATE
       // ----------------------------------------------------------
 
+      // A User may ADD inventory but never touch it afterwards, so the
+      // new record must be a plain, freshly stocked asset: everything at
+      // Head Office, nothing assigned or deployed. AssetService
+      // ._newAssetData already forces exactly that shape, so no
+      // legitimate add is refused here.
       allow create: if stockConsistent(request.resource.data)
         && (
           isSuperAdmin()
@@ -521,12 +559,25 @@ service cloud.firestore {
             isAdmin()
             && request.resource.data.get('adminId', '') == request.auth.uid
           )
+          ||
+          (
+            isUser()
+            && request.resource.data.get('createdBy', '') == request.auth.uid
+            && request.resource.data.get('adminId', '') != ''
+            && request.resource.data.get('adminId', '') in [request.auth.uid, currentUserAdminUid()]
+            && request.resource.data.headOfficeQuantity == request.resource.data.quantity
+            && request.resource.data.assignedQuantity == 0
+            && request.resource.data.deployedQuantity == 0
+            && request.resource.data.get('assignedTo', null) == null
+          )
         );
 
       // ----------------------------------------------------------
       // UPDATE
       // ----------------------------------------------------------
       //
+      // Managers only - this is what stops a User editing inventory
+      // it can read. A User asks for a change through /requests.
       // A write may never turn a consistent stock record into an
       // inconsistent one.
       // ----------------------------------------------------------
@@ -543,8 +594,16 @@ service cloud.firestore {
       // ----------------------------------------------------------
       // DELETE
       // ----------------------------------------------------------
+      //
+      // Stock that is still at a Bazaar or assigned to someone must
+      // not vanish, or the movement records would point at nothing.
+      // AssetService.deleteAsset refuses that case already; enforced
+      // here too so a direct API call cannot skip the check.
+      // ----------------------------------------------------------
 
-      allow delete: if isManager();
+      allow delete: if isManager()
+        && resource.data.get('deployedQuantity', 0) == 0
+        && resource.data.get('assignedQuantity', 0) == 0;
     }
 
     // ============================================================
@@ -555,12 +614,122 @@ service cloud.firestore {
 
       allow read: if isActiveUser();
 
-      allow create, update: if isSuperAdmin()
+      // Any active account may ADD a Bazaar: the field list is closed so a
+      // create cannot smuggle in unexpected data. A User's new Bazaar is
+      // always created active, because disabling one is a manager action - and
+      // since the app resolves a missing isActive from `status`, both fields
+      // are pinned, or leaving isActive out would be the way around it. A
+      // manager may create a Bazaar already disabled: the Add dialogs show it
+      // the active switch, and it could disable the Bazaar with a second write
+      // anyway.
+      allow create: if isActiveUser()
         && request.resource.data.name is string
-        && request.resource.data.name.trim().size() > 0;
+        && request.resource.data.name.trim().size() > 0
+        && (
+          isManager()
+          || (
+            request.resource.data.get('isActive', false) == true
+            && request.resource.data.get('status', '') in ['', 'Active', 'active']
+          )
+        )
+        && request.resource.data.get('createdBy', '') == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'name',
+          'bazaarName',
+          'location',
+          'city',
+          'contactPerson',
+          'contactNumber',
+          'address',
+          'isActive',
+          'status',
+          'isMaster',
+          'bazaarType',
+          'type',
+          'createdBy',
+          'createdByName',
+          'createdAt',
+          'lastUpdated',
+          'updatedAt'
+        ])
+        && request.resource.data.get('isMaster', false) == false;
+
+      // Editing and disabling a Bazaar is a manager action. The whitelist is
+      // checked with affectedKeys, not keys().hasOnly, because the oldest
+      // Bazaar documents have a different shape (city/type/status and no
+      // location) and must stay editable without being rewritten first.
+      allow update: if isManager()
+        && request.resource.data.name is string
+        && request.resource.data.name.trim().size() > 0
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'bazaarName',
+          'location',
+          'city',
+          'contactPerson',
+          'contactNumber',
+          'address',
+          'isActive',
+          'status',
+          'bazaarType',
+          'type',
+          'lastUpdated',
+          'updatedAt'
+        ]);
 
       // Bazaars are disabled, never deleted, so historical movement
       // records always keep their reference.
+      allow delete: if false;
+    }
+
+    // ============================================================
+    // CATEGORIES (master data)
+    // ============================================================
+    //
+    // The document id IS the normalised name key. A create on an id that
+    // already exists is evaluated as an update, so the deterministic id is
+    // what stops two accounts adding the same category twice.
+    // ============================================================
+
+    match /categories/{categoryId} {
+
+      allow read: if isActiveUser();
+
+      allow create: if isActiveUser()
+        && request.resource.data.name is string
+        && request.resource.data.name.trim().size() > 0
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.nameKey == categoryId
+        && request.resource.data.get('createdBy', '') == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'name',
+          'nameKey',
+          'createdBy',
+          'createdByName',
+          'createdAt'
+        ]);
+
+      // Correcting the display name is open to every active account, exactly
+      // like adding a category. The ONE field that may change is `name`:
+      // affectedKeys pins everything else, so no role can reach the key, the
+      // author, the date, or add a field of its own through this path.
+      //
+      // The key never moves. It is the document id, so it cannot be changed
+      // anyway, and assets record their category as text - keeping the key
+      // is what lets a corrected spelling and the old one still sitting on
+      // an asset collapse onto a single entry in the app's category list.
+      //
+      // Duplicate protection stays with the key: a rename towards a name
+      // whose key another category already owns is refused by
+      // CategoryService.rename inside a transaction.
+      allow update: if isActiveUser()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.trim().size() > 0
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.get('nameKey', '') == resource.data.get('nameKey', '');
+
+      // Categories are never deleted, so existing assets keep their label.
       allow delete: if false;
     }
 
@@ -570,12 +739,9 @@ service cloud.firestore {
 
     match /deployments/{deploymentId} {
 
-      // A User sees only movements of their own Admin's inventory.
-      allow read: if isManager()
-        || (
-          currentUserHasAdmin()
-          && resource.data.get('adminId', '') == currentUserAdminUid()
-        );
+      // Movement history is organisation-wide, like the inventory it
+      // describes: every active account may read all of it.
+      allow read: if isActiveUser();
 
       // adminId must name the owner of the moved asset.
       allow create: if isManager()
@@ -658,7 +824,10 @@ service cloud.firestore {
 
       // Audit entries are written in the name of the signed-in account,
       // stamped with the server time, and can never be edited or deleted.
-      allow create: if isManager()
+      // Any active account may write its own entry - a User adds assets and
+      // Bazaars, and those actions have to be auditable too - but only a
+      // manager may read the trail.
+      allow create: if isActiveUser()
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.createdAt == request.time;
 

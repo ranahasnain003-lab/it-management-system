@@ -6,6 +6,7 @@
 // and the real stock arithmetic rather than a mock of them.
 
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
+import 'package:firebase_auth_mocks/firebase_auth_mocks.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:it_management_system/core/ai/action_executor.dart';
@@ -15,6 +16,7 @@ import 'package:it_management_system/core/ai/inventory_assistant.dart';
 import 'package:it_management_system/core/services/asset_service.dart';
 import 'package:it_management_system/core/services/bazaar_service.dart';
 import 'package:it_management_system/core/services/deployment_service.dart';
+import 'package:it_management_system/core/services/request_service.dart';
 import 'package:it_management_system/models/asset_model.dart';
 import 'package:it_management_system/models/deployment_model.dart';
 import 'package:it_management_system/models/user_model.dart';
@@ -108,6 +110,7 @@ InventorySnapshot snapshot({
   List<AssetModel>? assets,
   List<BazaarModel>? bazaars,
   List<DeploymentModel>? deployments,
+  List<String> categories = const ['Laptop', 'Printer', 'Monitor'],
   bool bazaarDataLoaded = true,
   bool inventoryLoading = false,
 }) {
@@ -131,6 +134,7 @@ InventorySnapshot snapshot({
     scopeNote: '',
     bazaarDataLoaded: bazaarDataLoaded,
     inventoryLoading: inventoryLoading,
+    categories: categories,
   );
 }
 
@@ -469,21 +473,75 @@ void main() {
       expect(action.details.last, contains('approval'));
     });
 
-    test('a normal User cannot create an asset even as a request', () {
-      final result = plan('add asset "New Printer" 5 units', who: normalUser)!;
+    test('a normal User may create an asset directly', () {
+      final action = plan(
+        'add asset "New Printer" id IT-PRN-010 category Printer qty 5 price 60000',
+        who: normalUser,
+      )!.action!;
 
-      expect(result.isProposal, isFalse);
-      expect(result.refusal, contains('Admin'));
+      expect(action.kind, AssistantActionKind.createAsset);
+      // Adding an asset is the account's own change, not a request.
+      expect(action.viaRequest, isFalse);
     });
 
-    test('a normal User cannot create a Bazaar', () {
-      final result = plan('create bazaar "Ghost Bazaar"', who: normalUser)!;
-      expect(result.refusal, contains('cannot'));
+    test('a normal User may create a Bazaar directly', () {
+      final action = plan('create bazaar "Ghost Bazaar"', who: normalUser)!.action!;
+
+      expect(action.kind, AssistantActionKind.createBazaar);
+      expect(action.viaRequest, isFalse);
+    });
+
+    test('an Admin may create a Bazaar directly', () {
+      final action = plan('create bazaar "Ghost Bazaar"', who: admin)!.action!;
+
+      expect(action.kind, AssistantActionKind.createBazaar);
+      expect(action.viaRequest, isFalse);
+    });
+
+    test('a normal User is not offered a manager-only screen', () {
+      // The router sends a User straight back to the dashboard, and opening a
+      // screen skips the confirmation, so a proposal here would close the
+      // assistant and explain nothing.
+      final result = plan('open the users screen', who: normalUser)!;
+
+      expect(result.isProposal, isFalse);
+      expect(result.refusal, contains('Admin or Super Admin'));
+    });
+
+    test('a manager may still be taken to a manager-only screen', () {
+      final action = plan('open the users screen', who: admin)!.action!;
+
+      expect(action.kind, AssistantActionKind.openScreen);
+      expect(action.route, '/users');
+    });
+
+    test('a screen every role may open is proposed for a User', () {
+      final action = plan('open the requests screen', who: normalUser)!.action!;
+
+      expect(action.route, '/requests');
     });
 
     test('a normal User cannot disable a Bazaar', () {
       final result = plan('disable bazaar Township Bazaar', who: normalUser)!;
-      expect(result.refusal, contains('cannot'));
+
+      expect(result.isProposal, isFalse);
+      expect(result.refusal, contains('Admin or Super Admin'));
+    });
+
+    test('a normal User is never offered a direct edit, move or assignment', () {
+      // Everything a User may not do itself is filed for an Admin to approve;
+      // none of it is ever written on the User's own authority.
+      for (final message in [
+        'add 10 units to IT-LAP-001',
+        'send 10 IT-LAP-001 to Township Bazaar',
+        'assign IT-LAP-001 to Ayesha Khan',
+        'mark IT-LAP-001 damaged',
+      ]) {
+        final result = plan(message, who: normalUser)!;
+
+        expect(result.isProposal, isTrue, reason: '$message: ${result.message}');
+        expect(result.action!.viaRequest, isTrue, reason: message);
+      }
     });
 
     test('an account with no profile loaded may do nothing', () {
@@ -494,6 +552,61 @@ void main() {
 
       expect(result.isProposal, isFalse);
       expect(result.refusal, contains('not allowed'));
+    });
+
+    test('a pending account may do nothing, whatever its role says', () {
+      const pending = AssistantPermissions(
+        role: 'admin',
+        uid: 'ad-2',
+        displayName: 'Waiting Admin',
+        status: 'pending',
+      );
+
+      expect(pending.isActive, isFalse);
+      expect(pending.assistantCapabilities, isEmpty);
+
+      for (final message in [
+        'send 10 IT-LAP-001 to Township Bazaar',
+        'create bazaar "Ghost Bazaar"',
+        'add asset "New Printer" id IT-PRN-010 category Printer qty 5 price 60000',
+      ]) {
+        final result = plan(message, who: pending)!;
+
+        expect(result.isProposal, isFalse, reason: message);
+      }
+    });
+
+    test('a role spelling the rules reject is treated as no access', () {
+      // firestore.rules compares role.trim().toLowerCase() against exactly
+      // three values, so "Super-Admin" is nobody as far as it is concerned.
+      for (final spelling in ['Super-Admin', 'superadmin', 'Administrator']) {
+        const uid = 'x-1';
+        final who = AssistantPermissions(
+          role: spelling,
+          uid: uid,
+          displayName: 'Odd Role',
+        );
+
+        expect(who.isActive, isFalse, reason: spelling);
+        expect(who.assistantCapabilities, isEmpty, reason: spelling);
+      }
+    });
+
+    test('the roles mirror grants nothing on its own', () {
+      const mirrored = AssistantPermissions(
+        role: 'user',
+        uid: 'us-9',
+        displayName: 'Usman User',
+        roles: ['super_admin', 'admin'],
+        customPermissions: ['edit_asset', 'manage_locations'],
+      );
+
+      expect(mirrored.isSuperAdmin, isFalse);
+      expect(mirrored.canEditAsset, isFalse);
+      expect(mirrored.canManageBazaars, isFalse);
+      // What the single role field does allow is unaffected.
+      expect(mirrored.canAddAsset, isTrue);
+      expect(mirrored.canAddBazaar, isTrue);
     });
   });
 
@@ -665,7 +778,7 @@ void main() {
       expect(action.details.any((d) => d.startsWith('Purchase date:')), isFalse);
     });
 
-    test('an unknown category is asked about with the real options', () {
+    test('an unknown category is asked about with the categories that exist', () {
       final result = plan(
         'add asset "HP ProBook" id IT-LAP-020 category Spaceship qty 5 price 100',
       )!;
@@ -674,6 +787,43 @@ void main() {
       expect(result.question, contains('category'));
       expect(result.question, contains('Laptop'));
       expect(result.question, contains('Printer'));
+    });
+
+    test('a category is checked against the catalogue, not a fixed list', () {
+      final result = plan(
+        'add asset "Diesel Generator" id IT-GEN-001 category Generator qty 1 '
+        'price 900000',
+        data: snapshot(categories: const ['Generator']),
+      )!;
+
+      expect(result.isProposal, isTrue, reason: result.message);
+      expect(result.action!.draft!.category, 'Generator');
+    });
+
+    test('a category already in use on an asset is never refused', () {
+      // The catalogue does not list it, but an asset plainly has it, so
+      // refusing it would contradict the inventory the user can see.
+      final result = plan(
+        'add asset "Second Laptop" id IT-LAP-021 category laptop qty 1 price 10',
+        data: snapshot(categories: const ['Printer']),
+      )!;
+
+      expect(result.isProposal, isTrue, reason: result.message);
+      // Written back in the spelling the rest of the inventory uses.
+      expect(result.action!.draft!.category, 'Laptop');
+    });
+
+    test('with no categories to check against, the typed one stands', () {
+      // Otherwise an account that has not loaded a catalogue yet could not
+      // create an asset at all.
+      final result = plan(
+        'add asset "Diesel Generator" id IT-GEN-001 category Generator qty 1 '
+        'price 900000',
+        data: snapshot(assets: const [], categories: const []),
+      )!;
+
+      expect(result.isProposal, isTrue, reason: result.message);
+      expect(result.action!.draft!.category, 'Generator');
     });
 
     test('an unknown status is asked about with the real options', () {
@@ -893,6 +1043,7 @@ void main() {
       townshipId = await bazaars.createBazaar(
         name: 'Township Bazaar',
         location: 'Lahore',
+        createdBy: superAdmin.uid,
       );
     });
 
@@ -1088,6 +1239,7 @@ void main() {
       expect(stored['warrantyMonths'], 24);
       expect(stored['notes'], 'bulk purchase');
       expect(stored['adminId'], 'sa-1');
+      expect(stored['createdBy'], 'sa-1');
 
       // The service derives the stock split, exactly as it does for the form.
       expect(stored['headOfficeQuantity'], 7);
@@ -1121,6 +1273,103 @@ void main() {
       expect(second.message, contains('already exists'));
 
       expect((await db.collection('assets').get()).docs, hasLength(1));
+    });
+
+    test("a User's asset is filed under the Admin who created their account",
+        () async {
+      const managedUser = AssistantPermissions(
+        role: 'user',
+        uid: 'us-1',
+        displayName: 'Usman User',
+        createdBy: 'ad-1',
+      );
+
+      final result = await executor.run(
+        const AssistantAction(
+          kind: AssistantActionKind.createAsset,
+          title: 'Create',
+          details: [],
+          quantity: 1,
+          subjectName: 'User Printer',
+          draft: NewAssetDraft(
+            assetId: 'IT-PRN-010',
+            name: 'User Printer',
+            category: 'Printer',
+            quantity: 1,
+            purchasePrice: 60000,
+          ),
+        ),
+        managedUser,
+      );
+
+      expect(result.ok, isTrue, reason: result.message);
+
+      final stored = (await db.collection('assets').get()).docs.first.data();
+
+      // Not the User's own uid: a User owns no inventory, and filing it under
+      // themselves would hide it from the Admin who has to manage it.
+      expect(stored['adminId'], 'ad-1');
+      // The Admin's name is not knowable from a User's account.
+      expect(stored['adminName'], '');
+      // The creator, which is what the create rule matches a User's add on.
+      expect(stored['createdBy'], 'us-1');
+    });
+
+    test('a self-registered User owns what it creates', () async {
+      const soloUser = AssistantPermissions(
+        role: 'user',
+        uid: 'us-2',
+        displayName: 'Solo User',
+      );
+
+      final result = await executor.run(
+        const AssistantAction(
+          kind: AssistantActionKind.createAsset,
+          title: 'Create',
+          details: [],
+          quantity: 1,
+          subjectName: 'Solo Printer',
+          draft: NewAssetDraft(
+            assetId: 'IT-PRN-011',
+            name: 'Solo Printer',
+            category: 'Printer',
+            quantity: 1,
+            purchasePrice: 60000,
+          ),
+        ),
+        soloUser,
+      );
+
+      expect(result.ok, isTrue, reason: result.message);
+
+      final stored = (await db.collection('assets').get()).docs.first.data();
+      expect(stored['adminId'], 'us-2');
+      expect(stored['adminName'], 'Solo User');
+    });
+
+    test('an account with no uid is refused rather than given a wrong owner',
+        () async {
+      final result = await executor.run(
+        const AssistantAction(
+          kind: AssistantActionKind.createAsset,
+          title: 'Create',
+          details: [],
+          quantity: 1,
+          subjectName: 'Ownerless',
+          draft: NewAssetDraft(
+            assetId: 'IT-PRN-012',
+            name: 'Ownerless',
+            category: 'Printer',
+            quantity: 1,
+            purchasePrice: 10,
+          ),
+        ),
+        AssistantPermissions.none,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.message, contains('whose inventory'));
+      expect((await db.collection('assets').get()).docs, isEmpty);
     });
 
     test('a create action with no draft writes nothing', () async {
@@ -1161,7 +1410,10 @@ void main() {
     });
 
     test('disabling a Bazaar keeps the record and only marks it inactive', () async {
-      final id = await bazaars.createBazaar(name: 'Gulberg Bazaar');
+      final id = await bazaars.createBazaar(
+        name: 'Gulberg Bazaar',
+        createdBy: superAdmin.uid,
+      );
 
       final result = await executor.run(
         AssistantAction(
@@ -1179,6 +1431,51 @@ void main() {
       final doc = await db.collection('bazaars').doc(id).get();
       expect(doc.exists, isTrue);
       expect(doc.data()!['isActive'], isFalse);
+    });
+
+    test('a Bazaar records the account that added it', () async {
+      final result = await executor.run(
+        const AssistantAction(
+          kind: AssistantActionKind.createBazaar,
+          title: 'Create Bazaar',
+          details: [],
+          subjectName: 'Shahdara Bazaar',
+        ),
+        normalUser,
+      );
+
+      expect(result.ok, isTrue, reason: result.message);
+
+      final created = (await db.collection('bazaars').get())
+          .docs
+          .map((d) => d.data())
+          .firstWhere((d) => d['name'] == 'Shahdara Bazaar');
+
+      // The signed-in account, because the create rule requires the writer to
+      // own the record it adds.
+      expect(created['createdBy'], 'us-1');
+      expect(created['isActive'], isTrue);
+    });
+
+    test('a Firebase refusal is explained, not quoted at the user', () async {
+      // Disabling a Bazaar that is not there is the one refusal that comes
+      // back as a FirebaseException rather than a service message.
+      final result = await executor.run(
+        const AssistantAction(
+          kind: AssistantActionKind.disableBazaar,
+          title: 'Disable',
+          details: [],
+          destinationId: 'no-such-bazaar',
+          subjectName: 'Nowhere Bazaar',
+        ),
+        superAdmin,
+      );
+
+      expect(result.ok, isFalse);
+      expect(result.message, 'That record no longer exists.');
+      // None of Firebase's own wording survives.
+      expect(result.message.toLowerCase(), isNot(contains('firebase')));
+      expect(result.message, isNot(contains('[')));
     });
 
     test('opening a screen writes nothing at all', () async {
@@ -1200,7 +1497,102 @@ void main() {
   });
 
   // =========================================================================
-  // 11. GROUNDING AND SAFETY
+  // 11. A USER'S REQUEST IS ROUTED TO ITS OWN ADMIN
+  // =========================================================================
+
+  group("a User's request routing", () {
+    late FakeFirebaseFirestore db;
+    late AssetService assetService;
+    late ActionExecutor executor;
+
+    const userUid = 'us-1';
+    const ownAdminUid = 'ad-1';
+    const otherAdminUid = 'ad-2';
+
+    const managedUser = AssistantPermissions(
+      role: 'user',
+      uid: userUid,
+      displayName: 'Usman User',
+      createdBy: ownAdminUid,
+    );
+
+    setUp(() async {
+      db = FakeFirebaseFirestore();
+      assetService = AssetService(firestore: db);
+
+      executor = ActionExecutor(
+        assetService: assetService,
+        deploymentService: DeploymentService(firestore: db),
+        bazaarService: BazaarService(firestore: db),
+        requestService: RequestService(
+          firestore: db,
+          auth: MockFirebaseAuth(
+            signedIn: true,
+            mockUser: MockUser(uid: userUid, email: 'usman@test.local'),
+          ),
+        ),
+      );
+
+      await db.collection('users').doc(userUid).set({
+        'uid': userUid,
+        'name': 'Usman User',
+        'email': 'usman@test.local',
+        'role': 'user',
+        'status': 'active',
+        'createdBy': ownAdminUid,
+      });
+    });
+
+    test('a request about another Admin\'s asset still goes to its own Admin',
+        () async {
+      // A User reads the whole organisation's inventory now, so the asset it
+      // asks about often belongs to a different Admin. The requests create
+      // rule only accepts a User's request routed to the Admin that manages
+      // THEM, so naming the asset's owner earned a permission-denied after the
+      // user had already confirmed.
+      final id = await assetService.addAsset(
+        AssetModel(
+          id: '',
+          assetId: 'IT-LAP-002',
+          name: 'Other Latitude',
+          category: 'Laptop',
+          status: 'Available',
+          quantity: 10,
+          adminId: otherAdminUid,
+          purchasePrice: 1000,
+          createdAt: DateTime(2026, 1, 1),
+        ),
+      );
+
+      final asset = (await assetService.getAssetById(id))!;
+
+      final result = await executor.run(
+        AssistantAction(
+          kind: AssistantActionKind.updateStatus,
+          title: 'Request a status change',
+          details: const [],
+          asset: asset,
+          status: 'Damaged',
+          viaRequest: true,
+        ),
+        managedUser,
+      );
+
+      expect(result.ok, isTrue, reason: result.message);
+
+      final stored = (await db.collection('requests').get()).docs.first.data();
+
+      expect(stored['receiverId'], ownAdminUid);
+      expect(stored['requestedBy'], userUid);
+      expect(stored['status'], 'Pending');
+      // The asset's own owner is still recorded, so the Admin reviewing it can
+      // see whose inventory the change concerns.
+      expect(stored['assetAdminId'], otherAdminUid);
+    });
+  });
+
+  // =========================================================================
+  // 12. GROUNDING AND SAFETY
   // =========================================================================
 
   group('grounding and safety', () {

@@ -1,9 +1,15 @@
 /// Centralized RBAC (Role-Based Access Control) service.
 ///
-/// Main application roles:
-/// - Super Admin
-/// - Admin
-/// - User
+/// Exactly three roles exist, stored as these exact values:
+/// - super_admin
+/// - admin
+/// - user
+///
+/// A stored role is read with [normalizeRole] (trim + lower case) and must
+/// then equal one of the three. Anything else is an unknown role with NO
+/// permissions, and the `roles` array is a mirror of `role` that never grants
+/// anything - both of these match how firestore.rules reads a profile, so the
+/// app can never offer an action the rules would refuse.
 ///
 /// IMPORTANT:
 /// This service controls application-side authorization and UI access.
@@ -53,7 +59,10 @@ class PermissionService {
   static const String viewAssetHistory = 'view_asset_history';
 
   static const String manageInventory = 'manage_inventory';
+  static const String addCategory = 'add_category';
   static const String manageCategories = 'manage_categories';
+  static const String addBazaar = 'add_bazaar';
+  static const String manageBazaars = 'manage_bazaars';
   static const String manageLocations = 'manage_locations';
   static const String manageDepartments = 'manage_departments';
 
@@ -97,22 +106,21 @@ class PermissionService {
   // ROLE NORMALIZATION
   // ============================================================
 
+  /// THE canonical form of a stored role: trimmed and lower-cased, exactly as
+  /// `roleOf()` in firestore.rules reads it.
+  ///
+  /// Deliberately NO alias mapping. 'Super Admin', 'super-admin',
+  /// 'administrator' and 'employee' are unknown roles here, because every rule
+  /// compares the stored role against 'super_admin', 'admin' or 'user' and
+  /// denies anything else. Mapping them would make the app grant screens and
+  /// actions whose data Firestore then refuses with permission-denied.
   static String normalizeRole(String? role) {
-    return (role ?? '')
-        .trim()
-        .toLowerCase()
-        .replaceAll('-', '_')
-        .replaceAll(' ', '_');
+    return (role ?? '').trim().toLowerCase();
   }
 
-  static String normalizeRoleWithoutLegacy(String? role) {
-    return (role ?? '')
-        .trim()
-        .toLowerCase()
-        .replaceAll('-', '_')
-        .replaceAll(' ', '_');
-  }
-
+  /// The canonical roles out of a stored `roles` array: unknown values are
+  /// dropped instead of being carried around, so the mirror array written
+  /// back to Firestore always satisfies the `validRoles()` rule.
   static List<String> normalizeRoles(Iterable<String>? roles) {
     if (roles == null) {
       return <String>[];
@@ -120,42 +128,27 @@ class PermissionService {
 
     return roles
         .map(normalizeRole)
-        .where((role) => role.isNotEmpty)
-        .map(_normalizeLegacyRole)
-        .where((role) => role.isNotEmpty)
+        .where(isMainRole)
         .toSet()
         .toList();
   }
 
-  /// Converts supported legacy role names into the three official
-  /// application roles.
-  ///
-  /// Official roles remain:
-  /// - super_admin
-  /// - admin
-  /// - user
-  static String _normalizeLegacyRole(String role) {
-    final normalized = normalizeRoleWithoutLegacy(role);
-
-    switch (normalized) {
-      case superAdminRole:
-      case 'superadmin':
-      case 'super_admin_role':
-        return superAdminRole;
-
-      case adminRole:
-        return adminRole;
-
-      case userRole:
-        return userRole;
-
-      default:
-        return normalized;
-    }
-  }
-
   static String normalizeStatus(String? status) {
     return (status ?? '').trim().toLowerCase();
+  }
+
+  /// The only two statuses the Firestore rules let into the system.
+  /// 'pending' (a self-registered account awaiting activation), 'inactive',
+  /// 'blocked', 'disabled' and 'deleted' all mean no access.
+  static bool isActiveStatus(String? status) {
+    final value = normalizeStatus(status);
+
+    return value == 'active' || value == 'approved';
+  }
+
+  /// A self-registered account that nobody has admitted yet.
+  static bool isPendingStatus(String? status) {
+    return normalizeStatus(status) == 'pending';
   }
 
   static String normalizePermission(String? permission) {
@@ -183,16 +176,15 @@ class PermissionService {
   // ============================================================
 
   static bool isSuperAdmin(String? role) {
-    return _normalizeLegacyRole(normalizeRoleWithoutLegacy(role)) ==
-        superAdminRole;
+    return normalizeRole(role) == superAdminRole;
   }
 
   static bool isAdmin(String? role) {
-    return _normalizeLegacyRole(normalizeRoleWithoutLegacy(role)) == adminRole;
+    return normalizeRole(role) == adminRole;
   }
 
   static bool isUser(String? role) {
-    return _normalizeLegacyRole(normalizeRoleWithoutLegacy(role)) == userRole;
+    return normalizeRole(role) == userRole;
   }
 
   // Compatibility helpers.
@@ -231,9 +223,7 @@ class PermissionService {
   }
 
   static bool hasRole(Iterable<String>? roles, String role) {
-    final normalizedTarget = _normalizeLegacyRole(
-      normalizeRoleWithoutLegacy(role),
-    );
+    final normalizedTarget = normalizeRole(role);
 
     return normalizeRoles(roles).contains(normalizedTarget);
   }
@@ -262,124 +252,43 @@ class PermissionService {
   // GENERAL APPLICATION ACCESS
   // ============================================================
 
+  /// An account reaches the application only with an active status AND one of
+  /// the three canonical roles. A 'pending' self-registration and an unknown
+  /// role both end here, because the rules would deny every read that follows.
   static bool canAccessApplication({
     required String? role,
     required String? status,
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final normalizedStatus = normalizeStatus(status);
-
-    if (normalizedStatus != 'active' && normalizedStatus != 'approved') {
+    if (!isActiveStatus(status)) {
       return false;
     }
 
-    final combinedRoles = _rolesWithLegacyRole(role, roles);
-
-    if (hasSuperAdminRole(combinedRoles)) {
-      return true;
-    }
-
-    if (hasAdminRole(combinedRoles)) {
-      return true;
-    }
-
-    if (combinedRoles.contains(userRole)) {
-      return true;
-    }
-
-    return normalizePermissions(permissions).isNotEmpty;
+    return _decisionRoles(role, roles).isNotEmpty;
   }
 
   // ============================================================
   // PERMISSION CALCULATION
   // ============================================================
 
+  /// The permissions one canonical role grants. An unknown role grants
+  /// nothing, so a profile holding e.g. 'administrator' sees exactly what the
+  /// Firestore rules allow it: nothing.
+  ///
+  /// Read from [builtInRolePermissions] so the Roles & Permissions page, this
+  /// method and the rules can never drift apart.
   static Set<String> permissionsForRole(String? role) {
-    final normalized = _normalizeLegacyRole(normalizeRoleWithoutLegacy(role));
-
-    switch (normalized) {
-      case superAdminRole:
-        return Set<String>.from(allPermissions);
-
-      case adminRole:
-        return {
-          viewDashboard,
-          viewAssets,
-
-          // Own inventory.
-          addAsset,
-          editAsset,
-          manageInventory,
-          importAssets,
-          exportAssets,
-          viewAssetHistory,
-
-          // Operational asset actions.
-          assignAsset,
-          reassignAsset,
-          returnAsset,
-          transferAsset,
-          markDamaged,
-          markUnderRepair,
-          markLost,
-          reserveAsset,
-
-          // Inventory configuration.
-          manageCategories,
-          manageLocations,
-          manageDepartments,
-
-          // User edit-request workflow.
-          createRequest,
-          viewOwnRequests,
-          reviewRequests,
-          approveRequests,
-          rejectRequests,
-
-          // Reports.
-          viewReports,
-          exportReports,
-
-          // Notifications.
-          viewNotifications,
-          manageNotifications,
-
-          // Repairs / QR.
-          manageRepairs,
-          scanQr,
-          generateQr,
-          shareQr,
-
-          // Bulk operations within owned inventory.
-          bulkAssign,
-          bulkUpdate,
-          bulkStatusChange,
-
-          viewOwnAssignedAssets,
-          manageSettings,
-        };
-
-      case userRole:
-        return {
-          viewDashboard,
-          viewAssets,
-
-          // User cannot directly edit inventory.
-          createRequest,
-          viewOwnRequests,
-
-          viewNotifications,
-          viewOwnAssignedAssets,
-          scanQr,
-        };
-
-      default:
-        return <String>{};
-    }
+    return Set<String>.of(
+      builtInRolePermissions[normalizeRole(role)] ?? const <String>{},
+    );
   }
 
   /// Combines permissions from all assigned official roles.
+  ///
+  /// This is a definition-level union (what these roles grant together), not
+  /// an authorization decision: a single account is always judged by its one
+  /// primary role. See [hasPermission].
   static Set<String> permissionsForRoles(Iterable<String>? roles) {
     final result = <String>{};
 
@@ -402,6 +311,14 @@ class PermissionService {
     return result;
   }
 
+  /// The one authorization decision every capability getter goes through.
+  ///
+  /// [roles] is the account's role list as the screens build it: the primary
+  /// `role` field FIRST, the `roles` mirror after it. Only that first entry
+  /// decides. The mirror is data the rules require to mirror `role`
+  /// (`validRoles()`), never a second source of privileges - a legacy
+  /// document holding roles: ['super_admin'] next to role: 'user' stays a
+  /// User here exactly as it does in Firestore.
   static bool hasPermission({
     Iterable<String>? roles,
     Iterable<String>? permissions,
@@ -413,14 +330,14 @@ class PermissionService {
       return false;
     }
 
-    if (hasSuperAdminRole(roles)) {
+    final primaryRole = _primaryRole(roles);
+
+    if (primaryRole == superAdminRole) {
       return true;
     }
 
-    final effective = effectivePermissions(
-      roles: roles,
-      customPermissions: permissions,
-    );
+    final effective = permissionsForRole(primaryRole)
+      ..addAll(normalizePermissions(permissions));
 
     return effective.contains(normalizedPermission);
   }
@@ -435,7 +352,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: viewDashboard,
     );
@@ -446,7 +363,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(role, roles);
+    final combinedRoles = _decisionRoles(role, roles);
 
     return hasSuperAdminRole(combinedRoles) ||
         hasAdminRole(combinedRoles) ||
@@ -462,7 +379,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    return hasSuperAdminRole(_rolesWithLegacyRole(role, roles));
+    return hasSuperAdminRole(_decisionRoles(role, roles));
   }
 
   // ============================================================
@@ -475,7 +392,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: manageUsers,
     );
@@ -511,7 +428,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(role, roles);
+    final combinedRoles = _decisionRoles(role, roles);
 
     return hasSuperAdminRole(combinedRoles);
   }
@@ -522,7 +439,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(role, roles);
+    final combinedRoles = _decisionRoles(role, roles);
 
     return hasSuperAdminRole(combinedRoles);
   }
@@ -545,7 +462,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    return hasSuperAdminRole(_rolesWithLegacyRole(role, roles));
+    return hasSuperAdminRole(_decisionRoles(role, roles));
   }
 
   static bool canCreateCustomRole(
@@ -581,7 +498,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(role, roles);
+    final combinedRoles = _decisionRoles(role, roles);
 
     return hasPermission(
           roles: combinedRoles,
@@ -601,9 +518,33 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: viewAssets,
+    );
+  }
+
+  /// Inventory is organisation-wide: every canonical role reads all of it,
+  /// which is what the `allow read: if isActiveUser()` rule on /assets says.
+  static bool canViewInventory(
+    String? role, {
+    Iterable<String>? roles,
+    Iterable<String>? permissions,
+  }) {
+    return canViewAssets(role, roles: roles, permissions: permissions);
+  }
+
+  /// Adding inventory is allowed for a User too - only changing it later is
+  /// reserved for managers.
+  static bool canAddAsset(
+    String? role, {
+    Iterable<String>? roles,
+    Iterable<String>? permissions,
+  }) {
+    return hasPermission(
+      roles: _decisionRoles(role, roles),
+      permissions: permissions,
+      permission: addAsset,
     );
   }
 
@@ -613,7 +554,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: addAsset,
     );
@@ -625,7 +566,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: editAsset,
     );
@@ -637,7 +578,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: deleteAsset,
     );
@@ -649,7 +590,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: assignAsset,
     );
@@ -661,7 +602,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: reassignAsset,
     );
@@ -673,7 +614,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: returnAsset,
     );
@@ -685,7 +626,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: transferAsset,
     );
@@ -696,7 +637,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(role, roles);
+    final combinedRoles = _decisionRoles(role, roles);
 
     return hasPermission(
           roles: combinedRoles,
@@ -730,21 +671,65 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: manageInventory,
     );
   }
 
+  /// Any active account may ADD a category (the document id is the name key,
+  /// so a duplicate add is simply the same document).
+  static bool canAddCategory(
+    String? role, {
+    Iterable<String>? roles,
+    Iterable<String>? permissions,
+  }) {
+    return hasPermission(
+      roles: _decisionRoles(role, roles),
+      permissions: permissions,
+      permission: addCategory,
+    );
+  }
+
+  /// Renaming a category is open to every active account, like adding one:
+  /// it only corrects a spelling. Categories are never deleted, and a rename
+  /// cannot touch the category's identity, so existing assets keep working.
   static bool canManageCategories(
     String? role, {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: manageCategories,
+    );
+  }
+
+  /// Any active account may ADD a Bazaar, always as an active one.
+  static bool canAddBazaar(
+    String? role, {
+    Iterable<String>? roles,
+    Iterable<String>? permissions,
+  }) {
+    return hasPermission(
+      roles: _decisionRoles(role, roles),
+      permissions: permissions,
+      permission: addBazaar,
+    );
+  }
+
+  /// Editing and disabling a Bazaar is a manager action - Bazaars are
+  /// disabled, never deleted, so movement records keep their reference.
+  static bool canManageBazaars(
+    String? role, {
+    Iterable<String>? roles,
+    Iterable<String>? permissions,
+  }) {
+    return hasPermission(
+      roles: _decisionRoles(role, roles),
+      permissions: permissions,
+      permission: manageBazaars,
     );
   }
 
@@ -754,7 +739,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: manageLocations,
     );
@@ -766,7 +751,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: manageDepartments,
     );
@@ -787,7 +772,7 @@ class PermissionService {
     required String? assetAdminId,
     Iterable<String>? roles,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(currentRole, roles);
+    final combinedRoles = _decisionRoles(currentRole, roles);
 
     if (hasSuperAdminRole(combinedRoles)) {
       return true;
@@ -824,7 +809,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(currentRole, roles);
+    final combinedRoles = _decisionRoles(currentRole, roles);
 
     if (hasSuperAdminRole(combinedRoles)) {
       return true;
@@ -862,7 +847,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: createRequest,
     );
@@ -874,7 +859,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: viewOwnRequests,
     );
@@ -886,9 +871,25 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: reviewRequests,
+    );
+  }
+
+  /// Approving or rejecting a request about ANY inventory. An Admin may
+  /// already change any asset directly, so restricting it to its own
+  /// inventory would buy nothing - the rules guard what matters instead
+  /// (only a Pending request, and never one's own).
+  static bool canApproveRequests(
+    String? role, {
+    Iterable<String>? roles,
+    Iterable<String>? permissions,
+  }) {
+    return hasPermission(
+      roles: _decisionRoles(role, roles),
+      permissions: permissions,
+      permission: approveRequests,
     );
   }
 
@@ -897,7 +898,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(role, roles);
+    final combinedRoles = _decisionRoles(role, roles);
 
     return hasPermission(
           roles: combinedRoles,
@@ -917,7 +918,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    return hasSuperAdminRole(_rolesWithLegacyRole(role, roles));
+    return hasSuperAdminRole(_decisionRoles(role, roles));
   }
 
   // ============================================================
@@ -930,7 +931,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: viewNotifications,
     );
@@ -942,7 +943,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: manageNotifications,
     );
@@ -983,7 +984,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: manageSettings,
     );
@@ -994,7 +995,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    return hasSuperAdminRole(_rolesWithLegacyRole(role, roles));
+    return hasSuperAdminRole(_decisionRoles(role, roles));
   }
 
   static bool canManageOrganization(
@@ -1002,7 +1003,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    return hasSuperAdminRole(_rolesWithLegacyRole(role, roles));
+    return hasSuperAdminRole(_decisionRoles(role, roles));
   }
 
   static bool canManageSubscription(
@@ -1010,7 +1011,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    return hasSuperAdminRole(_rolesWithLegacyRole(role, roles));
+    return hasSuperAdminRole(_decisionRoles(role, roles));
   }
 
   // ============================================================
@@ -1023,7 +1024,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: viewReports,
     );
@@ -1035,7 +1036,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: exportReports,
     );
@@ -1051,7 +1052,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: viewAuditLogs,
     );
@@ -1067,7 +1068,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: manageRepairs,
     );
@@ -1083,7 +1084,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: scanQr,
     );
@@ -1095,7 +1096,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: generateQr,
     );
@@ -1107,7 +1108,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: shareQr,
     );
@@ -1123,7 +1124,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: importAssets,
     );
@@ -1135,7 +1136,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: exportAssets,
     );
@@ -1147,7 +1148,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: bulkAssign,
     );
@@ -1159,7 +1160,7 @@ class PermissionService {
     Iterable<String>? permissions,
   }) {
     return hasPermission(
-      roles: _rolesWithLegacyRole(role, roles),
+      roles: _decisionRoles(role, roles),
       permissions: permissions,
       permission: bulkUpdate,
     );
@@ -1217,7 +1218,7 @@ class PermissionService {
   // ============================================================
 
   static String roleLabel(String? role) {
-    final normalized = _normalizeLegacyRole(normalizeRoleWithoutLegacy(role));
+    final normalized = normalizeRole(role);
 
     switch (normalized) {
       case superAdminRole:
@@ -1230,7 +1231,10 @@ class PermissionService {
         return 'User';
 
       default:
-        return 'User';
+        // Never 'User': a profile whose role is not one of the three has no
+        // access at all, and calling it a User would hide a broken document
+        // from whoever has to repair it.
+        return 'Unknown role';
     }
   }
 
@@ -1243,7 +1247,7 @@ class PermissionService {
     Iterable<String>? roles,
     Iterable<String>? permissions,
   }) {
-    final combinedRoles = _rolesWithLegacyRole(role, roles);
+    final combinedRoles = _decisionRoles(role, roles);
 
     return {
       viewDashboard: hasPermission(
@@ -1295,6 +1299,26 @@ class PermissionService {
         roles: combinedRoles,
         permissions: permissions,
         permission: manageInventory,
+      ),
+      addBazaar: hasPermission(
+        roles: combinedRoles,
+        permissions: permissions,
+        permission: addBazaar,
+      ),
+      manageBazaars: hasPermission(
+        roles: combinedRoles,
+        permissions: permissions,
+        permission: manageBazaars,
+      ),
+      addCategory: hasPermission(
+        roles: combinedRoles,
+        permissions: permissions,
+        permission: addCategory,
+      ),
+      manageCategories: hasPermission(
+        roles: combinedRoles,
+        permissions: permissions,
+        permission: manageCategories,
       ),
       manageUsers: hasPermission(
         roles: combinedRoles,
@@ -1412,7 +1436,10 @@ class PermissionService {
     reserveAsset,
     viewAssetHistory,
     manageInventory,
+    addCategory,
     manageCategories,
+    addBazaar,
+    manageBazaars,
     manageLocations,
     manageDepartments,
     manageUsers,
@@ -1446,6 +1473,12 @@ class PermissionService {
   // ============================================================
   // BUILT-IN ROLE DEFINITIONS
   // ============================================================
+  //
+  // THE permission matrix. [permissionsForRole] reads it, the Roles &
+  // Permissions page renders it, and every entry has a matching rule in
+  // firestore.rules - a permission granted here that the rules deny would
+  // only produce a button that fails with permission-denied.
+  // ============================================================
 
   static const Map<String, Set<String>> builtInRolePermissions = {
     superAdminRole: allPermissions,
@@ -1453,8 +1486,12 @@ class PermissionService {
     adminRole: {
       viewDashboard,
       viewAssets,
+
+      // All inventory: add, edit directly (no approval), delete when no
+      // stock sits at a Bazaar or with a person, and move it.
       addAsset,
       editAsset,
+      deleteAsset,
       manageInventory,
       importAssets,
       exportAssets,
@@ -1467,14 +1504,26 @@ class PermissionService {
       markUnderRepair,
       markLost,
       reserveAsset,
+
+      // Master data: Bazaars and categories, add and maintain.
+      addBazaar,
+      manageBazaars,
+      addCategory,
       manageCategories,
       manageLocations,
       manageDepartments,
+
+      // Its own Users, including admitting a pending self-registration.
+      manageUsers,
+
+      // Requests about any inventory, and the trail they leave.
       createRequest,
       viewOwnRequests,
       reviewRequests,
       approveRequests,
       rejectRequests,
+      viewAuditLogs,
+
       viewReports,
       exportReports,
       manageRepairs,
@@ -1490,9 +1539,21 @@ class PermissionService {
       manageSettings,
     },
 
+    // Read-only on the whole organisation, plus the three additive actions
+    // the rules allow any active account (asset, Bazaar, category create)
+    // and a request for everything else. No edit, no delete, no disable, no
+    // user directory, no audit trail.
     userRole: {
       viewDashboard,
       viewAssets,
+      viewAssetHistory,
+      addAsset,
+      addBazaar,
+      addCategory,
+      // Renaming a category corrects a spelling; it cannot reach the
+      // category's identity or any other field, and existing assets keep
+      // working. See CategoryService.rename and the /categories update rule.
+      manageCategories,
       createRequest,
       viewOwnRequests,
       viewNotifications,
@@ -1502,32 +1563,37 @@ class PermissionService {
   };
 
   // ============================================================
-  // LEGACY COMPATIBILITY
+  // SINGLE DECIDING ROLE
   // ============================================================
 
-  static List<String> _rolesWithLegacyRole(
-    String? legacyRole,
-    Iterable<String>? roles,
-  ) {
-    final result = <String>[];
+  /// The one role every capability getter below decides from, as a list so it
+  /// can be handed straight to [hasPermission].
+  ///
+  /// Derived from the primary `role` field ONLY. [mirror] is the profile's
+  /// `roles` array: it is accepted so existing call sites keep passing what
+  /// they read from the document, but it never contributes a grant - the
+  /// Firestore rules read `role` alone, and the app must not be more
+  /// permissive than the rules. An unknown value yields no role at all.
+  static List<String> _decisionRoles(String? role, Iterable<String>? mirror) {
+    final primary = normalizeRole(role);
 
-    for (final role in normalizeRoles(roles)) {
-      if (isMainRole(role)) {
-        result.add(role);
-      }
+    if (!isMainRole(primary)) {
+      return const <String>[];
     }
 
-    final normalizedLegacy = _normalizeLegacyRole(
-      normalizeRoleWithoutLegacy(legacyRole),
-    );
+    return <String>[primary];
+  }
 
-    if (normalizedLegacy.isNotEmpty &&
-        isMainRole(normalizedLegacy) &&
-        !result.contains(normalizedLegacy)) {
-      result.add(normalizedLegacy);
+  /// The primary role out of a role list whose FIRST entry is the account's
+  /// `role` field. Anything after it is the mirror and is ignored.
+  static String _primaryRole(Iterable<String>? roles) {
+    if (roles == null || roles.isEmpty) {
+      return '';
     }
 
-    return result;
+    final primary = normalizeRole(roles.first);
+
+    return isMainRole(primary) ? primary : '';
   }
 
   // ============================================================
@@ -1535,7 +1601,7 @@ class PermissionService {
   // ============================================================
 
   static bool isMainRole(String? role) {
-    final normalized = _normalizeLegacyRole(normalizeRoleWithoutLegacy(role));
+    final normalized = normalizeRole(role);
 
     return normalized == superAdminRole ||
         normalized == adminRole ||
@@ -1576,15 +1642,15 @@ class PermissionService {
   // ============================================================
 
   static String roleDescription(String role) {
-    switch (_normalizeLegacyRole(normalizeRoleWithoutLegacy(role))) {
+    switch (normalizeRole(role)) {
       case superAdminRole:
         return 'Full organization control, users, locations, bazaars, inventory and system administration.';
 
       case adminRole:
-        return 'Manage assigned inventory, import assets, edit owned assets and approve or reject User edit requests.';
+        return 'View all inventory, add, edit, delete and transfer assets, maintain Bazaars and categories, manage its own Users and approve or reject requests.';
 
       case userRole:
-        return 'View permitted inventory and submit requests for inventory changes.';
+        return 'Read all inventory and movement history, add assets, Bazaars and categories, and request every other change.';
 
       default:
         return 'User access with permissions defined by the application.';

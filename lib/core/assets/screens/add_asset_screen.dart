@@ -5,8 +5,11 @@ import 'package:provider/provider.dart';
 import '../../../models/asset_model.dart';
 import '../../../models/request_model.dart';
 import '../../providers/asset_provider.dart';
+import '../../providers/category_provider.dart';
 import '../../providers/request_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../services/category_service.dart';
+import '../../services/permission_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
 
@@ -18,21 +21,10 @@ class AddAssetScreen extends StatefulWidget {
   // The dropdown vocabularies for an asset. They live on the widget rather
   // than its State so the AI Assistant can offer exactly the same options
   // instead of keeping a second copy of them.
-  static const List<String> categories = [
-    'Laptop',
-    'Desktop',
-    'Monitor',
-    'Printer',
-    'Mobile',
-    'Tablet',
-    'Network Device',
-    'Camera',
-    'UPS',
-    'Router',
-    'Switch',
-    'Other',
-  ];
-
+  //
+  // Categories are deliberately NOT one of them: they are records in the
+  // `categories` collection that anyone who may add an asset may also add, so
+  // the options are built at runtime by CategoryService.mergeCategoryNames.
   static const List<String> statuses = [
     'Available',
     'Assigned',
@@ -67,7 +59,9 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
   final locationController = TextEditingController();
   final notesController = TextEditingController();
 
-  String selectedCategory = 'Laptop';
+  // Empty until the account picks one: there is no default category to fall
+  // back on now that the catalogue is data rather than a constant.
+  String selectedCategory = '';
   String selectedStatus = 'Available';
   String selectedCondition = 'Good';
 
@@ -77,14 +71,20 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
 
   bool get isEditMode => widget.asset != null;
 
+  /// Whether this account applies an edit itself instead of filing a request.
+  ///
+  /// An Admin now edits inventory directly, exactly like a Super Admin; only a
+  /// User has to ask. The decision comes from PermissionService so the labels
+  /// on this screen can never disagree with what the save actually does.
+  static bool _editsDirectly(BuildContext context) {
+    return PermissionService.canEditAsset(
+      context.watch<UserProvider>().currentUserRole,
+    );
+  }
 
   // Dropdown items for this form. A stored value that is not in the default
   // list (e.g. an imported category) is added so editing never silently
   // changes it.
-  late final List<String> _categoryItems = _withValue(
-    AddAssetScreen.categories,
-    widget.asset?.category,
-  );
   late final List<String> _statusItems = _withValue(
     AddAssetScreen.statuses,
     widget.asset?.status,
@@ -111,6 +111,11 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
   @override
   void initState() {
     super.initState();
+
+    // The catalogue normally starts listening when the session does; asking
+    // again is free and keeps the Category field populated if this screen is
+    // the first thing to need it.
+    context.read<CategoryProvider>().listenToCategories();
 
     final asset = widget.asset;
 
@@ -320,7 +325,7 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
               Text(
                 !isEditMode
                     ? 'Register New Asset'
-                    : context.watch<UserProvider>().isSuperAdmin
+                    : _editsDirectly(context)
                     ? 'Update Asset'
                     : 'Request Asset Update',
                 style: TextStyle(
@@ -334,10 +339,10 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
               Text(
                 !isEditMode
                     ? 'Enter complete information to register an IT asset.'
-                    : context.watch<UserProvider>().isSuperAdmin
+                    : _editsDirectly(context)
                     ? 'Changes are applied immediately. Stock at Bazaars and '
                           'assigned stock is preserved.'
-                    : 'Submit your changes for Super Admin approval.',
+                    : 'Submit your changes for approval.',
                 style: TextStyle(
                   fontSize: 13.5,
                   height: 1.4,
@@ -419,19 +424,7 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
         icon: Icons.inventory_2_outlined,
         requiredField: true,
       ),
-      _dropdownField(
-        label: 'Category',
-        icon: Icons.category_outlined,
-        value: selectedCategory,
-        items: _categoryItems,
-        onChanged: (value) {
-          if (value != null) {
-            setState(() {
-              selectedCategory = value;
-            });
-          }
-        },
-      ),
+      _buildCategoryField(),
       _dropdownField(
         label: 'Status',
         icon: Icons.circle_outlined,
@@ -448,6 +441,344 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       if (!isEditMode && context.watch<UserProvider>().isSuperAdmin)
         _buildOwnerField(),
     ]);
+  }
+
+  // ===========================================================================
+  // CATEGORY
+  //
+  // The options are the catalogue in the `categories` collection UNION every
+  // category already in use on an asset this account can see. Assets
+  // registered before the catalogue existed keep their own category that way,
+  // so editing one never silently rewrites it.
+  // ===========================================================================
+
+  // The providers are passed in rather than read here: the field needs to
+  // WATCH them from build, while the Add Category dialog only READS them from
+  // an event handler.
+  List<String> _categoryOptions(
+    CategoryProvider categoryProvider,
+    AssetProvider assetProvider,
+  ) {
+    return categoryProvider.mergedNames([
+      for (final asset in assetProvider.assets) asset.category,
+      // The edited asset itself, which need not be in the loaded list.
+      widget.asset?.category ?? '',
+    ]);
+  }
+
+  Widget _buildCategoryField() {
+    final categoryProvider = context.watch<CategoryProvider>();
+
+    final options = _categoryOptions(
+      categoryProvider,
+      context.watch<AssetProvider>(),
+    );
+
+    final role = context.watch<UserProvider>().currentUserRole;
+    final canAddCategory = PermissionService.canAddCategory(role);
+
+    // Renaming needs a category that actually has a catalogue document: a
+    // spelling that exists only on an asset has nothing to rename yet.
+    final canRenameCategory =
+        PermissionService.canManageCategories(role) &&
+        options.isNotEmpty &&
+        categoryProvider.categoryFor(selectedCategory) != null;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          // A catalogue that failed to load, or has not arrived yet, must not
+          // read as "there are no categories": that would invite someone to
+          // add one that already exists, or leave them stuck at save with no
+          // idea why the list is empty.
+          child: options.isNotEmpty
+              ? _buildCategoryDropdown(options)
+              : categoryProvider.errorMessage != null
+              ? _buildCategoryErrorHint(categoryProvider.errorMessage!)
+              : categoryProvider.isLoading
+              ? _buildCategoryLoadingHint()
+              : _buildNoCategoriesHint(canAddCategory),
+        ),
+        if (canRenameCategory) ...[
+          const SizedBox(width: AppSpacing.sm),
+          Tooltip(
+            message: 'Rename "$selectedCategory"',
+            child: IconButton.outlined(
+              onPressed: _isSaving ? null : _renameCategory,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+          ),
+        ],
+        if (canAddCategory) ...[
+          const SizedBox(width: AppSpacing.sm),
+          Tooltip(
+            message: 'Add category',
+            child: IconButton.filledTonal(
+              onPressed: _isSaving ? null : _addCategory,
+              icon: const Icon(Icons.add_rounded),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCategoryDropdown(List<String> options) {
+    // A stored category that is no longer offered would otherwise be dropped
+    // on the floor; it is always part of [options], so this only guards the
+    // "nothing chosen yet" case.
+    final selected = options.contains(selectedCategory)
+        ? selectedCategory
+        : null;
+
+    return DropdownButtonFormField<String>(
+      initialValue: selected,
+      isExpanded: true,
+      decoration: _inputDecoration(
+        label: 'Category',
+        hint: 'Select a category',
+        icon: Icons.category_outlined,
+      ),
+      items: options.map((item) {
+        return DropdownMenuItem<String>(value: item, child: Text(item));
+      }).toList(),
+      onChanged: _isSaving
+          ? null
+          : (value) {
+              if (value != null) {
+                setState(() {
+                  selectedCategory = value;
+                });
+              }
+            },
+      validator: (value) {
+        if (value == null || value.trim().isEmpty) {
+          return 'Category is required';
+        }
+
+        return null;
+      },
+    );
+  }
+
+  /// Shown when there is nothing to choose from: an empty dropdown would look
+  /// like a broken form rather than a catalogue nobody has filled in yet.
+  Widget _buildNoCategoriesHint(bool canAddCategory) {
+    final colors = Theme.of(context).colorScheme;
+
+    return InputDecorator(
+      decoration: _inputDecoration(
+        label: 'Category',
+        hint: '',
+        icon: Icons.category_outlined,
+      ),
+      child: Text(
+        canAddCategory
+            ? 'No categories yet. Use + to add the first one.'
+            : 'No categories yet. Ask an Admin to add one.',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: colors.onSurfaceVariant),
+      ),
+    );
+  }
+
+  /// Shown while the catalogue listener is still delivering its first
+  /// snapshot, so an empty list is not mistaken for an empty catalogue.
+  Widget _buildCategoryLoadingHint() {
+    final colors = Theme.of(context).colorScheme;
+
+    return InputDecorator(
+      decoration: _inputDecoration(
+        label: 'Category',
+        hint: '',
+        icon: Icons.category_outlined,
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Text(
+            'Loading categories...',
+            style: TextStyle(color: colors.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The catalogue could not be read. Reported with a retry rather than
+  /// swallowed: otherwise a permission or connectivity failure looks exactly
+  /// like a catalogue nobody has filled in.
+  Widget _buildCategoryErrorHint(String message) {
+    final colors = Theme.of(context).colorScheme;
+
+    return InputDecorator(
+      decoration: _inputDecoration(
+        label: 'Category',
+        hint: '',
+        icon: Icons.category_outlined,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              message,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: colors.error),
+            ),
+          ),
+          TextButton(
+            onPressed: _isSaving
+                ? null
+                : () => context.read<CategoryProvider>().refreshCategories(),
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _addCategory() async {
+    final userProvider = context.read<UserProvider>();
+    final categoryProvider = context.read<CategoryProvider>();
+
+    // Keyed the way Firestore keys the documents, so the dialog refuses a
+    // spelling that only differs in punctuation or spacing instead of letting
+    // the transaction reject it after the dialog has already closed.
+    final existing = _categoryOptions(
+      categoryProvider,
+      context.read<AssetProvider>(),
+    ).map(CategoryService.nameKeyFor).toSet();
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => _CategoryNameDialog(existingKeys: existing),
+    );
+
+    if (name == null || !mounted) {
+      return;
+    }
+
+    try {
+      final created = await categoryProvider.createCategory(
+        name: name,
+        createdBy: userProvider.currentUserUid ?? '',
+        createdByName: userProvider.currentUserProfile?.name.trim() ?? '',
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      // Selected right away: reopening the screen to pick a category that was
+      // just added would lose everything typed into the form so far.
+      setState(() {
+        selectedCategory = created;
+      });
+
+      _showMessage('Category "$created" added.');
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(_cleanCategoryError(e), isError: true);
+    }
+  }
+
+  /// Corrects the spelling of the selected category.
+  ///
+  /// Only the name changes. Assets already carrying the old spelling keep
+  /// working: the category keeps its key, so both spellings resolve to the
+  /// same entry and the corrected one is what the form offers from now on.
+  Future<void> _renameCategory() async {
+    final categoryProvider = context.read<CategoryProvider>();
+    final category = categoryProvider.categoryFor(selectedCategory);
+
+    if (category == null) {
+      _showMessage(
+        '"$selectedCategory" is not in the category list yet. Add it with + '
+        'first, then it can be renamed.',
+        isError: true,
+      );
+      return;
+    }
+
+    // Every other category's key, so the dialog refuses a name that another
+    // category already owns before the transaction has to.
+    final taken = _categoryOptions(categoryProvider, context.read<AssetProvider>())
+        .map(CategoryService.nameKeyFor)
+        .where((key) => key != category.nameKey)
+        .toSet();
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => _CategoryNameDialog(
+        title: 'Rename Category',
+        actionLabel: 'Save Name',
+        initialName: category.name,
+        existingKeys: taken,
+      ),
+    );
+
+    if (name == null || !mounted) {
+      return;
+    }
+
+    final previous = category.name;
+
+    try {
+      final saved = await categoryProvider.renameCategory(
+        categoryId: category.id,
+        name: name,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      // The form was showing the old spelling; it must follow the rename so
+      // the asset is saved with the corrected name.
+      setState(() {
+        selectedCategory = saved;
+      });
+
+      _showMessage('Category renamed to "$saved".');
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(_cleanCategoryError(e, renaming: true), isError: true);
+      setState(() {
+        selectedCategory = previous;
+      });
+    }
+  }
+
+  String _cleanCategoryError(Object error, {bool renaming = false}) {
+    final message = error.toString().trim();
+
+    if (message.startsWith('Exception: ')) {
+      return message.substring(11).trim();
+    }
+
+    if (message.contains('permission-denied')) {
+      return renaming
+          ? 'You do not have permission to rename a category.'
+          : 'You do not have permission to add a category.';
+    }
+
+    return renaming
+        ? 'Unable to rename the category. Please try again.'
+        : 'Unable to add the category. Please try again.';
   }
 
   Widget _buildOwnerField() {
@@ -773,13 +1104,21 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
                 height: 20,
                 child: CircularProgressIndicator(strokeWidth: 2.2),
               )
-            : Icon(isEditMode ? Icons.send_rounded : Icons.add_rounded),
+            // Keyed on the same permission as the label below: a direct save
+            // must not wear the icon of a submitted request.
+            : Icon(
+                !isEditMode
+                    ? Icons.add_rounded
+                    : _editsDirectly(context)
+                    ? Icons.save_rounded
+                    : Icons.send_rounded,
+              ),
         label: Text(
           _isSaving
               ? 'Saving...'
               : !isEditMode
               ? 'Save Asset'
-              : context.watch<UserProvider>().isSuperAdmin
+              : _editsDirectly(context)
               ? 'Save Changes'
               : 'Submit Update Request',
           maxLines: 1,
@@ -835,6 +1174,16 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       return;
     }
 
+    // With an empty catalogue the Category field is a hint rather than a form
+    // field, so the form's own validation cannot catch a missing category.
+    if (selectedCategory.trim().isEmpty) {
+      _showMessage(
+        'Please select a category, or add one first.',
+        isError: true,
+      );
+      return;
+    }
+
     final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
@@ -852,6 +1201,11 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     final requestProvider = context.read<RequestProvider>();
     final userProvider = context.read<UserProvider>();
     final isSuperAdmin = userProvider.isSuperAdmin;
+
+    // A manager saves the edit itself; only a User files a request for it.
+    final editsDirectly = PermissionService.canEditAsset(
+      userProvider.currentUserRole,
+    );
 
     setState(() {
       _isSaving = true;
@@ -897,11 +1251,9 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       // ========================================================
       // EDIT ASSET
       //
-      // IMPORTANT:
-      // Never update Firestore directly from this screen.
-      //
-      // The changes are placed inside a Pending request.
-      // Super Admin approval performs the real update.
+      // A USER never updates Firestore from this screen: the
+      // changes are placed inside a Pending request and an
+      // approval performs the real update.
       //
       // STOCK RULE:
       // Existing assigned/deployed quantities are preserved.
@@ -915,41 +1267,56 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       // ========================================================
 
       // ========================================================
-      // SUPER ADMIN EDIT: applied directly.
+      // MANAGER EDIT: applied directly.
       //
       // A Super Admin cannot approve their own request, and no
       // other account may approve a Super Admin's changes, so
       // routing these edits through a request left them stuck
-      // forever. Firestore rules give Super Admin full inventory
-      // control. The service applies the edit in a transaction
-      // on top of the CURRENT stored stock distribution.
+      // forever. An Admin owns the inventory it edits, so making
+      // it wait for an approval bought nothing either. Firestore
+      // rules allow both. The service applies the edit in a
+      // transaction on top of the CURRENT stored stock
+      // distribution.
       // ========================================================
 
-      if (isEditMode && isSuperAdmin) {
+      if (isEditMode && editsDirectly) {
         final oldAsset = widget.asset!;
 
-        await assetProvider.updateAsset(
-          oldAsset.id,
-          oldAsset.copyWith(
-            assetId: assetId,
-            name: nameController.text.trim(),
-            category: selectedCategory,
-            status: selectedStatus,
-            quantity: quantity,
-            serialNumber: serial,
-            brand: brandController.text.trim(),
-            model: modelController.text.trim(),
-            purchasePrice: purchasePrice,
-            purchaseDate: purchaseDate,
-            clearPurchaseDate: purchaseDate == null,
-            warrantyMonths: warranty,
-            location: locationController.text.trim().isEmpty
-                ? oldAsset.location
-                : locationController.text.trim(),
-            condition: selectedCondition,
-            notes: notesController.text.trim(),
-          ),
+        final editedAsset = oldAsset.copyWith(
+          assetId: assetId,
+          name: nameController.text.trim(),
+          category: selectedCategory,
+          status: selectedStatus,
+          quantity: quantity,
+          serialNumber: serial,
+          brand: brandController.text.trim(),
+          model: modelController.text.trim(),
+          purchasePrice: purchasePrice,
+          purchaseDate: purchaseDate,
+          clearPurchaseDate: purchaseDate == null,
+          warrantyMonths: warranty,
+          location: locationController.text.trim().isEmpty
+              ? oldAsset.location
+              : locationController.text.trim(),
+          condition: selectedCondition,
+          notes: notesController.text.trim(),
         );
+
+        if (isSuperAdmin) {
+          await assetProvider.updateAsset(oldAsset.id, editedAsset);
+        } else {
+          // An Admin write must keep the owning adminId as it stands - the
+          // Firestore rule refuses anything else - so the edit goes through
+          // the owner-aware path, which also claims a legacy asset that has
+          // no owner yet.
+          await assetProvider.updateAssetForAdmin(
+            id: oldAsset.id,
+            adminId: user.uid,
+            asset: editedAsset.copyWith(
+              adminName: userProvider.currentUserProfile?.name.trim(),
+            ),
+          );
+        }
 
         if (!mounted) {
           return;
@@ -1162,7 +1529,7 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
           return;
         }
 
-        _showMessage('Update request submitted for Super Admin approval.');
+        _showMessage('Update request submitted for approval.');
 
         await Future<void>.delayed(const Duration(milliseconds: 250));
 
@@ -1223,6 +1590,11 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
         condition: selectedCondition,
         notes: notesController.text.trim(),
 
+        // The author of the document, not its owner: the create rule accepts
+        // a User's new asset only when createdBy is its own UID, while adminId
+        // below stays the owning Admin. Written once and never editable.
+        createdBy: user.uid,
+
         createdAt: DateTime.now(),
         lastUpdated: DateTime.now(),
 
@@ -1239,13 +1611,19 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
       );
 
       // Every asset must have an owning Admin: Firestore rules require an
-      // Admin to create assets under their own UID, and Users only see the
-      // inventory of the Admin they belong to.
+      // Admin to create assets under their own UID, and a User's new asset
+      // must belong either to itself or to the Admin that created the account
+      // - which is the only owner the create rule accepts for a User.
+
+      final assignedAdminUid =
+          userProvider.currentUserProfile?.createdBy.trim() ?? '';
 
       final ownerUid = userProvider.isSuperAdmin
           ? (_selectedOwnerUid?.trim().isNotEmpty == true
                 ? _selectedOwnerUid!.trim()
                 : user.uid)
+          : userProvider.isNormalUser && assignedAdminUid.isNotEmpty
+          ? assignedAdminUid
           : user.uid;
 
       String ownerName = userProvider.currentUserProfile?.name.trim() ?? '';
@@ -1356,5 +1734,110 @@ class _AddAssetScreenState extends State<AddAssetScreen> {
     final month = date.month.toString().padLeft(2, '0');
 
     return '$day/$month/${date.year}';
+  }
+}
+
+// =============================================================================
+// ADD CATEGORY
+//
+// Returns the typed name, or null when cancelled. The duplicate check here is
+// only for a fast message: CategoryService still refuses a duplicate inside a
+// transaction, which is what protects against two accounts adding the same
+// category at the same moment.
+// =============================================================================
+
+class _CategoryNameDialog extends StatefulWidget {
+  const _CategoryNameDialog({
+    required this.existingKeys,
+    this.title = 'Add Category',
+    this.actionLabel = 'Add Category',
+    this.initialName = '',
+  });
+
+  /// [CategoryService.nameKeyFor] of every name that is already taken. For a
+  /// rename this leaves out the category's own key, so re-spelling the same
+  /// category is allowed while another category's name is not.
+  final Set<String> existingKeys;
+
+  final String title;
+  final String actionLabel;
+
+  /// Pre-filled and pre-selected when renaming, so the current spelling can
+  /// be corrected rather than retyped.
+  final String initialName;
+
+  @override
+  State<_CategoryNameDialog> createState() => _CategoryNameDialogState();
+}
+
+class _CategoryNameDialogState extends State<_CategoryNameDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameController = TextEditingController(
+    text: widget.initialName,
+  );
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    Navigator.of(context).pop(_nameController.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 380,
+        child: Form(
+          key: _formKey,
+          child: TextFormField(
+            controller: _nameController,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            maxLength: CategoryService.maxNameLength,
+            decoration: const InputDecoration(
+              labelText: 'Category Name',
+              hintText: 'e.g. Network Device',
+              prefixIcon: Icon(Icons.category_outlined),
+            ),
+            onFieldSubmitted: (_) => _submit(),
+            validator: (value) {
+              final clean = (value ?? '').trim();
+
+              if (clean.isEmpty) {
+                return 'Category name is required';
+              }
+
+              if (CategoryService.nameKeyFor(clean).isEmpty) {
+                return 'Use letters or digits in the name';
+              }
+
+              if (widget.existingKeys.contains(
+                CategoryService.nameKeyFor(clean),
+              )) {
+                return 'That category already exists.';
+              }
+
+              return null;
+            },
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: Text(widget.actionLabel)),
+      ],
+    );
   }
 }

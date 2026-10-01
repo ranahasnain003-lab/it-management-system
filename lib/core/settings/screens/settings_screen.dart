@@ -15,11 +15,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _notificationsEnabled = true;
-  bool _emailNotifications = true;
-  bool _securityAlerts = true;
-  bool _biometricEnabled = false;
-
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -107,7 +102,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     context,
                     icon: Icons.location_city_rounded,
                     title: 'Bazaar Master',
-                    subtitle: isSuperAdmin
+                    // An Admin may add, edit and disable Bazaars too, so the
+                    // label follows isManager - keying it off isSuperAdmin
+                    // told an Admin it could only look.
+                    subtitle: isManager
                         ? 'Manage Sahulat Bazaars and operational locations'
                         : 'View Sahulat Bazaars and operational locations',
                     tone: AppColors.bazaar,
@@ -144,7 +142,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _buildSectionTitle(
                     context,
                     'Notifications',
-                    'Control alerts and notification preferences',
+                    'Notification delivery is not configurable yet',
                   ),
                   const SizedBox(height: AppSpacing.sm + 2),
 
@@ -164,14 +162,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.lock_outline_rounded,
                     title: 'Change Password',
                     subtitle: 'Update your account password securely',
+                    // The screen is a nested route, and the old guard only
+                    // looked at the router's top-level routes - so it never
+                    // found '/change-password' and every tap reported the
+                    // working screen as "not available yet".
                     onTap: () {
-                      if (_routeExists(context, '/change-password')) {
-                        context.push('/change-password');
-                      } else {
-                        _showMessage(
-                          'Change Password screen is not available yet.',
-                        );
-                      }
+                      context.push('/change-password');
                     },
                   ),
                   const SizedBox(height: AppSpacing.sm),
@@ -181,18 +177,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.fingerprint_rounded,
                     title: 'Biometric Login',
                     subtitle: 'Use biometric authentication when available',
-                    value: _biometricEnabled,
-                    onChanged: (value) {
-                      setState(() {
-                        _biometricEnabled = value;
-                      });
-
-                      _showMessage(
-                        value
-                            ? 'Biometric login enabled.'
-                            : 'Biometric login disabled.',
-                      );
-                    },
+                    value: false,
+                    onChanged: null,
+                    note: 'Not available yet',
                   ),
 
                   const SizedBox(height: AppSpacing.xl),
@@ -231,6 +218,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'Information and application services',
                   ),
                   const SizedBox(height: AppSpacing.sm + 2),
+
+                  // Open to every role: the screen shows the connection
+                  // read-only, and only Admin / Super Admin can edit it.
+                  _buildSettingsCard(
+                    context,
+                    icon: Icons.smart_toy_outlined,
+                    title: 'AI Assistant server',
+                    subtitle: isManager
+                        ? 'Connect the private AI Assistant to its laptop'
+                        : 'Connection status of the private AI Assistant',
+                    tone: AppColors.assigned,
+                    onTap: () {
+                      context.push('/ai-assistant/settings');
+                    },
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
 
                   _buildSettingsCard(
                     context,
@@ -450,14 +453,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // SWITCH CARD
   // ================================================================
 
+  /// A switch row. [onChanged] of null disables the switch, which is how the
+  /// preferences that are not implemented yet are shown: honestly unavailable
+  /// rather than flipping and reporting a success that never happened.
   Widget _buildSwitchCard(
     BuildContext context, {
     required IconData icon,
     required String title,
     required String subtitle,
     required bool value,
-    required ValueChanged<bool> onChanged,
+    required ValueChanged<bool>? onChanged,
+    String? note,
   }) {
+    final colors = Theme.of(context).colorScheme;
+
     return Card(
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 64),
@@ -472,7 +481,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               _buildIconTile(context, icon),
               const SizedBox(width: AppSpacing.md),
-              Expanded(child: _buildRowText(context, title, subtitle)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildRowText(context, title, subtitle),
+                    if (note != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        note,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
               const SizedBox(width: AppSpacing.sm),
               Switch(value: value, onChanged: onChanged),
             ],
@@ -569,6 +596,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // NOTIFICATIONS
   // ================================================================
 
+  /// The three notification switches, shown but disabled.
+  ///
+  /// None of them was ever wired to anything: the value lived in this State
+  /// alone, was never persisted and was never read by the notification
+  /// pipeline, yet every tap reported success - so the account believed it had
+  /// turned email or security alerts on or off. They stay visible, and
+  /// honestly labelled, until there is something behind them.
   Widget _buildNotificationCard(BuildContext context) {
     return Column(
       children: [
@@ -577,73 +611,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.notifications_active_outlined,
           title: 'Notifications',
           subtitle: 'Receive application notifications',
-          value: _notificationsEnabled,
-          onChanged: (value) {
-            setState(() {
-              _notificationsEnabled = value;
-
-              if (!value) {
-                _emailNotifications = false;
-                _securityAlerts = false;
-              }
-            });
-
-            _showMessage(
-              value ? 'Notifications enabled.' : 'Notifications disabled.',
-            );
-          },
+          value: false,
+          onChanged: null,
+          note: 'Not available yet',
         ),
         const SizedBox(height: AppSpacing.sm),
-        AnimatedOpacity(
-          duration: const Duration(milliseconds: 200),
-          opacity: _notificationsEnabled ? 1 : 0.5,
-          child: IgnorePointer(
-            ignoring: !_notificationsEnabled,
-            child: _buildSwitchCard(
-              context,
-              icon: Icons.email_outlined,
-              title: 'Email Notifications',
-              subtitle: 'Receive important updates by email',
-              value: _emailNotifications,
-              onChanged: (value) {
-                setState(() {
-                  _emailNotifications = value;
-                });
-
-                _showMessage(
-                  value
-                      ? 'Email notifications enabled.'
-                      : 'Email notifications disabled.',
-                );
-              },
-            ),
-          ),
+        _buildSwitchCard(
+          context,
+          icon: Icons.email_outlined,
+          title: 'Email Notifications',
+          subtitle: 'Receive important updates by email',
+          value: false,
+          onChanged: null,
+          note: 'Not available yet',
         ),
         const SizedBox(height: AppSpacing.sm),
-        AnimatedOpacity(
-          duration: const Duration(milliseconds: 200),
-          opacity: _notificationsEnabled ? 1 : 0.5,
-          child: IgnorePointer(
-            ignoring: !_notificationsEnabled,
-            child: _buildSwitchCard(
-              context,
-              icon: Icons.shield_outlined,
-              title: 'Security Alerts',
-              subtitle: 'Receive alerts about important security events',
-              value: _securityAlerts,
-              onChanged: (value) {
-                setState(() {
-                  _securityAlerts = value;
-                });
-
-                _showMessage(
-                  value
-                      ? 'Security alerts enabled.'
-                      : 'Security alerts disabled.',
-                );
-              },
-            ),
-          ),
+        _buildSwitchCard(
+          context,
+          icon: Icons.shield_outlined,
+          title: 'Security Alerts',
+          subtitle: 'Receive alerts about important security events',
+          value: false,
+          onChanged: null,
+          note: 'Not available yet',
         ),
       ],
     );
@@ -868,9 +858,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'Reset Settings?',
           ),
           content: const Text(
-            'This will restore notification, security and '
-            'appearance preferences on this screen to their '
-            'default values.',
+            'This will restore the appearance preference on this '
+            'screen to its default value. Nothing else on this '
+            'screen is stored yet.',
           ),
           actions: [
             TextButton(
@@ -901,13 +891,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return;
       }
 
-      setState(() {
-        _notificationsEnabled = true;
-        _emailNotifications = true;
-        _securityAlerts = true;
-        _biometricEnabled = false;
-      });
-
       _showMessage('Settings restored to default.');
     } catch (_) {
       if (!mounted) {
@@ -915,26 +898,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       _showMessage('Unable to reset theme preference.');
-    }
-  }
-
-  // ================================================================
-  // ROUTE CHECK
-  // ================================================================
-
-  bool _routeExists(BuildContext context, String path) {
-    try {
-      final router = GoRouter.of(context);
-
-      return router.configuration.routes.any((route) {
-        if (route is GoRoute) {
-          return route.path == path;
-        }
-
-        return false;
-      });
-    } catch (_) {
-      return false;
     }
   }
 

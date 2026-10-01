@@ -3,15 +3,16 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/asset_provider.dart';
 import '../providers/asset_scope.dart';
 import '../providers/bazaar_provider.dart';
+import '../providers/category_provider.dart';
 import '../providers/deployment_provider.dart';
 import '../providers/user_provider.dart';
-import '../services/permission_service.dart';
 import '../theme/colors.dart';
 import 'action_executor.dart';
 import 'action_planner.dart';
@@ -19,6 +20,9 @@ import 'ai_backend.dart';
 import 'assistant_actions.dart';
 import 'assistant_modal_observer.dart';
 import 'inventory_assistant.dart';
+import 'inventory_snapshot_builder.dart';
+import 'local/local_ai_assistant_backend.dart';
+import 'local/local_ai_provider.dart';
 
 /// Re-exported so existing imports of this file keep working.
 export 'assistant_modal_observer.dart';
@@ -160,6 +164,12 @@ class _AssistantSurface extends StatelessWidget {
 /// Nothing is lost by deferring. A message that really was a command comes
 /// back from the model as an intent, and ActionPlanner.planFromIntent runs it
 /// through this same planner to the same conclusion, with the same checks.
+/// Whether [backend] takes part in deciding what a message asks the app to
+/// do. A words-only model (Qwen3 on the laptop) does not: it answers
+/// questions, and commands are planned exactly as they are with no model.
+bool modelPlansActions(AssistantBackend backend) =>
+    backend.enabled && backend is! WordsOnlyBackend;
+
 bool shouldActOnPlan(
   ActionPlan plan, {
   required bool modelAvailable,
@@ -199,6 +209,10 @@ AssistantPermissions buildAssistantPermissions(BuildContext context) {
     role: users.currentUserRole,
     uid: users.currentUserUid ?? '',
     displayName: profile.name,
+    // A pending account may do nothing at all, and the Admin who created a
+    // User is who that User's assets belong to, so both travel with the role.
+    status: profile.status,
+    createdBy: profile.createdBy,
     roles: profile.roles,
   );
 }
@@ -207,46 +221,14 @@ AssistantPermissions buildAssistantPermissions(BuildContext context) {
 /// signed-in account already uses, so its answers inherit that account's
 /// permissions exactly.
 InventorySnapshot buildInventorySnapshot(BuildContext context) {
-  final assets = context.read<AssetProvider>();
-  final bazaars = context.read<BazaarProvider>();
-  final movements = context.read<DeploymentProvider>();
-  final users = context.read<UserProvider>();
-
-  final role = users.currentUserRole;
-
-  final scope = users.isSuperAdmin || users.isAdmin
-      ? ''
-      : 'These figures cover the inventory of the Admin your account belongs to.';
-
-  return InventorySnapshot(
-    assets: assets.assets,
-    bazaars: bazaars.bazaars,
-    deployments: movements.deployments,
-    totalQuantity: assets.totalQuantity,
-    headOfficeStock: assets.headOfficeStock,
-    assignedQuantity: assets.assignedQuantity,
-    bazaarQuantity: assets.deployedToBazaarsQuantity,
-    damagedQuantity: assets.damagedQuantity,
-    underRepairQuantity: assets.underRepairQuantity,
-    lostQuantity: assets.lostQuantity,
-    disposedQuantity: assets.disposedQuantity,
-    unavailableAtHeadOffice: assets.unavailableAtHeadOfficeQuantity,
-    totalInventoryValue: assets.totalInventoryValue,
-    roleLabel: PermissionService.roleLabel(role),
-    scopeNote: scope,
-    // Without these the Bazaar figures would read as a confident zero.
-    bazaarDataLoaded: movements.deployments.isNotEmpty || bazaars.bazaars.isNotEmpty,
-    // Separates "this account owns nothing" from "the stream has not answered
-    // yet". Only the first is a real answer.
-    inventoryLoading: AssetScope.isSettling(users: users, assets: assets),
-    // Display names for the accounts this user can already see under Users, so
-    // "who has IT-LAP-001" can be answered. Account ids and email addresses
-    // stay in the app: InventorySnapshot.toFacts never emits either.
-    holders: {
-      for (final person in users.users)
-        if (person.uid.trim().isNotEmpty && person.name.trim().isNotEmpty)
-          person.uid: person.name,
-    },
+  return inventorySnapshotFromProviders(
+    assets: context.read<AssetProvider>(),
+    bazaars: context.read<BazaarProvider>(),
+    deployments: context.read<DeploymentProvider>(),
+    users: context.read<UserProvider>(),
+    // So a command may name a category that has been added but is not yet on
+    // any asset, exactly as the Add Asset form's dropdown offers it.
+    categories: context.read<CategoryProvider>(),
   );
 }
 
@@ -394,10 +376,15 @@ class _SparkPainter extends CustomPainter {
 // =============================================================================
 
 class _Message {
-  const _Message(this.text, {required this.fromUser});
+  const _Message(this.text, {required this.fromUser, this.fromRecords = false});
 
   final String text;
   final bool fromUser;
+
+  /// An answer the app worked out by itself from the inventory records,
+  /// without asking the model. The bubble says so, as the AI Assistant
+  /// screen does, so the two kinds of answer are never confused.
+  final bool fromRecords;
 }
 
 class _AssistantPanel extends StatefulWidget {
@@ -417,7 +404,18 @@ class _AssistantPanelState extends State<_AssistantPanel> {
   final _focus = FocusNode();
 
   late final _planner = ActionPlanner(finder: _assistant);
-  late final AssistantBackend _backend = widget.backend ?? const AiBackend();
+  late final AssistantBackend _backend = widget.backend ?? _defaultBackend();
+
+  /// Qwen3 on the laptop, through the app's Local AI provider. Only where no
+  /// provider exists (a test's bare widget tree) does the older backend stand
+  /// in, and that one stays off unless a build switches it on.
+  AssistantBackend _defaultBackend() {
+    try {
+      return LocalAiAssistantBackend(context.read<LocalAiProvider>());
+    } on ProviderNotFoundException {
+      return const AiBackend();
+    }
+  }
   final _executor = ActionExecutor();
 
   /// A change the user has been shown and has not answered yet. Nothing is
@@ -438,6 +436,18 @@ class _AssistantPanelState extends State<_AssistantPanel> {
 
   bool _thinking = false;
 
+  /// The model's answer so far, while it is still being written, or empty.
+  ///
+  /// Only a [StreamingBackend] fills this. While it has text, the thinking
+  /// bubble shows it instead of the typing dots, so on a laptop CPU the user
+  /// starts reading as soon as the model has read the question, instead of
+  /// watching dots until the whole answer is written. Every setState in
+  /// [_send] that ends [_thinking] empties it too, so it can never linger
+  /// into the next question; [_confirm] never streams, so it has nothing to
+  /// empty. Closing the panel disposes this State, and a preview arriving
+  /// after that is dropped by [_showPartial].
+  String _streamingText = '';
+
   @override
   void dispose() {
     _input.dispose();
@@ -446,12 +456,25 @@ class _AssistantPanelState extends State<_AssistantPanel> {
     super.dispose();
   }
 
-  /// Waits, briefly, for the account's inventory stream to deliver.
+  /// Waits, briefly, for the records a command is checked against to arrive.
   ///
-  /// Bounded on purpose: if the stream is slow or has failed, the assistant
-  /// still answers rather than hanging, and [InventorySnapshot.inventoryLoading]
-  /// lets it say "still loading" instead of "you have none".
-  Future<void> _waitForInventory() async {
+  /// The inventory, and the category catalogue with it: a typed "add asset"
+  /// names a category, which the planner checks against the catalogue plus the
+  /// categories already on visible assets. Answering before the catalogue has
+  /// landed would refuse a category the account can see perfectly well on the
+  /// Add Asset screen. The listener is started here as well, because a command
+  /// may be the first thing this session does with categories.
+  ///
+  /// Bounded on purpose: if a stream is slow or has failed, the assistant still
+  /// answers rather than hanging, and [InventorySnapshot.inventoryLoading] lets
+  /// it say "still loading" instead of "you have none".
+  Future<void> _waitForRecords() async {
+    if (!mounted) return;
+
+    // A no-op when it is already listening, so this does not restart the
+    // stream on every question.
+    context.read<CategoryProvider>().listenToCategories();
+
     final deadline = DateTime.now().add(const Duration(seconds: 8));
 
     while (DateTime.now().isBefore(deadline)) {
@@ -462,7 +485,12 @@ class _AssistantPanelState extends State<_AssistantPanel> {
         assets: context.read<AssetProvider>(),
       );
 
-      if (!settling) return;
+      // Only while the catalogue is actually in flight: a stream that failed
+      // leaves isLoading false, so a broken catalogue costs no delay and the
+      // categories already on assets still answer the command.
+      final categoriesSettling = context.read<CategoryProvider>().isLoading;
+
+      if (!settling && !categoriesSettling) return;
 
       await Future<void>.delayed(const Duration(milliseconds: 120));
     }
@@ -530,6 +558,11 @@ class _AssistantPanelState extends State<_AssistantPanel> {
     InventorySnapshot snapshot,
     List<Map<String, dynamic>> history,
   ) async {
+    // A words-only model is not asked to reword what the app decided: the
+    // app's own wording of a refusal or an outcome is exact, and on a laptop
+    // CPU the model would add half a minute to every command.
+    if (_backend is WordsOnlyBackend) return text;
+
     String? limitNotice;
 
     // Wording only. Any action the model suggests in reply is ignored here on
@@ -661,12 +694,16 @@ class _AssistantPanelState extends State<_AssistantPanel> {
     var answer = 'Something went wrong while reading the inventory. '
         'Please close the assistant and try again.';
 
+    // Set when the answer is a plain lookup the app worked out itself from
+    // the records, without the model. See _Message.fromRecords.
+    var fromRecords = false;
+
     try {
       // Opening the panel starts the account's inventory listener. A question
       // asked in the moment right after would otherwise be answered from an
       // empty list, which is how the assistant used to claim it could see no
       // inventory on an account that plainly had some.
-      await _waitForInventory();
+      await _waitForRecords();
 
       if (!mounted) return;
 
@@ -701,7 +738,7 @@ class _AssistantPanelState extends State<_AssistantPanel> {
       if (plan != null &&
           shouldActOnPlan(
             plan,
-            modelAvailable: _backend.enabled,
+            modelAvailable: modelPlansActions(_backend),
             message: question,
           )) {
         final outcome = await _handlePlan(plan, question, snapshot, recent);
@@ -710,6 +747,7 @@ class _AssistantPanelState extends State<_AssistantPanel> {
           setState(() {
             _messages.add(_Message(outcome, fromUser: false));
             _thinking = false;
+            _streamingText = '';
           });
           _scrollToEnd();
           return;
@@ -720,7 +758,10 @@ class _AssistantPanelState extends State<_AssistantPanel> {
         // an answer nobody is there to read, and spend one of the account's
         // model requests doing it.
         if (!mounted) return;
-        setState(() => _thinking = false);
+        setState(() {
+          _thinking = false;
+          _streamingText = '';
+        });
         return;
       }
 
@@ -737,23 +778,51 @@ class _AssistantPanelState extends State<_AssistantPanel> {
       // step was skipped - so the note is appended rather than shown alone.
       String? limitNotice;
 
+      // Set when the model was switched on for this build but did not answer.
+      // The computed answer is still shown, but it is no longer passed off as
+      // the model's: a silent fallback is how a broken deployment goes
+      // unnoticed, which is exactly what happened here.
+      String? failureNotice;
+
       // Natural language, in the user's own words and their own script. The
       // model is given nothing but this account's own permission-scoped facts,
       // and it can write nothing. If it is unavailable, disabled or over its
       // limit, the computed answer above is shown unchanged and the assistant
       // simply keeps working.
-      final understood = await _backend.ask(
-        // Redacted like the history is. The planner's own wording asks for
-        // "the exact name or the email address", so an address genuinely
-        // turns up here - and toFacts never sends one, which would make this
-        // the only way a colleague's address reached the model.
-        question: _withoutAddresses(question),
-        facts: snapshot.toFacts(focus: reply.asset),
-        groundedAnswer: reply.understood ? reply.text : '',
-        history: recent,
-        capabilities: permissions.assistantCapabilities,
-        onLimited: (notice) => limitNotice = notice,
-      );
+      //
+      // Redacted like the history is. The planner's own wording asks for "the
+      // exact name or the email address", so an address genuinely turns up
+      // here - and toFacts never sends one, which would make this the only way
+      // a colleague's address reached the model.
+      final asked = _withoutAddresses(question);
+      final facts = snapshot.toFacts(focus: reply.asset);
+      final grounded = reply.understood ? reply.text : '';
+
+      // A backend that streams (Qwen3 on the laptop) is asked the same
+      // question with the same facts; it only also shows its answer while it
+      // is being written. What happens once the answer is back is identical
+      // for both.
+      final backend = _backend;
+      final understood = backend is StreamingBackend
+          ? await backend.askStreaming(
+              question: asked,
+              facts: facts,
+              groundedAnswer: grounded,
+              history: recent,
+              capabilities: permissions.assistantCapabilities,
+              onLimited: (notice) => limitNotice = notice,
+              onFailed: (reason) => failureNotice = reason,
+              onPartial: _showPartial,
+            )
+          : await backend.ask(
+              question: asked,
+              facts: facts,
+              groundedAnswer: grounded,
+              history: recent,
+              capabilities: permissions.assistantCapabilities,
+              onLimited: (notice) => limitNotice = notice,
+              onFailed: (reason) => failureNotice = reason,
+            );
 
       if (understood != null) {
         // The model may have read the message as an instruction rather than a
@@ -787,6 +856,7 @@ class _AssistantPanelState extends State<_AssistantPanel> {
               setState(() {
                 _messages.add(_Message(outcome, fromUser: false));
                 _thinking = false;
+                _streamingText = '';
               });
               _scrollToEnd();
               return;
@@ -806,22 +876,95 @@ class _AssistantPanelState extends State<_AssistantPanel> {
               : '${understood.text}\n\n$refusal';
         } else {
           answer = understood.text;
+          fromRecords =
+              understood.provider == LocalAiAssistantBackend.answeredByApp;
         }
       }
 
       final notice = limitNotice;
       if (notice != null) answer = '$answer\n\n$notice';
+
+      // Only when the model really was expected to answer and did not. A
+      // quota notice already explains itself, and a build with the model off
+      // never sets this at all, so the offline mode stays quiet.
+      final failure = failureNotice;
+      if (understood == null && notice == null && failure != null) {
+        answer = '$answer\n\n$failure';
+      }
     } catch (error) {
       debugPrint('Assistant could not answer: $error');
     }
 
     if (!mounted) return;
 
+    // The preview and the finished answer are swapped in one frame. When the
+    // model finished, they hold the same text in the same bubble, so nothing
+    // moves. When it failed part-way, the half-written preview is replaced
+    // by the app's own answer and the note saying so, never left on screen.
     setState(() {
-      _messages.add(_Message(answer, fromUser: false));
+      _messages.add(_Message(answer, fromUser: false, fromRecords: fromRecords));
       _thinking = false;
+      _streamingText = '';
     });
     _scrollToEnd();
+  }
+
+  /// How far above the end of the conversation the user may be and still
+  /// count as reading the end, so a growing answer is followed down.
+  ///
+  /// A little over two lines: enough to absorb the last few pixels of the
+  /// previous follow still sliding into place, while any deliberate scroll
+  /// up to re-read something is well past it.
+  static const double _followSlack = 48;
+
+  /// Shows the model's answer so far in the thinking bubble. See
+  /// [StreamingBackend.askStreaming].
+  void _showPartial(String partialText) {
+    // The panel was closed while the laptop was still writing. The answer
+    // still finishes into the shared conversation, where the AI Assistant
+    // screen shows it; there is nothing here to show it in.
+    if (!mounted) return;
+
+    // Previews arrive about nine times a second for as long as the answer
+    // takes. Scrolling to the end on every one would drag the list back down
+    // under a user who has scrolled up to re-read an earlier message, again
+    // and again until the answer finished. So the answer is only followed
+    // while the user is reading the end of the conversation. Measured before
+    // the new words are laid out, so their own growth does not count as the
+    // user having scrolled away; scrolling back down to the end picks the
+    // answer up again. The finished answer still scrolls into view once, from
+    // [_send], exactly as it did before answers were streamed.
+    final following =
+        !_scroll.hasClients || _scroll.position.extentAfter < _followSlack;
+
+    setState(() => _streamingText = partialText);
+    if (following) _followAnswer();
+  }
+
+  /// Keeps the last line of the answer being written in view.
+  ///
+  /// Not [_scrollToEnd]: that one ends with a jump, for bubbles still being
+  /// laid out, and a jump taken while a finger is on the list cancels the
+  /// drag - so the user could not scroll up at all while previews kept
+  /// coming. The growing answer is the last bubble and is already laid out
+  /// when the end is in view, so the end measured here is the real end, and a
+  /// short slide that a finger simply interrupts is all that is needed.
+  void _followAnswer() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      final position = _scroll.position;
+
+      // The user started dragging or flinging the list after the preview was
+      // measured, or the list is already at the end.
+      if (position.userScrollDirection != ScrollDirection.idle) return;
+      if (position.extentAfter <= 0) return;
+
+      _scroll.animateTo(
+        position.maxScrollExtent,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   void _scrollToEnd() {
@@ -954,7 +1097,15 @@ class _AssistantPanelState extends State<_AssistantPanel> {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
       itemCount: _messages.length + (_thinking ? 1 : 0),
       itemBuilder: (context, index) {
-        if (index == _messages.length) return const _TypingBubble();
+        if (index == _messages.length) {
+          // The answer so far, once the model has written any, in exactly
+          // the bubble the finished answer will occupy at this same index:
+          // when it lands, the text is updated in place instead of a new
+          // bubble appearing below a disappearing one.
+          return _streamingText.isEmpty
+              ? const _TypingBubble()
+              : _Bubble(message: _Message(_streamingText, fromUser: false));
+        }
         return _Bubble(message: _messages[index]);
       },
     );
@@ -1095,17 +1246,64 @@ class _Bubble extends StatelessWidget {
             bottomRight: Radius.circular(mine ? 4 : 16),
           ),
         ),
-        child: SelectableText(
-          message.text,
-          style: TextStyle(
-            fontSize: 14,
-            height: 1.45,
-            color: mine
-                ? colors.onPrimary
-                : AppColors.onTint(colors.primary, Theme.of(context).brightness),
-          ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SelectableText(
+              message.text,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.45,
+                color: mine
+                    ? colors.onPrimary
+                    : AppColors.onTint(
+                        colors.primary,
+                        Theme.of(context).brightness,
+                      ),
+              ),
+            ),
+            if (message.fromRecords) ...[
+              const SizedBox(height: 6),
+              _RecordsLabel(
+                color: AppColors.onTint(
+                  colors.primary,
+                  Theme.of(context).brightness,
+                ).withValues(alpha: 0.75),
+              ),
+            ],
+          ],
         ),
       ),
+    );
+  }
+}
+
+/// Under an answer the app worked out itself from the inventory records,
+/// with the same words the AI Assistant screen uses.
+class _RecordsLabel extends StatelessWidget {
+  const _RecordsLabel({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.bolt_outlined, size: 13, color: color),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            'Straight from your IT Inventory records',
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -334,6 +336,84 @@ void main() {
       );
       expect(AiBackend.quotaNotice(Exception('offline')), isNull);
       expect(AiBackend.quotaNotice('some string'), isNull);
+    });
+  });
+
+  group('AiBackend.failureNotice', () {
+    // The point of this group: a build that has the model switched on but
+    // cannot reach it used to look identical to one answering happily from the
+    // on-device engine. Every failure has to name itself.
+
+    test('prefers the reason the Worker itself gave', () {
+      // The Worker already writes a specific sentence for each refusal, so
+      // nothing is invented over the top of it.
+      expect(
+        AiBackend.failureNotice(
+          _backendError(
+            code: 'failed-precondition',
+            message: 'This request did not come from a recognised app installation.',
+          ),
+        ),
+        'This request did not come from a recognised app installation.',
+      );
+
+      expect(
+        AiBackend.failureNotice(
+          _backendError(
+            code: 'unavailable',
+            message: 'The assistant is not configured yet.',
+          ),
+        ),
+        'The assistant is not configured yet.',
+      );
+    });
+
+    test('describes each refusal itself when the Worker sent no message', () {
+      String notice(String code) =>
+          AiBackend.failureNotice(_backendError(code: code, message: ''));
+
+      expect(notice('resource-exhausted'), contains('limit'));
+      expect(notice('unauthenticated'), contains('sign'));
+      expect(notice('permission-denied'), contains('verified'));
+      expect(notice('failed-precondition'), contains('installation'));
+      expect(notice('invalid-argument'), contains('question'));
+      expect(notice('some-code-we-have-never-seen'), contains('unavailable'));
+    });
+
+    test('names a timeout as a timeout rather than as a generic failure', () {
+      final notice = AiBackend.failureNotice(TimeoutException('too slow'));
+
+      expect(notice, contains('too long'));
+    });
+
+    test('never returns an empty string, whatever it is handed', () {
+      for (final error in <Object>[
+        Exception('offline'),
+        'a bare string',
+        const FormatException('not JSON'),
+        StateError('unexpected'),
+      ]) {
+        expect(AiBackend.failureNotice(error).trim(), isNotEmpty);
+      }
+    });
+  });
+
+  group('AiBackend.configurationSummary', () {
+    // This is the root cause of "the assistant gives no real AI answer": both
+    // defines are off by default and nothing in the repository passed them, so
+    // every build ran on the on-device engine and said nothing about it.
+
+    test('explains which define is missing in a default build', () {
+      // The test build passes neither define, which is the state a normal
+      // `flutter run` was also in.
+      expect(AiBackend.isEnabled, isFalse);
+      expect(AiBackend.proxyUrl, isEmpty);
+
+      final summary = AiBackend.configurationSummary;
+
+      expect(summary, contains('AI_LLM_ENABLED'));
+      expect(summary, contains('on-device'));
+      expect(summary.trim(), isNotEmpty);
     });
   });
 }

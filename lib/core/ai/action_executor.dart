@@ -1,3 +1,5 @@
+import 'package:firebase_core/firebase_core.dart' show FirebaseException;
+
 import '../../models/asset_model.dart';
 import '../../models/request_model.dart';
 import '../services/asset_service.dart';
@@ -95,6 +97,11 @@ class ActionExecutor {
           await _bazaars.createBazaar(
             name: action.subjectName,
             location: action.subjectLocation,
+            // The create rule requires the writer to own the record it is
+            // adding, so this is the signed-in account, never the resolved
+            // inventory owner: a Bazaar belongs to nobody's inventory.
+            createdBy: permissions.uid,
+            createdByName: permissions.displayName,
           );
           return ActionResult.success(
             'Done. "${action.subjectName}" has been added to the Bazaar list.',
@@ -110,9 +117,7 @@ class ActionExecutor {
           );
       }
     } catch (error) {
-      // Services and Firestore rules both refuse in plain language; pass that
-      // through rather than inventing a reason.
-      return ActionResult.failure('That did not go through: ${_clean(error)}');
+      return ActionResult.failure(_refusal(error));
     }
   }
 
@@ -174,6 +179,23 @@ class ActionExecutor {
       );
     }
 
+    // The planner already refused an account it could not resolve an owner
+    // for; this repeats the check because an asset written under the wrong
+    // account is worse than one not written at all.
+    final ownerUid = resolveAssetOwnerUid(permissions);
+
+    if (ownerUid.isEmpty) {
+      return const ActionResult.failure(
+        'I could not tell whose inventory that asset would belong to, so I '
+        'did not create it.',
+      );
+    }
+
+    // Informational only, and only knowable when the owner is the signed-in
+    // account: a User cannot read the directory their Admin's name is in.
+    final ownerName =
+        ownerUid == permissions.uid.trim() ? permissions.displayName : '';
+
     // AssetService.addAsset derives the stock fields from the quantity
     // (headOffice = quantity, assigned = 0, deployed = 0) and reserves the
     // Asset ID, exactly as it does for the Add Asset form, so none of that is
@@ -195,10 +217,15 @@ class ActionExecutor {
       condition: draft.condition,
       notes: draft.notes,
       // Every asset needs an owning Admin: the rules require it, and Users
-      // only see the inventory of the Admin they belong to. The Add Asset
-      // form defaults to the signed-in account, and so does this.
-      adminId: permissions.uid,
-      adminName: permissions.displayName,
+      // only see the inventory of the Admin they belong to. Resolved by the
+      // one rule the Add Asset form uses, not by a second copy of it.
+      adminId: ownerUid,
+      adminName: ownerName,
+      // The create rule recognises a User's own new asset by this field, so
+      // without it a User's add is refused. It is the signed-in account, not
+      // the owner: a User's asset belongs to their Admin but was created by
+      // them.
+      createdBy: permissions.uid.trim(),
       createdAt: DateTime.now(),
       lastUpdated: DateTime.now(),
     );
@@ -251,7 +278,14 @@ class ActionExecutor {
       priority: 'Medium',
       requestedBy: permissions.uid,
       requestedUserName: permissions.displayName,
-      receiverId: (asset.adminId ?? '').trim(),
+      // Deliberately left for RequestService to route. A User now reads the
+      // whole organisation's inventory, so the asset's owning Admin is often
+      // not the Admin who manages the requester - and the create rule only
+      // accepts a User's request routed to their OWN Admin (or left unrouted).
+      // Naming the asset's owner here earned a permission-denied after the
+      // user had already confirmed; RequestService fills in the requester's
+      // own Admin from their profile, which is exactly what the rule expects.
+      receiverId: '',
       status: 'Pending',
       requestDate: DateTime.now(),
       sourceBazaarId: isTransfer ? action.sourceId : '',
@@ -325,13 +359,50 @@ class ActionExecutor {
 
   static String _units(int value) => value == 1 ? '1 unit' : '$value units';
 
-  static String _clean(Object error) {
-    var message = error.toString().trim();
+  /// What the user is told when a confirmed change was refused.
+  ///
+  /// The services phrase their own refusals for the user ("Asset ID ... already
+  /// exists.", "Only 5 units are at Head Office."), so those are passed
+  /// through: they say more than anything this could invent. Firebase does not
+  /// - its messages name collections, rules files and line numbers - so each
+  /// code that a user can actually hit gets a sentence of its own, and anything
+  /// unrecognised is kept short rather than leaking internals.
+  static String _refusal(Object error) {
+    if (error is FirebaseException) {
+      switch (error.code) {
+        case 'permission-denied':
+          return 'Your account is not allowed to make this change.';
 
-    if (message.startsWith('Exception: ')) {
-      message = message.substring('Exception: '.length);
+        case 'unavailable':
+        case 'deadline-exceeded':
+          return 'I could not reach the database. Check your connection and '
+              'try again; nothing was changed.';
+
+        case 'not-found':
+          return 'That record no longer exists.';
+
+        default:
+          return 'That did not go through. Nothing was changed.';
+      }
     }
 
-    return message.isEmpty ? 'the change was rejected.' : message;
+    final message = _clean(error);
+
+    return message.isEmpty
+        ? 'That did not go through. Nothing was changed.'
+        : 'That did not go through: $message';
+  }
+
+  /// The message out of a service's own refusal, or an empty string for an
+  /// error that was never meant to be read by the user.
+  static String _clean(Object error) {
+    final text = error.toString().trim();
+
+    // `Exception: <sentence>` is how every service in the app refuses. An
+    // error in any other shape is a fault, not a refusal, and its text would
+    // mean nothing to the user.
+    if (!text.startsWith('Exception: ')) return '';
+
+    return text.substring('Exception: '.length).trim();
   }
 }

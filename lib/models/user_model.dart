@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/services/permission_service.dart';
+
 class UserModel {
   const UserModel({
     required this.uid,
@@ -21,17 +23,17 @@ class UserModel {
   final String name;
   final String email;
 
-  /// Primary role.
+  /// Primary role, and the ONLY field any access decision is made from.
   ///
   /// The application has exactly three main roles:
   /// super_admin, admin, user.
   final String role;
 
-  /// Additional role values are retained for backward compatibility with
-  /// existing Firestore documents.
+  /// Mirror of [role], kept because existing Firestore documents have it and
+  /// the rules require it to match `role` (`validRoles()`).
   ///
-  /// Access-control decisions for the new workflow should use the three
-  /// supported main roles.
+  /// It never grants anything: a document holding roles: ['super_admin'] next
+  /// to role: 'user' is a User here, exactly as it is in the rules.
   final List<String> roles;
 
   final String status;
@@ -52,13 +54,13 @@ class UserModel {
   String get fullName => name;
 
   /// Exactly the statuses the Firestore Security Rules accept. Anything
-  /// else (blocked, disabled, inactive, deleted, missing) has no access, so
-  /// the app never shows a UI whose data the rules would then deny.
-  bool get isActive {
-    final value = status.trim().toLowerCase();
+  /// else (pending, blocked, disabled, inactive, deleted, missing) has no
+  /// access, so the app never shows a UI whose data the rules would then deny.
+  bool get isActive => PermissionService.isActiveStatus(status);
 
-    return value == 'active' || value == 'approved';
-  }
+  /// A self-registered account nobody has admitted yet. It can do nothing
+  /// until a Super Admin (or the Admin who manages it) sets status 'active'.
+  bool get isPending => PermissionService.isPendingStatus(status);
 
   bool get isCreatedBySuperAdmin => createdBy.trim().isNotEmpty;
 
@@ -66,62 +68,29 @@ class UserModel {
   // ROLE HELPERS
   // ===========================================================================
 
-  /// Returns the effective main roles while preserving backward compatibility.
+  /// The single canonical role of this account, or '' when the stored value is
+  /// not one of the three (an unknown role has no access anywhere).
   ///
-  /// Only the three supported application roles are considered valid main
-  /// roles here. Unknown legacy/custom roles are not promoted to a main role.
-  List<String> get effectiveRoles {
-    final result = <String>[];
+  /// The `roles` mirror is deliberately not consulted: the rules read `role`
+  /// alone, so falling back to the array would grant access Firestore denies.
+  String get effectiveRole {
+    final normalized = PermissionService.normalizeRole(role);
 
-    void addRole(String value) {
-      final normalized = _normalizeRole(value);
-
-      if (!_isMainRole(normalized)) {
-        return;
-      }
-
-      if (!result.contains(normalized)) {
-        result.add(normalized);
-      }
-    }
-
-    addRole(role);
-
-    for (final value in roles) {
-      addRole(value);
-    }
-
-    return List.unmodifiable(result);
+    return PermissionService.isMainRole(normalized) ? normalized : '';
   }
 
-  /// Returns the primary supported role.
-  ///
-  /// If an old document contains a supported role in `roles` but not in the
-  /// legacy `role` field, the first supported role is returned.
-  String get effectiveRole {
-    final normalizedPrimary = _normalizeRole(role);
+  /// The mirror as it is written back to Firestore: the primary role and
+  /// nothing else, which is what `validRoles()` requires.
+  List<String> get effectiveRoles {
+    final primary = effectiveRole;
 
-    if (_isMainRole(normalizedPrimary)) {
-      return normalizedPrimary;
-    }
-
-    final supportedRoles = effectiveRoles;
-
-    if (supportedRoles.isNotEmpty) {
-      return supportedRoles.first;
-    }
-
-    return '';
+    return List.unmodifiable(primary.isEmpty ? const <String>[] : [primary]);
   }
 
   bool hasRole(String requestedRole) {
-    final target = _normalizeRole(requestedRole);
+    final target = PermissionService.normalizeRole(requestedRole);
 
-    if (!_isMainRole(target)) {
-      return false;
-    }
-
-    return effectiveRoles.contains(target);
+    return target.isNotEmpty && target == effectiveRole;
   }
 
   bool get isSuperAdmin => hasRole('super_admin');
@@ -133,27 +102,42 @@ class UserModel {
   // ===========================================================================
   // ROLE ACCESS
   // ===========================================================================
+  //
+  // Every capability below is false while the account is not active, so a
+  // 'pending' self-registration - like a blocked or deleted profile - can do
+  // nothing at all. That is the same answer the Firestore rules give.
+  //
+  // The matrix itself lives in PermissionService, never duplicated here.
+  // ===========================================================================
+
+  bool _can(String permission) {
+    return isActive &&
+        PermissionService.hasPermission(
+          roles: effectiveRoles,
+          permission: permission,
+        );
+  }
 
   /// Super Admin has access to the complete system.
-  bool get hasFullAccess => isSuperAdmin;
+  bool get hasFullAccess => isActive && isSuperAdmin;
 
-  /// Admin can manage inventory assigned to that Admin.
-  bool get canManageOwnInventory => isSuperAdmin || isAdmin;
+  /// Admin manages inventory directly; a Super Admin manages all of it.
+  bool get canManageOwnInventory => isActive && (isSuperAdmin || isAdmin);
 
-  /// User can view inventory but cannot directly modify it.
-  bool get canViewInventory => isSuperAdmin || isAdmin || isUser;
+  /// Inventory is organisation-wide: every canonical role reads all of it.
+  bool get canViewInventory => _can(PermissionService.viewAssets);
 
   /// Only Super Admin/Admin can import inventory.
-  bool get canImportInventory => isSuperAdmin || isAdmin;
+  bool get canImportInventory => _can(PermissionService.importAssets);
 
   /// Only Super Admin/Admin can directly edit inventory.
-  bool get canDirectlyEditInventory => isSuperAdmin || isAdmin;
+  bool get canDirectlyEditInventory => _can(PermissionService.editAsset);
 
   /// Users must submit edit requests instead of directly editing assets.
-  bool get mustRequestInventoryEdit => isUser;
+  bool get mustRequestInventoryEdit => isActive && isUser;
 
   /// Only Super Admin/Admin can approve or reject user edit requests.
-  bool get canManageEditRequests => isSuperAdmin || isAdmin;
+  bool get canManageEditRequests => _can(PermissionService.approveRequests);
 
   // ===========================================================================
   // FIRESTORE
@@ -292,18 +276,6 @@ class UserModel {
   }
 
   // ===========================================================================
-  // ROLE VALIDATION
-  // ===========================================================================
-
-  static bool _isMainRole(String value) {
-    return value == 'super_admin' || value == 'admin' || value == 'user';
-  }
-
-  static String _normalizeRole(String value) {
-    return value.trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
-  }
-
-  // ===========================================================================
   // VALUE HELPERS
   // ===========================================================================
 
@@ -323,9 +295,10 @@ class UserModel {
         return;
       }
 
-      final normalized = _normalizeRole(item.toString());
+      final normalized = PermissionService.normalizeRole(item.toString());
 
-      if (_isMainRole(normalized) && !result.contains(normalized)) {
+      if (PermissionService.isMainRole(normalized) &&
+          !result.contains(normalized)) {
         result.add(normalized);
       }
     }

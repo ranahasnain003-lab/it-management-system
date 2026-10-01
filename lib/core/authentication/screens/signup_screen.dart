@@ -53,20 +53,6 @@ class _SignupScreenState extends State<SignupScreen> {
   // ============================================================
 
   /// Required free-text profile field: non-empty and at least 2 characters.
-  String? _requiredProfileField(String? value, String label) {
-    final text = value?.trim() ?? '';
-
-    if (text.isEmpty) {
-      return 'Please enter your ${label.toLowerCase()}.';
-    }
-
-    if (text.length < 2) {
-      return '$label must be at least 2 characters.';
-    }
-
-    return null;
-  }
-
   // ============================================================
   // ACTIONS
   // ============================================================
@@ -200,8 +186,9 @@ class _SignupScreenState extends State<SignupScreen> {
               icon: Icons.person_add_alt_1_rounded,
               title: 'Create your account',
               subtitle:
-                  'Use your work email address. You will need to verify it '
-                  'before you can sign in.',
+                  'Use your work email address. Two things happen before you '
+                  'can sign in: you verify your email, and an administrator '
+                  'approves your account.',
             ),
             const SizedBox(height: 28),
 
@@ -232,9 +219,12 @@ class _SignupScreenState extends State<SignupScreen> {
               enabled: !busy,
               textInputAction: TextInputAction.next,
               textCapitalization: TextCapitalization.words,
-              validator: (value) => _requiredProfileField(value, 'Department'),
+              // Optional on purpose: signing up only has to identify the
+              // person. An administrator completes the profile when it
+              // approves the account, and the Firestore rules accept an
+              // empty value here.
               decoration: const InputDecoration(
-                labelText: 'Department',
+                labelText: 'Department (optional)',
                 hintText: 'Enter your department',
                 prefixIcon: Icon(Icons.apartment_outlined),
               ),
@@ -245,9 +235,8 @@ class _SignupScreenState extends State<SignupScreen> {
               enabled: !busy,
               textInputAction: TextInputAction.next,
               textCapitalization: TextCapitalization.words,
-              validator: (value) => _requiredProfileField(value, 'Designation'),
               decoration: const InputDecoration(
-                labelText: 'Designation',
+                labelText: 'Designation (optional)',
                 hintText: 'Enter your job title',
                 prefixIcon: Icon(Icons.badge_outlined),
               ),
@@ -315,8 +304,8 @@ class _SignupScreenState extends State<SignupScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'New accounts are created as User accounts. Admin roles are '
-              'assigned only by a Super Admin.',
+              'New accounts are created as User accounts, awaiting approval. '
+              'Admin roles are assigned only by a Super Admin.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colors.onSurfaceVariant,
@@ -363,11 +352,19 @@ class _SignupScreenState extends State<SignupScreen> {
               ? AuthNoticeType.info
               : AuthNoticeType.warning,
           message: _verificationSent
-              ? 'Open the link in that email to activate your account, then '
-                    'sign in. If you do not see it within a few minutes, check '
-                    'your spam or junk folder.'
+              ? 'Open the link in that email to confirm your address. If you '
+                    'do not see it within a few minutes, check your spam or '
+                    'junk folder.'
               : 'Use "Resend verification email" below, or sign in later to '
                     'request a new link.',
+        ),
+        // A self-registered account is created awaiting approval, so the
+        // person is told now rather than discovering it as a refused login.
+        const SizedBox(height: 12),
+        const AuthNotice(
+          type: AuthNoticeType.info,
+          message: 'An administrator then has to approve your account before '
+              'you can sign in.',
         ),
         if (_resendMessage != null) ...[
           const SizedBox(height: 12),

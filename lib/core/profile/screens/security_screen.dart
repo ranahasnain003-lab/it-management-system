@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../services/auth_service.dart';
 import '../../theme/colors.dart';
 
 class SecurityScreen extends StatefulWidget {
@@ -644,7 +645,19 @@ class _SecurityScreenState extends State<SecurityScreen> {
     }
 
     try {
-      await user.sendEmailVerification();
+      try {
+        // Same continue link as signup, so the person comes back to the app.
+        await user.sendEmailVerification(AuthService.verificationLinkSettings);
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'invalid-continue-uri' ||
+            e.code == 'unauthorized-continue-uri' ||
+            e.code == 'missing-continue-uri' ||
+            e.code == 'invalid-dynamic-link-domain') {
+          await user.sendEmailVerification();
+        } else {
+          rethrow;
+        }
+      }
 
       if (!mounted) {
         return;

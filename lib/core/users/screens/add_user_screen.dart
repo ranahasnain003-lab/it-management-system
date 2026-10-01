@@ -6,6 +6,8 @@ import 'package:provider/provider.dart';
 import '../../../models/user_model.dart';
 import '../../constants/app_constants.dart';
 import '../../providers/user_provider.dart';
+import '../../services/auth_service.dart';
+import '../../services/permission_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
 
@@ -222,7 +224,7 @@ class _AddUserScreenState extends State<AddUserScreen> {
                                     context,
                                     userProvider,
                                   ),
-                                _buildStatusSelector(context),
+                                _buildStatusSelector(context, userProvider),
                                 _buildScopeInformation(context, userProvider),
                               ],
                             ),
@@ -470,13 +472,10 @@ class _AddUserScreenState extends State<AddUserScreen> {
   ) {
     final colors = Theme.of(context).colorScheme;
 
+    // Only an ACTIVE Admin may own a User: `isActiveAdminUid()` in the rules
+    // refuses any other account, so an inactive one is not offered here.
     final admins = provider.users.where((user) {
-      final role = user.role.trim().toLowerCase();
-
-      return role == AppConstants.ADMIN.toLowerCase() &&
-          user.uid.trim().isNotEmpty &&
-          user.status.trim().toLowerCase() != 'blocked' &&
-          user.status.trim().toLowerCase() != 'disabled';
+      return user.isAdmin && user.isActive && user.uid.trim().isNotEmpty;
     }).toList();
 
     admins.sort(
@@ -584,19 +583,41 @@ class _AddUserScreenState extends State<AddUserScreen> {
     );
   }
 
-  Widget _buildStatusSelector(BuildContext context) {
+  /// An Admin may only create ACTIVE accounts: the ADMIN CREATE rule requires
+  /// `isActiveStatus(request.resource.data)`, so offering 'Inactive' here
+  /// would only produce a permission-denied after the Auth account already
+  /// exists. A Super Admin keeps both choices.
+  Widget _buildStatusSelector(BuildContext context, UserProvider provider) {
+    final canChooseStatus = provider.isSuperAdmin;
+
+    if (!canChooseStatus && _selectedStatus != 'active') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+
+        setState(() {
+          _selectedStatus = 'active';
+        });
+      });
+    }
+
+    final safeStatus = canChooseStatus ? _selectedStatus : 'active';
+
     return DropdownButtonFormField<String>(
-      initialValue: _selectedStatus,
+      initialValue: safeStatus,
       isExpanded: true,
       decoration: InputDecoration(
         labelText: 'Account Status',
+        helperText: canChooseStatus
+            ? null
+            : 'Users you create start active straight away.',
         prefixIcon: const Icon(Icons.verified_user_outlined),
       ),
-      items: const [
-        DropdownMenuItem(value: 'active', child: Text('Active')),
-        DropdownMenuItem(value: 'inactive', child: Text('Inactive')),
+      items: [
+        const DropdownMenuItem(value: 'active', child: Text('Active')),
+        if (canChooseStatus)
+          const DropdownMenuItem(value: 'inactive', child: Text('Inactive')),
       ],
-      onChanged: _isLoading
+      onChanged: _isLoading || !canChooseStatus
           ? null
           : (value) {
               if (value == null) return;
@@ -706,7 +727,7 @@ class _AddUserScreenState extends State<AddUserScreen> {
   }
 
   bool _isUserRole(String role) {
-    return role.trim().toLowerCase() == AppConstants.USER.trim().toLowerCase();
+    return PermissionService.isUser(role);
   }
 
   String _adminDisplayName(UserModel admin) {
@@ -826,10 +847,11 @@ class _AddUserScreenState extends State<AddUserScreen> {
           return;
         }
 
-        final selectedStatus = selectedAdmin.status.trim().toLowerCase();
-
-        if (selectedStatus == 'blocked' || selectedStatus == 'disabled') {
-          _showError('A blocked or disabled Admin cannot be assigned.');
+        // The rules demand an ACTIVE Admin as the owner, not merely one that
+        // is not blocked, so the same bar is applied before the Auth account
+        // is created.
+        if (!selectedAdmin.isActive) {
+          _showError('The selected Admin account must be active.');
           return;
         }
 
@@ -917,9 +939,19 @@ class _AddUserScreenState extends State<AddUserScreen> {
       var verificationSent = true;
 
       try {
-        await newUser.sendEmailVerification();
+        // One send, with the same continue link as a self-registration, so
+        // the person lands back on the sign-in page.
+        await newUser.sendEmailVerification(
+          AuthService.verificationLinkSettings,
+        );
       } catch (_) {
-        verificationSent = false;
+        try {
+          // The continue URL is configuration. If it is refused, the account
+          // still needs its verification email.
+          await newUser.sendEmailVerification();
+        } catch (_) {
+          verificationSent = false;
+        }
       }
 
       /*
@@ -971,11 +1003,7 @@ class _AddUserScreenState extends State<AddUserScreen> {
 
       if (!mounted) return;
 
-      _showError(
-        e.message?.trim().isNotEmpty == true
-            ? e.message!
-            : 'Unable to create the user profile.',
-      );
+      _showError(_firestoreErrorMessage(e));
     } catch (e) {
       if (credential?.user != null) {
         try {
@@ -1002,7 +1030,7 @@ class _AddUserScreenState extends State<AddUserScreen> {
   }
 
   bool _isAdminRole(String role) {
-    return role.trim().toLowerCase() == AppConstants.ADMIN.trim().toLowerCase();
+    return PermissionService.isAdmin(role);
   }
 
   String _authErrorMessage(FirebaseAuthException e) {
@@ -1032,7 +1060,39 @@ class _AddUserScreenState extends State<AddUserScreen> {
     }
   }
 
+  /// The profile write can only fail for a handful of reasons, and
+  /// "[cloud_firestore/permission-denied] Missing or insufficient permissions"
+  /// explains none of them to the person at the screen.
+  String _firestoreErrorMessage(FirebaseException e) {
+    switch (e.code) {
+      case 'permission-denied':
+        return 'The account was created but its profile was refused: you are '
+            'not allowed to create this kind of account. Ask a Super Admin.';
+
+      case 'unavailable':
+      case 'deadline-exceeded':
+        return 'Network error. Check your connection and try again.';
+
+      case 'not-found':
+        return 'The selected Admin account no longer exists.';
+
+      case 'already-exists':
+        return 'A profile already exists for this account.';
+
+      default:
+        final message = e.message?.trim() ?? '';
+
+        return message.isEmpty
+            ? 'Unable to create the user profile.'
+            : message;
+    }
+  }
+
   String _cleanError(Object error) {
+    if (error is FirebaseException) {
+      return _firestoreErrorMessage(error);
+    }
+
     final message = error.toString();
 
     if (message.startsWith('Exception: ')) {

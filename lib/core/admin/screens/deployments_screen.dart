@@ -1,10 +1,13 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../models/deployment_model.dart';
+import '../../providers/bazaar_provider.dart';
 import '../../providers/deployment_provider.dart';
 import '../../services/bazaar_service.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
 
 class DeploymentsScreen extends StatefulWidget {
@@ -20,6 +23,12 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
   String _selectedFilter = 'All';
   String _searchQuery = '';
 
+  // Every keystroke used to rebuild and re-filter the whole movement list,
+  // which is what made typing here feel heavy on a long history. The query is
+  // now applied once the typing pauses; the field itself stays instant because
+  // it draws from its own controller.
+  Timer? _searchDebounce;
+
   @override
   void initState() {
     super.initState();
@@ -31,19 +40,46 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
 
       provider.listenToDeployments();
       provider.listenToAssetsAtBazaars();
+
+      // The Transfer dialog reads its Bazaar list from this shared live
+      // stream, so a Bazaar added elsewhere is selectable straight away.
+      context.read<BazaarProvider>().listenToBazaars();
     });
 
-    _searchController.addListener(() {
-      setState(() {
-        _searchQuery = _searchController.text.trim().toLowerCase();
-      });
-    });
+    _searchController.addListener(_onSearchChanged);
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    // Cancelled before the controller goes: a timer that fired after dispose
+    // would call setState on a dead State.
+    _searchDebounce?.cancel();
+
+    _searchController
+      ..removeListener(_onSearchChanged)
+      ..dispose();
+
     super.dispose();
+  }
+
+  void _onSearchChanged() {
+    final query = _searchController.text.trim().toLowerCase();
+
+    // The clear button and the suffix icon depend on the query, so an
+    // unchanged query must not schedule another rebuild.
+    if (query == _searchQuery) {
+      return;
+    }
+
+    _searchDebounce?.cancel();
+
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+
+      setState(() {
+        _searchQuery = query;
+      });
+    });
   }
 
   List<DeploymentModel> _filteredDeployments(DeploymentProvider provider) {
@@ -164,18 +200,34 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
   }
 
   Future<void> _showTransferDialog(DeploymentModel deployment) async {
-    final bazaars = await _loadActiveBazaars();
+    // Read from the live stream started in initState: no second round trip,
+    // and a Bazaar added a moment ago is already in the list.
+    final bazaarProvider = context.read<BazaarProvider>();
+
+    final List<BazaarModel> bazaars = bazaarProvider.activeBazaars;
 
     if (!mounted) return;
 
     if (bazaars.isEmpty) {
+      // Three different states end up with an empty list, and only one of
+      // them means production has no Bazaar: the stream may still be waiting
+      // for its first snapshot, or it may have been refused. Telling a
+      // manager with 65 Bazaars that there are none is worse than saying
+      // nothing, so each state gets its own message.
+      final String message;
+
+      if (bazaarProvider.errorMessage != null) {
+        message = 'Bazaars could not be loaded: ${bazaarProvider.errorMessage}';
+      } else if (bazaarProvider.isLoading) {
+        message = 'Bazaars are still loading. Please try again in a moment.';
+      } else {
+        message = 'No active Bazaars are available for transfer.';
+      }
+
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
-          const SnackBar(
-            content: Text('No active Bazaars are available for transfer.'),
-            behavior: SnackBarBehavior.floating,
-          ),
+          SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
         );
 
       return;
@@ -198,6 +250,10 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
                   children: [
                     Text(
                       deployment.assetName,
+                      // A long asset name used to push the dialog's fixed
+                      // 420px width into an overflow instead of wrapping.
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
@@ -207,6 +263,8 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
                     Text(
                       '${deployment.quantity} unit(s) • '
                       '${deployment.toBazaarName ?? deployment.toLocation}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
@@ -221,12 +279,15 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
                       ),
                       items: bazaars.map((bazaar) {
                         return DropdownMenuItem<String>(
-                          value: bazaar['id'],
+                          value: bazaar.id,
                           child: Text(
-                            (bazaar['city'] ?? '').isEmpty
-                                ? bazaar['name'] ?? ''
-                                : '${bazaar['name']} — '
-                                      '${bazaar['city']}',
+                            // BazaarModel falls back to the legacy `city`
+                            // field, so the oldest Bazaar shows its city too.
+                            bazaar.location.isEmpty
+                                ? bazaar.name
+                                : '${bazaar.name} — '
+                                      '${bazaar.location}',
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         );
@@ -250,13 +311,12 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
                       ? null
                       : () {
                           final selected = bazaars.firstWhere(
-                            (bazaar) => bazaar['id'] == selectedBazaarId,
+                            (bazaar) => bazaar.id == selectedBazaarId,
                           );
 
-                          Navigator.of(dialogContext).pop({
-                            'id': selected['id'] ?? '',
-                            'name': selected['name'] ?? '',
-                          });
+                          Navigator.of(
+                            dialogContext,
+                          ).pop({'id': selected.id, 'name': selected.name});
                         },
                   icon: const Icon(Icons.swap_horiz_rounded),
                   label: const Text('Transfer'),
@@ -317,40 +377,6 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
             behavior: SnackBarBehavior.floating,
           ),
         );
-    }
-  }
-
-  Future<List<Map<String, String>>> _loadActiveBazaars() async {
-    try {
-      // Active state is evaluated with the shared BazaarModel logic
-      // (isActive flag or legacy status field).
-      final snapshot = await FirebaseFirestore.instance
-          .collection('bazaars')
-          .get();
-
-      final bazaars = snapshot.docs
-          .where(
-            (doc) => BazaarModel.fromFirestore(doc.data(), doc.id).isActive,
-          )
-          .map((doc) {
-            final data = doc.data();
-
-            return <String, String>{
-              'id': doc.id,
-              'name': (data['name'] ?? '').toString().trim(),
-              'city': (data['city'] ?? '').toString().trim(),
-            };
-          })
-          .where((bazaar) => bazaar['name']!.isNotEmpty)
-          .toList();
-
-      bazaars.sort(
-        (a, b) => a['name']!.toLowerCase().compareTo(b['name']!.toLowerCase()),
-      );
-
-      return bazaars;
-    } catch (_) {
-      return [];
     }
   }
 
@@ -500,7 +526,13 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
                             _buildSearch(),
                             const SizedBox(height: AppSpacing.sm + 2),
                             _buildFilters(),
-                            if (provider.error != null) ...[
+                            // A failure with records already on screen is a
+                            // partial one - the list below is still real, so
+                            // it stays and the problem is reported above it.
+                            // A failure with nothing to show becomes the full
+                            // AppErrorState further down instead.
+                            if (provider.error != null &&
+                                provider.deployments.isNotEmpty) ...[
                               const SizedBox(height: AppSpacing.md),
                               _buildError(provider.error!),
                             ],
@@ -509,14 +541,13 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
                       ),
                     ),
                   ),
-                  if (provider.isLoading && provider.deployments.isEmpty)
-                    const SliverFillRemaining(
-                      child: Center(child: CircularProgressIndicator()),
-                    )
-                  else if (deployments.isEmpty)
+                  // Loading, failed and empty all occupy the same slot, so they
+                  // crossfade into one another instead of snapping. The list
+                  // itself stays a lazy sliver: fading a thousand rows in
+                  // would cost more than it buys.
+                  if (deployments.isEmpty)
                     SliverFillRemaining(
-                      hasScrollBody: false,
-                      child: _buildEmptyState(),
+                      child: AppStateSwitcher(child: _buildStateArea(provider)),
                     )
                   else
                     SliverPadding(
@@ -534,7 +565,12 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
                               padding: const EdgeInsets.only(
                                 bottom: AppSpacing.sm + 2,
                               ),
-                              child: _buildDeploymentCard(deployments[index]),
+                              // A movement card is a deep little tree of
+                              // badges and rows; the boundary keeps a scroll
+                              // from repainting every card that did not move.
+                              child: RepaintBoundary(
+                                child: _buildDeploymentCard(deployments[index]),
+                              ),
                             ),
                           );
                         },
@@ -1154,7 +1190,7 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
         color: AppColors.tint(color, brightness),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
         border: Border.all(color: color.withValues(alpha: 0.25)),
       ),
       child: Row(
@@ -1212,53 +1248,72 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
-    final colors = Theme.of(context).colorScheme;
-    final brightness = Theme.of(context).brightness;
-
-    final hasSearch = _searchQuery.isNotEmpty || _selectedFilter != 'All';
-
-    final tone = hasSearch ? colors.onSurfaceVariant : colors.primary;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xxl),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: AppColors.tint(tone, brightness),
-                borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-              ),
-              child: Icon(
-                hasSearch
-                    ? Icons.search_off_rounded
-                    : Icons.local_shipping_outlined,
-                size: 30,
-                color: AppColors.onTint(tone, brightness),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Text(
-              hasSearch ? 'No deployments found' : 'No deployments yet',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              hasSearch
-                  ? 'Try another search or change the filter.'
-                  : 'Asset deployment history will appear here.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-            ),
-          ],
+  /// Loading, failed or empty - whichever applies when there is no row to
+  /// show. Each case carries its own key so [AppStateSwitcher] can tell them
+  /// apart and crossfade between them.
+  ///
+  /// Keeping them in one place is what makes the three distinguishable: a
+  /// refused read used to look exactly like an empty movement history, which
+  /// is how a permissions problem gets read as "nothing has ever moved".
+  Widget _buildStateArea(DeploymentProvider provider) {
+    if (provider.isLoading && provider.deployments.isEmpty) {
+      return const AppListSkeleton(
+        key: ValueKey('loading'),
+        rows: 4,
+        padding: EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.md,
+          AppSpacing.lg,
+          AppSpacing.lg,
         ),
-      ),
+      );
+    }
+
+    if (provider.error != null) {
+      return AppErrorState(
+        key: const ValueKey('error'),
+        title: 'Could not load movements',
+        message: provider.error!,
+        onRetry: provider.refresh,
+      );
+    }
+
+    final hasFilter = _searchQuery.isNotEmpty || _selectedFilter != 'All';
+
+    if (hasFilter) {
+      return AppEmptyState(
+        key: const ValueKey('empty-filtered'),
+        icon: Icons.search_off_rounded,
+        title: 'No movements found',
+        message:
+            'Nothing matches this search and filter. Clear them to see the '
+            'full movement history.',
+        action: OutlinedButton.icon(
+          onPressed: _clearFilters,
+          icon: const Icon(Icons.clear_rounded, size: 18),
+          label: const Text('Clear filters'),
+        ),
+      );
+    }
+
+    return const AppEmptyState(
+      key: ValueKey('empty'),
+      icon: Icons.local_shipping_outlined,
+      title: 'No movements yet',
+      message:
+          'Transfer an asset to a Bazaar, or return one to Head Office, and '
+          'every movement will be listed here.',
     );
+  }
+
+  void _clearFilters() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+
+    setState(() {
+      _searchQuery = '';
+      _selectedFilter = 'All';
+    });
   }
 
   String _formatDateTime(DateTime date) {

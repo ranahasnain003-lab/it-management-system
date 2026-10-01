@@ -201,6 +201,9 @@ class BazaarProvider extends ChangeNotifier {
     String contactPerson = '',
     String contactNumber = '',
     String address = '',
+    required String createdBy,
+    String createdByName = '',
+    bool isActive = true,
   }) async {
     if (_disposed) {
       return null;
@@ -218,6 +221,9 @@ class BazaarProvider extends ChangeNotifier {
         contactPerson: contactPerson,
         contactNumber: contactNumber,
         address: address,
+        createdBy: createdBy,
+        createdByName: createdByName,
+        isActive: isActive,
       );
 
       if (_disposed) {

@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/user_provider.dart';
 import '../../services/bazaar_service.dart';
+import '../../services/permission_service.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
 
 class LocationManagementScreen extends StatefulWidget {
@@ -20,6 +24,15 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
   final BazaarService _bazaarService = BazaarService();
 
   final TextEditingController _searchController = TextEditingController();
+
+  /// Filtering waits for a short pause in typing.
+  ///
+  /// Every keystroke used to re-filter and rebuild the whole Bazaar list,
+  /// which is the most expensive thing this screen does. The results are the
+  /// same, they just arrive once the person has stopped typing.
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
+
+  Timer? _searchDebounceTimer;
 
   String _searchQuery = '';
   String _statusFilter = 'All';
@@ -45,23 +58,75 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
     });
   }
 
-  /// Only a Super Admin may create, edit, enable or disable Bazaars
-  /// (enforced by Firestore rules; mirrored here so other roles are not
-  /// offered actions that would always be denied).
+  /// Every active role may ADD a Bazaar, but only a manager (Super Admin or
+  /// Admin) may edit, enable or disable one. Both checks mirror the Firestore
+  /// rules so no role is offered an action that would always be denied.
+  ///
+  /// Read with select rather than watch: the same profile fields decide the
+  /// same answer, but the screen only rebuilds when that answer flips, not on
+  /// every unrelated change to the signed-in profile.
   bool _canManage(BuildContext context) {
-    return context.watch<UserProvider>().isSuperAdmin;
+    return context.select<UserProvider, bool>((provider) {
+      final profile = provider.currentUserProfile;
+
+      return PermissionService.canManageBazaars(
+        profile?.role,
+        roles: profile?.roles,
+      );
+    });
+  }
+
+  bool _canAdd(BuildContext context) {
+    return context.select<UserProvider, bool>((provider) {
+      final profile = provider.currentUserProfile;
+
+      return PermissionService.canAddBazaar(
+        profile?.role,
+        roles: profile?.roles,
+      );
+    });
   }
 
   void _handleSearchChanged() {
-    if (!mounted) return;
+    _searchDebounceTimer?.cancel();
+
+    final query = _searchController.text.trim().toLowerCase();
+
+    if (query == _searchQuery) {
+      return;
+    }
+
+    _searchDebounceTimer = Timer(_searchDebounce, () {
+      if (!mounted) return;
+
+      setState(() {
+        _searchQuery = query;
+      });
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounceTimer?.cancel();
+    _searchController.clear();
 
     setState(() {
-      _searchQuery = _searchController.text.trim().toLowerCase();
+      _searchQuery = '';
+    });
+  }
+
+  void _clearSearchAndFilter() {
+    _searchDebounceTimer?.cancel();
+    _searchController.clear();
+
+    setState(() {
+      _searchQuery = '';
+      _statusFilter = 'All';
     });
   }
 
   @override
   void dispose() {
+    _searchDebounceTimer?.cancel();
     _searchController.removeListener(_handleSearchChanged);
     _searchController.dispose();
     super.dispose();
@@ -70,6 +135,7 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
   @override
   Widget build(BuildContext context) {
     final canManage = _canManage(context);
+    final canAdd = _canAdd(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -87,9 +153,9 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
           const SizedBox(width: AppSpacing.sm),
         ],
       ),
-      floatingActionButton: canManage
+      floatingActionButton: canAdd
           ? FloatingActionButton.extended(
-              onPressed: _showBazaarDialog,
+              onPressed: () => _showBazaarDialog(canManage: canManage),
               icon: const Icon(Icons.add_business_rounded),
               label: const Text('Add Bazaar'),
             )
@@ -104,81 +170,89 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
           // We load ALL documents first and sort them locally.
           stream: _bazaarsStream,
           builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return _buildErrorState(context, snapshot.error.toString());
-            }
-
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-
-            final documents = snapshot.data?.docs ?? [];
-
-            final allBazaars = documents
-                .map((doc) => _BazaarData(id: doc.id, data: doc.data()))
-                .toList();
-
-            // Sort locally so EVERY Firestore bazaar remains visible,
-            // including old documents with missing `name`.
-            allBazaars.sort(
-              (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-            );
-
-            final bazaars = allBazaars.where(_matchesFilter).toList();
-
-            final activeCount = allBazaars
-                .where((bazaar) => bazaar.isActive)
-                .length;
-
-            final disabledCount = allBazaars
-                .where((bazaar) => !bazaar.isActive)
-                .length;
-
-            return RefreshIndicator(
-              onRefresh: () async {
-                await _bazaarsCollection
-                    .limit(1)
-                    .get(const GetOptions(source: Source.serverAndCache));
-              },
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(
-                  parent: BouncingScrollPhysics(),
-                ),
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.lg,
-                  AppSpacing.lg,
-                  AppSpacing.lg,
-                  100,
-                ),
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1100),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildHeader(context),
-                        const SizedBox(height: AppSpacing.md),
-                        _buildSummary(
-                          context,
-                          total: allBazaars.length,
-                          active: activeCount,
-                          disabled: disabledCount,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        _buildSearchAndFilter(context),
-                        const SizedBox(height: AppSpacing.lg),
-                        if (bazaars.isEmpty)
-                          _buildEmptyState(context)
-                        else
-                          _buildBazaarList(context, bazaars),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+            // One switcher for all three states, so the skeleton fades into
+            // the list instead of being swapped out in a single frame.
+            return AppStateSwitcher(
+              child: _buildStreamState(context, snapshot),
             );
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStreamState(
+    BuildContext context,
+    AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
+  ) {
+    if (snapshot.hasError) {
+      return _buildErrorState(context, snapshot.error!);
+    }
+
+    if (!snapshot.hasData) {
+      return const AppListSkeleton(key: ValueKey('bazaars-loading'));
+    }
+
+    final documents = snapshot.data?.docs ?? [];
+
+    final allBazaars = documents
+        .map((doc) => _BazaarData(id: doc.id, data: doc.data()))
+        .toList();
+
+    // Sort locally so EVERY Firestore bazaar remains visible,
+    // including old documents with missing `name`.
+    allBazaars.sort(
+      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+    );
+
+    final bazaars = allBazaars.where(_matchesFilter).toList();
+
+    final activeCount = allBazaars.where((bazaar) => bazaar.isActive).length;
+
+    final disabledCount = allBazaars.where((bazaar) => !bazaar.isActive).length;
+
+    return RefreshIndicator(
+      key: const ValueKey('bazaars-content'),
+      onRefresh: () async {
+        await _bazaarsCollection
+            .limit(1)
+            .get(const GetOptions(source: Source.serverAndCache));
+      },
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: BouncingScrollPhysics(),
+        ),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.lg,
+          AppSpacing.lg,
+          100,
+        ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1100),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildHeader(context),
+                const SizedBox(height: AppSpacing.md),
+                _buildSummary(
+                  context,
+                  total: allBazaars.length,
+                  active: activeCount,
+                  disabled: disabledCount,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                _buildSearchAndFilter(context),
+                const SizedBox(height: AppSpacing.lg),
+                if (bazaars.isEmpty)
+                  _buildEmptyState(context)
+                else
+                  _buildBazaarList(context, bazaars),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -365,6 +439,7 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
                   Text(
                     value,
                     maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 19,
                       fontWeight: FontWeight.w700,
@@ -391,16 +466,26 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
       children: [
         TextField(
           controller: _searchController,
+          textInputAction: TextInputAction.search,
           decoration: InputDecoration(
             hintText: 'Search bazaars, cities or addresses...',
             prefixIcon: const Icon(Icons.search_rounded, size: 20),
-            suffixIcon: _searchQuery.isNotEmpty
-                ? IconButton(
-                    tooltip: 'Clear search',
-                    onPressed: _searchController.clear,
-                    icon: const Icon(Icons.clear_rounded, size: 20),
-                  )
-                : null,
+            // Driven by the controller, not by the debounced query, so the
+            // clear button appears the moment there is something to clear.
+            suffixIcon: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _searchController,
+              builder: (context, value, _) {
+                if (value.text.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+
+                return IconButton(
+                  tooltip: 'Clear search',
+                  onPressed: _clearSearch,
+                  icon: const Icon(Icons.clear_rounded, size: 20),
+                );
+              },
+            ),
           ),
         ),
         const SizedBox(height: AppSpacing.sm + 2),
@@ -477,6 +562,10 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
       onSelected: (_) {
         if (!mounted) return;
 
+        // A pending debounce would otherwise re-apply the query that is
+        // being cleared here.
+        _searchDebounceTimer?.cancel();
+
         setState(() {
           _statusFilter = filterValue;
 
@@ -513,7 +602,11 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
               for (final bazaar in bazaars)
                 SizedBox(
                   width: width,
-                  child: _buildBazaarCard(context, bazaar),
+                  // A card draws an icon tile, a badge and several info rows;
+                  // its own layer keeps scrolling from repainting all of it.
+                  child: RepaintBoundary(
+                    child: _buildBazaarCard(context, bazaar),
+                  ),
                 ),
             ],
           );
@@ -525,7 +618,9 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
           itemCount: bazaars.length,
           separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm + 2),
           itemBuilder: (context, index) {
-            return _buildBazaarCard(context, bazaars[index]);
+            return RepaintBoundary(
+              child: _buildBazaarCard(context, bazaars[index]),
+            );
           },
         );
       },
@@ -607,13 +702,13 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
                 // Bazaars are never deleted: disabling keeps every historical
                 // movement reference intact while removing the Bazaar from
                 // new-transfer destinations.
-                if (context.watch<UserProvider>().isSuperAdmin)
+                if (_canManage(context))
                   PopupMenuButton<String>(
                     tooltip: 'Bazaar actions',
                     position: PopupMenuPosition.under,
                     onSelected: (value) {
                       if (value == 'edit') {
-                        _showBazaarDialog(bazaar: bazaar);
+                        _showBazaarDialog(bazaar: bazaar, canManage: true);
                       } else if (value == 'toggle') {
                         _toggleBazaar(bazaar);
                       }
@@ -797,7 +892,10 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
   // ADD / EDIT BAZAAR
   // ================================================================
 
-  Future<void> _showBazaarDialog({_BazaarData? bazaar}) async {
+  Future<void> _showBazaarDialog({
+    _BazaarData? bazaar,
+    required bool canManage,
+  }) async {
     if (!mounted) return;
 
     await showDialog<bool>(
@@ -806,7 +904,11 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
       builder: (dialogContext) {
         // The dialog is a separate route, so it cannot find this State as an
         // ancestor; the save operation is passed in explicitly.
-        return _BazaarDialog(bazaar: bazaar, onSave: _saveBazaar);
+        return _BazaarDialog(
+          bazaar: bazaar,
+          canManage: canManage,
+          onSave: _saveBazaar,
+        );
       },
     );
   }
@@ -832,24 +934,33 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
       return 'Bazaar name and city are required.';
     }
 
+    final profile = context.read<UserProvider>().currentUserProfile;
+
     try {
-      // BazaarService performs the duplicate (name + city) check for both
-      // create and edit.
+      // BazaarService performs the duplicate-name check for both create and
+      // edit.
       if (existingBazaar == null) {
-        final newId = await _bazaarService.createBazaar(
+        final createdBy = profile?.uid.trim() ?? '';
+
+        // The Firestore rule requires createdBy to equal the signed-in uid,
+        // so writing before the profile arrives is a guaranteed refusal that
+        // would be reported as a missing permission.
+        if (createdBy.isEmpty) {
+          return 'Your profile is still loading. Please try again in a moment.';
+        }
+
+        // One write only: a User may add a Bazaar but may not update one, so
+        // a follow-up status write would be denied for them.
+        await _bazaarService.createBazaar(
           name: cleanName,
           location: cleanCity,
           contactPerson: cleanContactPerson,
           contactNumber: cleanContactNumber,
           address: cleanAddress,
+          createdBy: createdBy,
+          createdByName: profile?.name ?? '',
+          isActive: isActive,
         );
-
-        if (!isActive) {
-          await _bazaarService.updateBazaarStatus(
-            bazaarId: newId,
-            isActive: false,
-          );
-        }
 
         if (mounted) {
           _showMessage('Bazaar added successfully.');
@@ -938,67 +1049,43 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
   // ================================================================
 
   Widget _buildEmptyState(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final brightness = Theme.of(context).brightness;
-
     final hasSearchOrFilter = _searchQuery.isNotEmpty || _statusFilter != 'All';
 
-    final tone = hasSearchOrFilter ? colors.onSurfaceVariant : AppColors.bazaar;
+    // Read during build: the button's callback runs later, when reading a
+    // provider from this context is no longer allowed.
+    final canManage = _canManage(context);
+    final canAdd = _canAdd(context);
+
+    // A filtered-out list and an empty Bazaar Master need different ways out:
+    // the filters back, or the first Bazaar.
+    final Widget? action = hasSearchOrFilter
+        ? OutlinedButton.icon(
+            onPressed: _clearSearchAndFilter,
+            icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+            label: const Text('Clear Search & Filter'),
+          )
+        : canAdd
+        ? FilledButton.icon(
+            onPressed: () => _showBazaarDialog(canManage: canManage),
+            icon: const Icon(Icons.add_business_rounded, size: 19),
+            label: const Text('Add Bazaar'),
+          )
+        : null;
 
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.xl,
-          vertical: AppSpacing.xxl,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: AppColors.tint(tone, brightness),
-                borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-              ),
-              child: Icon(
-                hasSearchOrFilter
-                    ? Icons.search_off_rounded
-                    : Icons.storefront_outlined,
-                size: 30,
-                color: AppColors.onTint(tone, brightness),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Text(
-              hasSearchOrFilter
-                  ? 'No matching bazaars'
-                  : 'No bazaars added yet',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              hasSearchOrFilter
-                  ? 'Try changing the search or status filter.'
-                  : 'Add your first Sahulat Bazaar.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.5,
-                color: colors.onSurfaceVariant,
-              ),
-            ),
-            if (!hasSearchOrFilter &&
-                context.watch<UserProvider>().isSuperAdmin) ...[
-              const SizedBox(height: AppSpacing.lg),
-              FilledButton.icon(
-                onPressed: _showBazaarDialog,
-                icon: const Icon(Icons.add_business_rounded, size: 19),
-                label: const Text('Add Bazaar'),
-              ),
-            ],
-          ],
+      child: SizedBox(
+        width: double.infinity,
+        child: AppEmptyState(
+          icon: hasSearchOrFilter
+              ? Icons.search_off_rounded
+              : Icons.storefront_outlined,
+          title: hasSearchOrFilter
+              ? 'No matching bazaars'
+              : 'No bazaars added yet',
+          message: hasSearchOrFilter
+              ? 'Try changing the search or the status filter.'
+              : 'Add your first Sahulat Bazaar to deploy assets to it.',
+          action: action,
         ),
       ),
     );
@@ -1008,57 +1095,13 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
   // ERROR STATE
   // ================================================================
 
-  Widget _buildErrorState(BuildContext context, String error) {
-    final colors = Theme.of(context).colorScheme;
-    final brightness = Theme.of(context).brightness;
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 480),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.error, brightness),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-                ),
-                child: Icon(
-                  Icons.error_outline_rounded,
-                  size: 30,
-                  color: AppColors.onTint(colors.error, brightness),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Unable to load bazaars',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _cleanError(error),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.5,
-                  color: colors.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              FilledButton.icon(
-                onPressed: _reloadStream,
-                icon: const Icon(Icons.refresh_rounded, size: 19),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
-      ),
+  Widget _buildErrorState(BuildContext context, Object error) {
+    return AppErrorState(
+      key: const ValueKey('bazaars-error'),
+      title: 'Unable to load bazaars',
+      message: _cleanError(error),
+      // Retry re-subscribes to the same collection the screen reads.
+      onRetry: _reloadStream,
     );
   }
 
@@ -1074,14 +1117,44 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
     return '$day/$month/$year';
   }
 
+  /// Raw Firebase text ("[cloud_firestore/permission-denied] ...") tells a
+  /// Bazaar manager nothing they can act on, so the codes that actually
+  /// reach this screen get a plain sentence.
   String _cleanError(Object error) {
-    final text = error.toString();
+    if (error is FirebaseException) {
+      switch (error.code) {
+        case 'permission-denied':
+          return 'You do not have permission to do this.';
+
+        case 'not-found':
+          return 'This Bazaar no longer exists.';
+
+        case 'unavailable':
+        case 'deadline-exceeded':
+          return 'No connection to the server. '
+              'Check your internet and try again.';
+      }
+
+      final message = error.message?.trim() ?? '';
+
+      // A bracketed Firebase code means the text was never written for a
+      // reader, so it is replaced rather than shown.
+      if (message.isEmpty || message.startsWith('[')) {
+        return 'Something went wrong. Please try again.';
+      }
+
+      return message;
+    }
+
+    final text = error.toString().trim();
 
     if (text.startsWith('Exception: ')) {
       return text.substring('Exception: '.length);
     }
 
-    return text;
+    return text.isEmpty || text.startsWith('[')
+        ? 'Something went wrong. Please try again.'
+        : text;
   }
 
   void _showMessage(String message, {bool isError = false}) {
@@ -1120,9 +1193,17 @@ typedef _SaveBazaar =
     });
 
 class _BazaarDialog extends StatefulWidget {
-  const _BazaarDialog({this.bazaar, required this.onSave});
+  const _BazaarDialog({
+    this.bazaar,
+    required this.canManage,
+    required this.onSave,
+  });
 
   final _BazaarData? bazaar;
+
+  /// Only a manager may disable a Bazaar, so the Active switch is hidden for
+  /// everyone else instead of offering a choice Firestore would reject.
+  final bool canManage;
 
   final _SaveBazaar onSave;
 
@@ -1377,23 +1458,25 @@ class _BazaarDialogState extends State<_BazaarDialog> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 10),
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Active Bazaar'),
-                  subtitle: const Text(
-                    'Active bazaars can be selected for '
-                    'asset deployment.',
+                if (widget.canManage) ...[
+                  const SizedBox(height: 10),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Active Bazaar'),
+                    subtitle: const Text(
+                      'Active bazaars can be selected for '
+                      'asset deployment.',
+                    ),
+                    value: _isActive,
+                    onChanged: _isSaving
+                        ? null
+                        : (value) {
+                            setState(() {
+                              _isActive = value;
+                            });
+                          },
                   ),
-                  value: _isActive,
-                  onChanged: _isSaving
-                      ? null
-                      : (value) {
-                          setState(() {
-                            _isActive = value;
-                          });
-                        },
-                ),
+                ],
               ],
             ),
           ),

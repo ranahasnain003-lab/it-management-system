@@ -35,6 +35,19 @@ class AuthProvider extends ChangeNotifier {
   // ERROR CODES (used by the auth screens)
   // ============================================================
 
+  /// The status every self-registered account is created with.
+  ///
+  /// Awaiting approval, never active: anyone on the internet can reach public
+  /// signup with any e-mail address, and an ACTIVE User may add assets,
+  /// Bazaars and categories that the whole organization then sees. A Super
+  /// Admin - or the Admin who manages the account - activates it from the
+  /// Users screen. Verifying the e-mail address and being approved are two
+  /// separate requirements: login checks both.
+  ///
+  /// firestore.rules enforces the same value in its public signup rule, so
+  /// calling the API directly cannot create an active account either.
+  static const String selfSignupStatus = 'pending';
+
   static const String emailNotVerifiedCode = 'email-not-verified';
   static const String accountInactiveCode = 'account-inactive';
   static const String busyCode = 'busy';
@@ -658,14 +671,18 @@ class AuthProvider extends ChangeNotifier {
       // ----------------------------------------------------------
       // PUBLIC SIGNUP SECURITY
       //
-      // Public signup NEVER accepts a role. Every public signup
-      // account is role = user, status = active. Admin/Super Admin
-      // promotion happens only through authorized Super Admin
-      // functionality.
+      // Public signup NEVER accepts a role: every public signup
+      // account is role = user. Admin/Super Admin promotion happens
+      // only through authorized Super Admin functionality.
+      //
+      // The account is created awaiting approval - see
+      // [selfSignupStatus]. Accounts created BY a Super Admin or an
+      // Admin are active at once, as before; only self-registration
+      // waits.
       // ----------------------------------------------------------
 
       const signupRole = 'user';
-      const signupStatus = 'active';
+      const signupStatus = selfSignupStatus;
 
       final userProfile = UserModel(
         uid: firebaseUser.uid,

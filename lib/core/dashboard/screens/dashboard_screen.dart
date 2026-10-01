@@ -8,6 +8,7 @@ import '../../providers/asset_scope.dart';
 import '../../providers/user_provider.dart';
 import '../../services/bazaar_service.dart';
 import '../../shared/drawer/app_drawer.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -225,13 +226,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 builder: (context, bazaarSnapshot) {
                                   final bazaars = bazaarSnapshot.data;
 
-                                  return _buildStatisticsGrid(
-                                    context,
-                                    provider,
-                                    userProvider,
-                                    activeBazaarCount: bazaars
-                                        ?.where((bazaar) => bazaar.isActive)
-                                        .length,
+                                  // Crossfade so the figures arrive rather
+                                  // than replacing the placeholders in a jump.
+                                  return AppStateSwitcher(
+                                    child: _buildInventorySection(
+                                      context,
+                                      provider,
+                                      userProvider,
+                                      activeBazaarCount: bazaars
+                                          ?.where((bazaar) => bazaar.isActive)
+                                          .length,
+                                    ),
                                   );
                                 },
                               ),
@@ -309,77 +314,98 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final isLight = colors.brightness == Brightness.light;
 
     // Soft accent-tinted surface: light enough in light mode for dark text,
-    // a gentle accent glow over the dark card in dark mode.
-    final base = isLight ? AppColors.lightSurface : AppColors.darkCard;
+    // a gentle accent glow over the dark card in dark mode. Both bases come
+    // from the scheme, so a theme change carries the card with it.
+    final base = isLight ? colors.surface : colors.surfaceContainer;
     final gradient = LinearGradient(
       begin: Alignment.topLeft,
       end: Alignment.bottomRight,
       colors: [
-        Color.alphaBlend(colors.primary.withValues(alpha: isLight ? 0.12 : 0.24), base),
-        Color.alphaBlend(colors.primary.withValues(alpha: isLight ? 0.04 : 0.08), base),
+        Color.alphaBlend(
+          colors.primary.withValues(alpha: isLight ? 0.12 : 0.24),
+          base,
+        ),
+        Color.alphaBlend(
+          colors.primary.withValues(alpha: isLight ? 0.04 : 0.08),
+          base,
+        ),
       ],
     );
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final padding = constraints.maxWidth >= 600 ? AppSpacing.xl : AppSpacing.lg + 2;
+        final padding = constraints.maxWidth >= 600
+            ? AppSpacing.xl
+            : AppSpacing.lg + 2;
 
-        return Container(
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            gradient: gradient,
-            borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-            border: Border.all(
-              color: colors.primary.withValues(alpha: isLight ? 0.18 : 0.30),
+        // A gradient, two translucent rings and a Stack: worth its own layer
+        // so a figure landing in the grid below does not repaint all of it.
+        return RepaintBoundary(
+          child: Container(
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              gradient: gradient,
+              borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
+              border: Border.all(
+                color: colors.primary.withValues(alpha: isLight ? 0.18 : 0.30),
+              ),
             ),
-          ),
-          child: Stack(
-            children: [
-              // Subtle decorative rings in the corner; purely visual.
-              Positioned(
-                top: -60,
-                right: -40,
-                child: _welcomeRing(colors.primary, 170, isLight ? 0.07 : 0.12),
-              ),
-              Positioned(
-                bottom: -70,
-                right: 70,
-                child: _welcomeRing(colors.primary, 130, isLight ? 0.05 : 0.08),
-              ),
-              Padding(
-                padding: EdgeInsets.all(padding),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _buildWelcomeIcon(context, userProvider),
-                        const SizedBox(width: AppSpacing.md + 2),
-                        Expanded(child: _buildWelcomeText(context, userProvider)),
-                      ],
-                    ),
-                    const SizedBox(height: AppSpacing.md + 2),
-                    Text(
-                      userProvider.isNormalUser
-                          ? 'View permitted IT assets, submit requests and '
-                                'monitor your request activity from your secure '
-                                'workspace.'
-                          : 'Monitor and manage your organization’s IT assets, '
-                                'users, requests and system activity from one '
-                                'secure workspace.',
-                      style: TextStyle(
-                        color: isLight
-                            ? AppColors.lightTextMuted
-                            : AppColors.darkTextMuted,
-                        fontSize: 13.5,
-                        height: 1.5,
-                      ),
-                    ),
-                  ],
+            child: Stack(
+              children: [
+                // Subtle decorative rings in the corner; purely visual.
+                Positioned(
+                  top: -60,
+                  right: -40,
+                  child: _welcomeRing(
+                    colors.primary,
+                    170,
+                    isLight ? 0.07 : 0.12,
+                  ),
                 ),
-              ),
-            ],
+                Positioned(
+                  bottom: -70,
+                  right: 70,
+                  child: _welcomeRing(
+                    colors.primary,
+                    130,
+                    isLight ? 0.05 : 0.08,
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.all(padding),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildWelcomeIcon(context, userProvider),
+                          const SizedBox(width: AppSpacing.md + 2),
+                          Expanded(
+                            child: _buildWelcomeText(context, userProvider),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: AppSpacing.md + 2),
+                      Text(
+                        userProvider.isNormalUser
+                            ? 'View permitted IT assets, submit requests and '
+                                  'monitor your request activity from your '
+                                  'secure workspace.'
+                            : 'Monitor and manage your organization’s IT '
+                                  'assets, users, requests and system activity '
+                                  'from one secure workspace.',
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 13.5,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -417,10 +443,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             // Dark, high-contrast text on the light card (light text in dark
-            // mode, where the card is dark).
-            color: colors.brightness == Brightness.light
-                ? AppColors.lightTextMuted
-                : AppColors.darkTextMuted,
+            // mode, where the card is dark) - which is what the scheme's
+            // muted foreground already is in both.
+            color: colors.onSurfaceVariant,
             fontSize: 11,
             fontWeight: FontWeight.w700,
             letterSpacing: 1.2,
@@ -432,9 +457,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: colors.brightness == Brightness.light
-                ? AppColors.lightText
-                : AppColors.darkText,
+            color: colors.onSurface,
             fontSize: 21,
             fontWeight: FontWeight.w700,
             letterSpacing: -0.4,
@@ -447,8 +470,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             vertical: AppSpacing.xs,
           ),
           decoration: BoxDecoration(
+            // The lightest surface in the scheme reads as a white pill on the
+            // tinted card in light mode; dark mode keeps the accent glow.
             color: colors.brightness == Brightness.light
-                ? Colors.white.withValues(alpha: 0.85)
+                ? colors.surfaceContainerLowest.withValues(alpha: 0.85)
                 : colors.primary.withValues(alpha: 0.22),
             borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
             border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
@@ -533,7 +558,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// Explains an empty or failed overview instead of silently showing zeros.
+  /// Explains an empty overview instead of silently showing zeros.
+  ///
+  /// Loading and a failed inventory read are no longer said here: the cards
+  /// themselves now show a skeleton or an error state, and a banner over a
+  /// grid of zeros reads as though the zeros were real figures.
   Widget _buildInventoryNotice(
     BuildContext context,
     AssetProvider provider,
@@ -542,34 +571,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
     String? message;
     IconData icon = Icons.info_outline_rounded;
 
-    if (userProvider.isLoadingCurrentUser &&
-        !userProvider.hasLoadedCurrentUser) {
-      message = 'Loading your profile...';
-      icon = Icons.hourglass_top_rounded;
-    } else if (!userProvider.hasLoadedCurrentUser &&
+    if (!userProvider.hasLoadedCurrentUser &&
         userProvider.currentUserError != null) {
       message = userProvider.currentUserError;
       icon = Icons.error_outline_rounded;
-    } else if (userProvider.isNormalUser &&
+    } else if (userProvider.hasLoadedCurrentUser &&
+        userProvider.isNormalUser &&
         (userProvider.currentUserProfile?.createdBy.trim().isEmpty ?? true)) {
       message =
           'Your account is not assigned to an Admin yet, so no inventory is '
           'visible. Please contact your Admin.';
-    } else if (provider.errorMessage != null) {
-      message = 'Unable to load inventory: ${provider.errorMessage}';
-      icon = Icons.error_outline_rounded;
-    } else if (provider.isLoading && provider.assets.isEmpty) {
-      message = 'Loading inventory...';
-      icon = Icons.hourglass_top_rounded;
     }
 
     if (message == null) {
       return const SizedBox.shrink();
     }
 
-    final brightness = Theme.of(context).colorScheme.brightness;
+    final colors = Theme.of(context).colorScheme;
+    final brightness = colors.brightness;
+
+    // The scheme's error red rather than the brand constant, which is tuned
+    // for light surfaces only.
     final tone = icon == Icons.error_outline_rounded
-        ? AppColors.error
+        ? colors.error
         : AppColors.info;
 
     return Padding(
@@ -600,6 +624,75 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  /// How many statistic cards the grid builds, whatever the role: some are
+  /// only disabled, never dropped. The skeleton stands in for the same
+  /// number so the page keeps its height.
+  static const int _statCardCount = 8;
+
+  /// Columns for the statistic grid at a given width. Shared with the
+  /// loading skeleton so the placeholders cannot drift from the real cards.
+  int _statColumns(double width) {
+    if (width >= 900) {
+      return 4;
+    }
+
+    if (width >= 600) {
+      return 3;
+    }
+
+    return 2;
+  }
+
+  /// The overview in whichever state it is actually in.
+  ///
+  /// Keeping loading, failed and loaded apart here is what stops a failed
+  /// read from being drawn as an inventory of zeros.
+  Widget _buildInventorySection(
+    BuildContext context,
+    AssetProvider provider,
+    UserProvider userProvider, {
+    int? activeBazaarCount,
+  }) {
+    if (provider.errorMessage != null) {
+      return AppErrorState(
+        key: const ValueKey('stats-error'),
+        title: 'Unable to Load Inventory',
+        message:
+            'We could not read your inventory just now. Please check your '
+            'connection and try again.',
+        onRetry: () {
+          _initializeDashboard(forceRefresh: true);
+        },
+      );
+    }
+
+    if (provider.isLoading && provider.assets.isEmpty) {
+      // Eight placeholders at the width the real cards will have, because the
+      // grid below always builds eight - so nothing resizes when the figures
+      // land.
+      return LayoutBuilder(
+        key: const ValueKey('stats-loading'),
+        builder: (context, constraints) {
+          final columns = _statColumns(constraints.maxWidth);
+
+          return AppStatSkeleton(
+            count: _statCardCount,
+            width:
+                (constraints.maxWidth - (AppSpacing.md * (columns - 1))) /
+                columns,
+          );
+        },
+      );
+    }
+
+    return _buildStatisticsGrid(
+      context,
+      provider,
+      userProvider,
+      activeBazaarCount: activeBazaarCount,
     );
   }
 
@@ -681,18 +774,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final scale = _textScale(context);
 
     return LayoutBuilder(
+      key: const ValueKey('stats-grid'),
       builder: (context, constraints) {
-        final width = constraints.maxWidth;
-
-        int columns;
-
-        if (width >= 900) {
-          columns = 4;
-        } else if (width >= 600) {
-          columns = 3;
-        } else {
-          columns = 2;
-        }
+        final columns = _statColumns(constraints.maxWidth);
 
         const spacing = AppSpacing.md;
 
@@ -720,109 +804,116 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final colors = Theme.of(context).colorScheme;
     final brightness = colors.brightness;
 
-    return Card(
-      child: InkWell(
-        onTap: data.enabled
-            ? () {
-                // ==================================================
-                // ALL BAZAARS -> Bazaar Master
-                // ==================================================
-                if (data.filter == 'All Bazaars') {
-                  context.push('/locations');
-                  return;
-                }
+    // Each tile is a Stack with an accent bar, an icon tile and two text
+    // lines; its own layer keeps one changing figure from repainting the
+    // whole grid. Clipping is what keeps the accent bar and the ripple inside
+    // the card's rounded corners.
+    return RepaintBoundary(
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: data.enabled
+              ? () {
+                  // ==================================================
+                  // ALL BAZAARS -> Bazaar Master
+                  // ==================================================
+                  if (data.filter == 'All Bazaars') {
+                    context.push('/locations');
+                    return;
+                  }
 
-                // ==================================================
-                // STOCK AT BAZAARS -> Currently At Bazaars
-                // ==================================================
-                if (data.filter == 'Stock at Bazaars') {
-                  context.push('/currently-at-bazaars');
-                  return;
-                }
+                  // ==================================================
+                  // STOCK AT BAZAARS -> Currently At Bazaars
+                  // ==================================================
+                  if (data.filter == 'Stock at Bazaars') {
+                    context.push('/currently-at-bazaars');
+                    return;
+                  }
 
-                // Existing inventory cards continue to use
-                // the existing Assets screen and filters.
-                context.push('/assets', extra: data.filter);
-              }
-            : null,
-        child: Stack(
-          children: [
-            // Thin metric accent bar (matches the web stat card).
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              child: Container(width: 3, color: data.color),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md + 3,
-                AppSpacing.md + 2,
-                AppSpacing.md,
-                AppSpacing.md,
+                  // Existing inventory cards continue to use
+                  // the existing Assets screen and filters.
+                  context.push('/assets', extra: data.filter);
+                }
+              : null,
+          child: Stack(
+            children: [
+              // Thin metric accent bar (matches the web stat card).
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: Container(width: 3, color: data.color),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 38,
-                        height: 38,
-                        decoration: BoxDecoration(
-                          color: AppColors.tint(data.color, brightness),
-                          borderRadius: BorderRadius.circular(
-                            AppSpacing.radiusMd,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md + 3,
+                  AppSpacing.md + 2,
+                  AppSpacing.md,
+                  AppSpacing.md,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: AppColors.tint(data.color, brightness),
+                            borderRadius: BorderRadius.circular(
+                              AppSpacing.radiusMd,
+                            ),
+                          ),
+                          child: Icon(
+                            data.icon,
+                            color: AppColors.onTint(data.color, brightness),
+                            size: 20,
                           ),
                         ),
-                        child: Icon(
-                          data.icon,
-                          color: AppColors.onTint(data.color, brightness),
-                          size: 20,
-                        ),
-                      ),
-                      const Spacer(),
-                      if (data.enabled)
-                        Icon(
-                          Icons.arrow_outward_rounded,
-                          size: 16,
-                          color: colors.onSurfaceVariant.withValues(
-                            alpha: 0.7,
+                        const Spacer(),
+                        if (data.enabled)
+                          Icon(
+                            Icons.arrow_outward_rounded,
+                            size: 16,
+                            color: colors.onSurfaceVariant.withValues(
+                              alpha: 0.7,
+                            ),
                           ),
-                        ),
-                    ],
-                  ),
-                  const Spacer(),
-                  Text(
-                    data.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: colors.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      data.value,
+                    const Spacer(),
+                    Text(
+                      data.title,
                       maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: colors.onSurface,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.5,
-                        height: 1.2,
+                        fontSize: 12.5,
+                        color: colors.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 2),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        data.value,
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: colors.onSurface,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.5,
+                          height: 1.2,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -919,7 +1010,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildActionCard(BuildContext context, _ActionData action) {
     final colors = Theme.of(context).colorScheme;
 
+    // Clipped so the ripple follows the card's rounded corners rather than
+    // squaring them off while a finger is down.
     return Card(
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: action.onTap,
         child: Padding(

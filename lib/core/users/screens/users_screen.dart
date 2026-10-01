@@ -1,10 +1,83 @@
+import 'dart:async';
+
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../models/user_model.dart';
 import '../../providers/user_provider.dart';
+import '../../services/permission_service.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
 import 'add_user_screen.dart';
+
+/// Turns a failure into a sentence the person reading it can act on.
+///
+/// A raw FirebaseException ("[cloud_firestore/permission-denied] Missing or
+/// insufficient permissions") tells them nothing, and it is exactly what a
+/// user hits when the rules refuse an action the UI still offered.
+String _friendlyUserError(Object error) {
+  if (error is FirebaseException) {
+    switch (error.code) {
+      case 'permission-denied':
+        return 'You do not have permission to perform this action.';
+
+      case 'unavailable':
+      case 'deadline-exceeded':
+      case 'network-request-failed':
+        return 'Network error. Check your connection and try again.';
+
+      case 'not-found':
+        return 'That account no longer exists.';
+
+      case 'already-exists':
+        return 'That account already exists.';
+    }
+
+    final message = error.message?.trim() ?? '';
+
+    return message.isEmpty
+        ? 'Something went wrong. Please try again.'
+        : message;
+  }
+
+  final text = error.toString().replaceFirst('Exception: ', '').trim();
+
+  return text.isEmpty ? 'Something went wrong. Please try again.' : text;
+}
+
+/// The same treatment for a message the provider already stored.
+///
+/// [UserProvider] maps the codes it recognises, but an unrecognised one keeps
+/// Firebase's own wording - which is the one place raw "[cloud_firestore/...]"
+/// text could still reach the screen, so it is caught here instead.
+String _friendlyLoadFailure(String message) {
+  final text = message.trim();
+
+  if (text.isEmpty) {
+    return 'Something went wrong. Please try again.';
+  }
+
+  final lower = text.toLowerCase();
+
+  if (lower.contains('permission-denied') ||
+      lower.contains('insufficient permissions')) {
+    return 'You do not have permission to view these accounts.';
+  }
+
+  if (lower.contains('unavailable') ||
+      lower.contains('deadline-exceeded') ||
+      lower.contains('network')) {
+    return 'Network error. Check your connection and try again.';
+  }
+
+  // A bracketed Firebase code means the text was never written for a reader.
+  if (text.startsWith('[')) {
+    return 'Something went wrong. Please try again.';
+  }
+
+  return text;
+}
 
 class UsersScreen extends StatefulWidget {
   const UsersScreen({super.key});
@@ -15,6 +88,15 @@ class UsersScreen extends StatefulWidget {
 
 class _UsersScreenState extends State<UsersScreen> {
   final TextEditingController _searchController = TextEditingController();
+
+  /// Filtering waits for a short pause in typing.
+  ///
+  /// Every keystroke used to re-filter the whole list and rebuild every card,
+  /// which is what made a long user list feel heavy to search. The results are
+  /// the same, they just arrive once the person has stopped typing.
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
+
+  Timer? _searchDebounceTimer;
 
   String _searchQuery = '';
   String? _transferringTargetUid;
@@ -40,8 +122,36 @@ class _UsersScreenState extends State<UsersScreen> {
 
   @override
   void dispose() {
+    _searchDebounceTimer?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounceTimer?.cancel();
+
+    final query = value.trim();
+
+    if (query == _searchQuery) {
+      return;
+    }
+
+    _searchDebounceTimer = Timer(_searchDebounce, () {
+      if (!mounted) return;
+
+      setState(() {
+        _searchQuery = query;
+      });
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounceTimer?.cancel();
+    _searchController.clear();
+
+    setState(() {
+      _searchQuery = '';
+    });
   }
 
   List<UserModel> _filteredUsers(List<UserModel> users) {
@@ -99,9 +209,9 @@ class _UsersScreenState extends State<UsersScreen> {
     return Consumer<UserProvider>(
       builder: (context, provider, child) {
         if (provider.isLoadingCurrentUser) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          // The profile decides whether this screen is even allowed, so the
+          // wait is shown as the list that is about to appear.
+          return const Scaffold(body: AppListSkeleton());
         }
 
         if (!provider.canManageUsers) {
@@ -174,8 +284,9 @@ class _UsersScreenState extends State<UsersScreen> {
     return FilledButton.icon(
       onPressed: _openAddUser,
       style: FilledButton.styleFrom(
-        minimumSize: const Size(0, 40),
-        padding: const EdgeInsets.symmetric(horizontal: 14),
+        // 44 is the smallest comfortable tap target; 40 was a near miss.
+        minimumSize: const Size(0, 44),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       ),
       icon: const Icon(Icons.person_add_alt_1_rounded, size: 18),
       label: const Text('Add User'),
@@ -188,17 +299,43 @@ class _UsersScreenState extends State<UsersScreen> {
     List<UserModel> users, {
     bool showAddInHeader = false,
   }) {
+    // One switcher for all four states, so the skeleton fades into the list
+    // instead of being swapped out in a single frame.
+    return AppStateSwitcher(
+      child: _buildBodyState(
+        context,
+        provider,
+        users,
+        showAddInHeader: showAddInHeader,
+      ),
+    );
+  }
+
+  Widget _buildBodyState(
+    BuildContext context,
+    UserProvider provider,
+    List<UserModel> users, {
+    required bool showAddInHeader,
+  }) {
     if (provider.isLoading && provider.users.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return const AppListSkeleton(key: ValueKey('users-loading'));
     }
 
     final error = provider.errorMessage;
 
     if (error != null && error.trim().isNotEmpty && provider.users.isEmpty) {
-      return _buildErrorState(context, error);
+      return AppErrorState(
+        key: const ValueKey('users-error'),
+        title: 'Unable to load users',
+        message: _friendlyLoadFailure(error),
+        onRetry: () {
+          context.read<UserProvider>().listenToUsers(forceRestart: true);
+        },
+      );
     }
 
     return RefreshIndicator(
+      key: const ValueKey('users-content'),
       onRefresh: () async {
         if (provider.isTransferringSuperAdmin) {
           return;
@@ -246,10 +383,16 @@ class _UsersScreenState extends State<UsersScreen> {
               sliver: SliverList.builder(
                 itemCount: users.length,
                 itemBuilder: (context, index) {
-                  return _constrained(
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: AppSpacing.sm + 2),
-                      child: _buildUserCard(context, provider, users[index]),
+                  // A card carries an avatar, several chips and a menu; its
+                  // own layer keeps scrolling from repainting all of that.
+                  return RepaintBoundary(
+                    child: _constrained(
+                      Padding(
+                        padding: const EdgeInsets.only(
+                          bottom: AppSpacing.sm + 2,
+                        ),
+                        child: _buildUserCard(context, provider, users[index]),
+                      ),
                     ),
                   );
                 },
@@ -292,27 +435,27 @@ class _UsersScreenState extends State<UsersScreen> {
           const SizedBox(height: AppSpacing.md),
           TextField(
             controller: _searchController,
-            onChanged: (value) {
-              setState(() {
-                _searchQuery = value;
-              });
-            },
+            textInputAction: TextInputAction.search,
+            onChanged: _onSearchChanged,
             decoration: InputDecoration(
               hintText: 'Search users, email, role, department...',
               prefixIcon: const Icon(Icons.search_rounded, size: 20),
-              suffixIcon: _searchQuery.isNotEmpty
-                  ? IconButton(
-                      tooltip: 'Clear search',
-                      onPressed: () {
-                        _searchController.clear();
+              // Driven by the controller, not by the debounced query, so the
+              // clear button appears the moment there is something to clear.
+              suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _searchController,
+                builder: (context, value, _) {
+                  if (value.text.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
 
-                        setState(() {
-                          _searchQuery = '';
-                        });
-                      },
-                      icon: const Icon(Icons.close_rounded, size: 20),
-                    )
-                  : null,
+                  return IconButton(
+                    tooltip: 'Clear search',
+                    onPressed: _clearSearch,
+                    icon: const Icon(Icons.close_rounded, size: 20),
+                  );
+                },
+              ),
             ),
           ),
           const SizedBox(height: AppSpacing.md),
@@ -382,6 +525,16 @@ class _UsersScreenState extends State<UsersScreen> {
         Icons.person_outline_rounded,
         AppColors.quantity,
       ),
+
+      // Only while there is something to act on: a self-registered account
+      // can do nothing until somebody admits it.
+      if (provider.pendingUsers > 0)
+        (
+          'Pending',
+          provider.pendingUsers.toString(),
+          Icons.hourglass_top_rounded,
+          AppColors.warning,
+        ),
     ];
 
     return LayoutBuilder(
@@ -460,6 +613,7 @@ class _UsersScreenState extends State<UsersScreen> {
                   Text(
                     value,
                     maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
@@ -578,6 +732,16 @@ class _UsersScreenState extends State<UsersScreen> {
                         icon: Icons.admin_panel_settings_outlined,
                       ),
                       _statusChip(context, user.status, statusColor),
+                      // A self-registered account can do nothing until it is
+                      // admitted, so it says so instead of looking like any
+                      // other inactive row.
+                      if (user.isPending)
+                        _infoChip(
+                          context,
+                          Icons.hourglass_top_rounded,
+                          'Awaiting activation',
+                          AppColors.warning,
+                        ),
                       if (isSuperAdmin)
                         _infoChip(
                           context,
@@ -768,6 +932,10 @@ class _UsersScreenState extends State<UsersScreen> {
             _confirmSuperAdminChange(context, provider, user, promote: false);
             break;
 
+          case 'activate-pending':
+            _confirmActivatePendingAccount(context, provider, user);
+            break;
+
           case 'activate':
             _changeStatus(context, provider, user, 'active');
             break;
@@ -866,21 +1034,40 @@ class _UsersScreenState extends State<UsersScreen> {
           );
         }
 
-        if (canManageStatus) {
+        // Admitting a self-registered account has its own action: it writes
+        // the status alone, which is the only change the rules accept from an
+        // Admin, so an Admin can admit the Users it manages without the Super
+        // Admin.
+        if (provider.canActivateUser(user)) {
           items.add(
             PopupMenuItem<String>(
-              value: isActive ? 'deactivate' : 'activate',
+              value: 'activate-pending',
               child: _menuRow(
                 menuContext,
-                isActive
-                    ? Icons.pause_circle_outline
-                    : Icons.check_circle_outline,
-                isActive ? 'Deactivate User' : 'Activate User',
+                Icons.how_to_reg_outlined,
+                'Activate Account',
               ),
             ),
           );
+        }
 
-          if (user.status.trim().toLowerCase() != 'blocked') {
+        if (canManageStatus) {
+          if (!user.isPending) {
+            items.add(
+              PopupMenuItem<String>(
+                value: isActive ? 'deactivate' : 'activate',
+                child: _menuRow(
+                  menuContext,
+                  isActive
+                      ? Icons.pause_circle_outline
+                      : Icons.check_circle_outline,
+                  isActive ? 'Deactivate User' : 'Activate User',
+                ),
+              ),
+            );
+          }
+
+          if (PermissionService.normalizeStatus(user.status) != 'blocked') {
             items.add(
               PopupMenuItem<String>(
                 value: 'block',
@@ -1257,7 +1444,9 @@ class _UsersScreenState extends State<UsersScreen> {
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
-            content: Text('Unable to transfer Super Admin: $e'),
+            content: Text(
+              'Unable to transfer Super Admin: ${_friendlyUserError(e)}',
+            ),
             behavior: SnackBarBehavior.floating,
             backgroundColor: errorColor,
             duration: const Duration(seconds: 6),
@@ -1287,67 +1476,34 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 
   Widget _buildEmptyState(BuildContext context, {required bool canCreate}) {
-    final colors = Theme.of(context).colorScheme;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xxl),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _stateIcon(context, Icons.people_outline_rounded, colors.primary),
-            const SizedBox(height: AppSpacing.lg),
-            Text(
-              'No Users Found',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'There are currently no users available in the system.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-            ),
-            if (canCreate) ...[
-              const SizedBox(height: AppSpacing.xl),
-              FilledButton.icon(
-                onPressed: _openAddUser,
-                icon: const Icon(Icons.person_add_alt_1_rounded, size: 19),
-                label: const Text('Add First User'),
-              ),
-            ],
-          ],
-        ),
-      ),
+    return AppEmptyState(
+      icon: Icons.people_outline_rounded,
+      title: 'No users yet',
+      message: canCreate
+          ? 'Add the first account to start managing access.'
+          : 'There are currently no users available in the system.',
+      // Only an account that may create one is offered the way out.
+      action: canCreate
+          ? FilledButton.icon(
+              onPressed: _openAddUser,
+              icon: const Icon(Icons.person_add_alt_1_rounded, size: 19),
+              label: const Text('Add First User'),
+            )
+          : null,
     );
   }
 
   Widget _buildNoResultsState(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.xxl),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _stateIcon(
-              context,
-              Icons.search_off_rounded,
-              colors.onSurfaceVariant,
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Text(
-              'No Matching Users',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Try a different name, email, role, department, or employee ID.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-            ),
-          ],
-        ),
+    return AppEmptyState(
+      icon: Icons.search_off_rounded,
+      title: 'No matching users',
+      message:
+          'Nothing matches "${_searchQuery.trim()}". Try a different name, '
+          'email, role, department or employee ID.',
+      action: OutlinedButton.icon(
+        onPressed: _clearSearch,
+        icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+        label: const Text('Clear Search'),
       ),
     );
   }
@@ -1401,67 +1557,6 @@ class _UsersScreenState extends State<UsersScreen> {
                 ),
               ],
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildErrorState(BuildContext context, String error) {
-    final colors = Theme.of(context).colorScheme;
-    final brightness = Theme.of(context).brightness;
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _stateIcon(context, Icons.cloud_off_rounded, colors.error),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Unable to Load Users',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'An error occurred while loading users from Firestore.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(AppSpacing.md),
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.error, brightness),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                  border: Border.all(
-                    color: colors.error.withValues(alpha: 0.25),
-                  ),
-                ),
-                child: SelectableText(
-                  error,
-                  style: TextStyle(
-                    color: AppColors.onTint(colors.error, brightness),
-                    fontSize: 12.5,
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              FilledButton.icon(
-                onPressed: () {
-                  context.read<UserProvider>().listenToUsers(
-                    forceRestart: true,
-                  );
-                },
-                icon: const Icon(Icons.refresh_rounded, size: 19),
-                label: const Text('Try Again'),
-              ),
-            ],
           ),
         ),
       ),
@@ -1730,7 +1825,7 @@ class _UsersScreenState extends State<UsersScreen> {
       return;
     }
 
-    final currentRole = user.role.trim().toLowerCase();
+    final currentRole = user.effectiveRole;
 
     String selectedRole = currentRole == 'admin' ? 'admin' : 'user';
 
@@ -1786,7 +1881,7 @@ class _UsersScreenState extends State<UsersScreen> {
 
     if (result == null ||
         result.trim().isEmpty ||
-        result.toLowerCase() == currentRole) {
+        PermissionService.normalizeRole(result) == currentRole) {
       return;
     }
 
@@ -1804,6 +1899,63 @@ class _UsersScreenState extends State<UsersScreen> {
       contentPadding: EdgeInsets.zero,
       title: Text(title),
       value: value,
+    );
+  }
+
+  /// Admits a self-registered account (status 'pending' -> 'active').
+  Future<void> _confirmActivatePendingAccount(
+    BuildContext context,
+    UserProvider provider,
+    UserModel user,
+  ) async {
+    if (!provider.canActivateUser(user)) {
+      _showErrorSnackBar(context, 'You cannot activate this account.');
+      return;
+    }
+
+    final name = user.fullName.trim().isEmpty
+        ? (user.email.trim().isEmpty ? 'this account' : user.email.trim())
+        : '"${user.fullName.trim()}"';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Activate Account?'),
+          content: Text(
+            '$name registered itself and currently has no access. '
+            'Activating it lets the account sign in as a User: read all '
+            'inventory, add assets, Bazaars and categories, and submit '
+            'requests.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(false);
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(true);
+              },
+              child: const Text('Activate'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || confirmed != true) {
+      return;
+    }
+
+    await _performUserAction(
+      action: () {
+        return provider.activateUser(user.uid);
+      },
+      successMessage: 'Account activated.',
+      failurePrefix: 'Unable to activate the account',
     );
   }
 
@@ -1834,9 +1986,9 @@ class _UsersScreenState extends State<UsersScreen> {
       return;
     }
 
-    final currentStatus = user.status.trim().toLowerCase();
+    final currentStatus = PermissionService.normalizeStatus(user.status);
 
-    if (currentStatus == newStatus.toLowerCase()) {
+    if (currentStatus == PermissionService.normalizeStatus(newStatus)) {
       return;
     }
 
@@ -1955,7 +2107,7 @@ class _UsersScreenState extends State<UsersScreen> {
         );
     } catch (e) {
       if (!context.mounted) return;
-      _showErrorSnackBar(context, e.toString().replaceFirst('Exception: ', ''));
+      _showErrorSnackBar(context, _friendlyUserError(e));
     }
   }
 
@@ -2066,7 +2218,7 @@ class _UsersScreenState extends State<UsersScreen> {
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
-            content: Text('$failurePrefix: $e'),
+            content: Text('$failurePrefix: ${_friendlyUserError(e)}'),
             behavior: SnackBarBehavior.floating,
             backgroundColor: errorColor,
           ),
@@ -2088,65 +2240,40 @@ class _UsersScreenState extends State<UsersScreen> {
       );
   }
 
-  bool _isSuperAdminRole(String role) {
-    final normalized = role.trim().toLowerCase();
+  // Roles are read exactly as PermissionService (and the Firestore rules)
+  // read them: trim + lower case, then one of the three canonical values.
+  // A stored 'Administrator' is an unknown role with no access, so it must
+  // not be shown - or treated - as an Admin here either.
 
-    return normalized == 'super admin' ||
-        normalized == 'superadmin' ||
-        normalized == 'super_admin';
+  bool _isSuperAdminRole(String role) {
+    return PermissionService.isSuperAdmin(role);
   }
 
   bool _isAdminRole(String role) {
-    return role.trim().toLowerCase() == 'admin';
+    return PermissionService.isAdmin(role);
   }
 
   bool _isUserRole(String role) {
-    final normalized = role.trim().toLowerCase();
-
-    return normalized == 'user' ||
-        normalized == 'normal user' ||
-        normalized == 'normal_user';
+    return PermissionService.isUser(role);
   }
 
   String _displayRole(String role) {
-    switch (role.trim().toLowerCase()) {
-      case 'super admin':
-      case 'superadmin':
-      case 'super_admin':
-        return 'Super Admin';
-
-      case 'admin':
-        return 'Admin';
-
-      case 'user':
-      case 'normal user':
-      case 'normal_user':
-        return 'User';
-
-      default:
-        return role.trim().isEmpty ? 'User' : role.trim();
-    }
+    return PermissionService.roleLabel(role);
   }
 
   bool _isActiveStatus(String status) {
-    final normalized = status.trim().toLowerCase();
-
-    return normalized == 'active' || normalized == 'approved';
+    return PermissionService.isActiveStatus(status);
   }
 
   Color _roleColor(BuildContext context, String role) {
-    switch (role.trim().toLowerCase()) {
-      case 'super admin':
-      case 'superadmin':
-      case 'super_admin':
+    switch (PermissionService.normalizeRole(role)) {
+      case PermissionService.superAdminRole:
         return AppColors.bazaar;
 
-      case 'admin':
+      case PermissionService.adminRole:
         return AppColors.assigned;
 
-      case 'user':
-      case 'normal user':
-      case 'normal_user':
+      case PermissionService.userRole:
         return AppColors.quantity;
 
       default:
@@ -2218,6 +2345,14 @@ class _EditUserProfileDialogState extends State<_EditUserProfileDialog> {
     _ProfileChoice('blocked', 'Blocked'),
   ];
 
+  /// 'Pending' is offered only while the account really is pending, so the
+  /// field shows what is stored instead of leaving nothing selected.
+  List<_ProfileChoice> get _statusChoicesForUser => [
+    ..._statusChoices,
+    if (widget.user.isPending)
+      const _ProfileChoice('pending', 'Pending activation'),
+  ];
+
   static const List<_ProfileChoice> _roleChoices = [
     _ProfileChoice('user', 'User'),
     _ProfileChoice('admin', 'Admin'),
@@ -2273,43 +2408,31 @@ class _EditUserProfileDialogState extends State<_EditUserProfileDialog> {
     super.dispose();
   }
 
-  /// Maps a stored status onto one of the three editable values, or null when
-  /// the document holds something the editor does not represent.
+  /// Maps a stored status onto one of the editable values, or null when the
+  /// document holds something the editor does not represent.
   String? _normalizedStatus(String status) {
-    final value = status.trim().toLowerCase();
+    final value = PermissionService.normalizeStatus(status);
 
-    if (value == 'active' || value == 'approved') {
+    if (PermissionService.isActiveStatus(value)) {
       return 'active';
     }
 
-    if (value == 'inactive' || value == 'blocked') {
+    if (value == 'inactive' || value == 'blocked' || value == 'pending') {
       return value;
     }
 
     return null;
   }
 
+  /// The stored role, or null when it is not one of the three: an unknown role
+  /// must not open the editor on a value the account does not actually have.
   String? _normalizedRole(String role) {
-    final value = widget.user.effectiveRole;
+    final value = PermissionService.normalizeRole(role);
 
-    if (value.isNotEmpty) {
-      return value;
-    }
-
-    final fallback = role.trim().toLowerCase().replaceAll(' ', '_');
-
-    if (fallback == 'user' || fallback == 'admin' || fallback == 'super_admin') {
-      return fallback;
-    }
-
-    return null;
+    return PermissionService.isMainRole(value) ? value : null;
   }
 
-  String _cleanError(Object error) {
-    final message = error.toString().replaceFirst('Exception: ', '').trim();
-
-    return message.isEmpty ? 'Something went wrong. Please try again.' : message;
-  }
+  String _cleanError(Object error) => _friendlyUserError(error);
 
   String? _nameValidator(String? value) {
     final text = (value ?? '').trim();
@@ -2609,7 +2732,7 @@ class _EditUserProfileDialogState extends State<_EditUserProfileDialog> {
                       context,
                       label: 'Account Status',
                       icon: Icons.verified_user_outlined,
-                      choices: _statusChoices,
+                      choices: _statusChoicesForUser,
                       selected: _selectedStatus,
                       onSelected: (value) {
                         setState(() {

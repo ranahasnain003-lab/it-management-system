@@ -29,15 +29,58 @@ const TOOL_DESCRIPTION =
 /**
  * The model.
  *
- * `gemini-3.6-flash` is a current, stable Flash model listed as free of charge
- * on the Gemini API pricing page, and described for "general agentic and
- * everyday tasks" - which is what answering questions about a page of
- * inventory facts is. Overridable at deploy time with AI_MODEL, so moving to
- * another free Flash model never needs a code change.
+ * Chosen by measurement on 2026-09-27, and the measurement that decides it is
+ * the free tier's DAILY request allowance, which is counted per model
+ * (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`):
+ *
+ *   gemini-3.6-flash       20 requests/day   (measured, then exhausted)
+ *   gemini-3.8-flash       20 requests/day   (measured, then exhausted)
+ *   gemini-3.5-flash-lite  comfortably more  (26+ in one run, no refusal)
+ *
+ * Twenty questions a day is not an assistant, and it fails with HTTP 429
+ * rather than a wrong answer, so it reads as an outage. The Lite model is the
+ * only free option with usable headroom.
+ *
+ * The cost is real and worth stating: asked an unrecognised multi-record
+ * question - the printers at Head Office, where 8 are working and 8 are
+ * damaged - Lite reported only the damaged ones, while 3.8-flash reported
+ * both. That gap closes when the app supplies its own computed answer, which
+ * it does for every question its on-device engine understands: handed the
+ * grounded figures, Lite answered the same question correctly.
+ *
+ * So: Lite for volume, with the app's own arithmetic as the safety net. To
+ * trade volume back for accuracy on unrecognised questions, set
+ * AI_MODEL = "gemini-3.8-flash" and accept 20 requests a day.
  */
-const DEFAULT_MODEL = 'gemini-3.6-flash';
+const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
+
+/**
+ * Transient refusals: the request was fine, the service was momentarily not.
+ *
+ * The free tier really does return 503 UNAVAILABLE ("this model is currently
+ * experiencing high demand") a good share of the time - often enough that a
+ * single attempt fails more often than it succeeds. Retrying is what makes the
+ * difference between an assistant that answers and one that looks broken.
+ *
+ * 400, 401, 403 and 404 are NOT here on purpose: a bad key, a wrong model or a
+ * malformed body will fail identically however many times it is sent, and
+ * retrying one only burns the caller's deadline.
+ */
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+/** Attempts in total, not retries after the first. */
+const MAX_ATTEMPTS = 3;
+
+/**
+ * Base wait between attempts, multiplied by the attempt number.
+ *
+ * So 600ms then 1200ms: 1.8s of waiting at worst, which leaves the caller's
+ * 20s abort room for the third attempt. Waiting costs no CPU time, so this
+ * stays well inside the free plan's 10ms CPU limit.
+ */
+const RETRY_DELAY_MS = 600;
 
 /**
  * Room for the answer.
@@ -156,25 +199,48 @@ function readGeminiReply(body) {
  */
 async function callModel({ model, apiKey, system, messages, signal }) {
   const url = `${GEMINI_ENDPOINT}/${encodeURIComponent(model)}:generateContent`;
+  const body = JSON.stringify(buildGeminiBody({ system, messages }));
 
-  const response = await fetch(url, {
-    method: 'POST',
-    signal,
-    headers: {
-      'content-type': 'application/json',
-      // Header, never a query parameter: a key in a URL ends up in logs.
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify(buildGeminiBody({ system, messages })),
-  });
+  let lastStatus = 0;
+  let lastDetail = '';
 
-  if (!response.ok) {
-    const error = new Error(`Gemini refused the call (${response.status})`);
-    error.status = response.status;
-    throw error;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const response = await fetch(url, {
+      method: 'POST',
+      signal,
+      headers: {
+        'content-type': 'application/json',
+        // Header, never a query parameter: a key in a URL ends up in logs.
+        'x-goog-api-key': apiKey,
+      },
+      body,
+    });
+
+    if (response.ok) return readGeminiReply(await response.json());
+
+    lastStatus = response.status;
+
+    // The reason, for the log. Read before deciding, because a body can only
+    // be consumed once and a retry uses a fresh response anyway.
+    lastDetail = await response.text().then(
+      (text) => text.slice(0, 200),
+      () => '',
+    );
+
+    const worthRetrying =
+      RETRYABLE_STATUSES.has(response.status) && attempt < MAX_ATTEMPTS;
+
+    if (!worthRetrying) break;
+
+    // Flat, short waits. The caller aborts the whole thing at 15s, so the
+    // budget has to leave room for the attempt that follows the wait.
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
   }
 
-  return readGeminiReply(await response.json());
+  const error = new Error(`Gemini refused the call (${lastStatus})`);
+  error.status = lastStatus;
+  error.detail = lastDetail;
+  throw error;
 }
 
 export {
@@ -182,6 +248,9 @@ export {
   TOOL_DESCRIPTION,
   DEFAULT_MODEL,
   GEMINI_ENDPOINT,
+  RETRYABLE_STATUSES,
+  MAX_ATTEMPTS,
+  RETRY_DELAY_MS,
   MAX_OUTPUT_TOKENS,
   TEMPERATURE,
   selectModel,

@@ -22,6 +22,9 @@ import 'core/providers/log_provider.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/providers/deployment_provider.dart';
 import 'core/providers/bazaar_provider.dart';
+import 'core/providers/category_provider.dart';
+import 'core/ai/local/local_ai_provider.dart';
+import 'core/ai/local/local_ai_provider_context_service.dart';
 
 /// Development/testing only: host of the Firebase Local Emulator Suite
 /// (e.g. `--dart-define=FIREBASE_EMULATOR_HOST=localhost`). Empty by default,
@@ -120,10 +123,10 @@ Future<void> main() async {
   // routing decision. On the web this restore is asynchronous; without
   // waiting, a browser refresh would briefly look signed out and bounce a
   // signed-in user to the login page. Resolves immediately on Android.
-  await FirebaseAuth.instance
-      .authStateChanges()
-      .first
-      .timeout(const Duration(seconds: 10), onTimeout: () => null);
+  await FirebaseAuth.instance.authStateChanges().first.timeout(
+    const Duration(seconds: 10),
+    onTimeout: () => null,
+  );
 
   // ---------------------------------------------------------------------------
   // PUNJAB BAZAAR MASTER DATA
@@ -167,6 +170,39 @@ Future<void> main() async {
         ),
 
         ChangeNotifierProvider<BazaarProvider>(create: (_) => BazaarProvider()),
+
+        // The asset category catalogue. It follows Firebase's auth state
+        // directly so that signing out - by any route - drops the catalogue
+        // before the next account can see it, without depending on the
+        // account-change handler in App having run.
+        ChangeNotifierProvider<CategoryProvider>(
+          create: (_) => CategoryProvider()
+            ..attachUserStream(
+              FirebaseAuth.instance.authStateChanges().map((user) => user?.uid),
+            ),
+        ),
+
+        // The Local AI Assistant. It follows Firebase's auth state directly so
+        // that signing out - by any route - throws away the conversation
+        // before the next person can see it. Its inventory data comes from
+        // the providers above, which already run under the signed-in
+        // account's own permissions and Firestore rules.
+        ChangeNotifierProvider<LocalAiProvider>(
+          create: (context) =>
+              LocalAiProvider(
+                contextService: ProviderInventoryContextService(
+                  assets: context.read<AssetProvider>(),
+                  bazaars: context.read<BazaarProvider>(),
+                  deployments: context.read<DeploymentProvider>(),
+                  users: context.read<UserProvider>(),
+                  requests: context.read<RequestProvider>(),
+                ),
+              )..attachUserStream(
+                FirebaseAuth.instance.authStateChanges().map(
+                  (user) => user?.uid,
+                ),
+              ),
+        ),
       ],
       child: const App(),
     ),

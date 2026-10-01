@@ -15,9 +15,6 @@ import 'core/providers/request_provider.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/providers/user_provider.dart';
 import 'core/routes/app_router.dart';
-import 'core/services/bazaar_service.dart';
-import 'core/services/deployment_service.dart';
-import 'core/services/user_service.dart';
 import 'core/theme/app_theme.dart';
 
 class App extends StatefulWidget {
@@ -38,9 +35,6 @@ class _AppState extends State<App> {
 
   // Prevents repeated sign-out attempts for the same account.
   String? _signingOutUid;
-
-  // Bazaar master data is restored at most once per Super Admin session.
-  String? _seededForUid;
 
   late UserProvider _userProvider;
   late AuthProvider _authProvider;
@@ -133,6 +127,9 @@ class _AppState extends State<App> {
     final profile = _userProvider.currentUserProfile;
 
     if (profile != null && profile.uid == uid) {
+      // A self-registered account stays 'pending' until a manager activates
+      // it, so an inactive profile is signed out here instead of being
+      // silently repaired.
       if (!profile.isActive) {
         _signOut(
           uid,
@@ -141,12 +138,6 @@ class _AppState extends State<App> {
               : 'Your account is ${profile.status.trim().toLowerCase()}. '
                     'Please contact the Super Admin.',
         );
-        return;
-      }
-
-      if (_userProvider.isSuperAdmin && _seededForUid != uid) {
-        _seededForUid = uid;
-        _restoreBazaarMasterData();
       }
 
       return;
@@ -175,32 +166,6 @@ class _AppState extends State<App> {
       await _authProvider.logout();
     } catch (e) {
       debugPrint('Session sign-out failed: $e');
-    }
-  }
-
-  Future<void> _restoreBazaarMasterData() async {
-    try {
-      final added = await BazaarService().seedPunjabBazaars();
-
-      debugPrint('Bazaar master data check completed. Restored: $added');
-    } catch (e) {
-      debugPrint('Bazaar master data check failed: $e');
-    }
-
-    try {
-      final standardized = await UserService().standardizeLegacyProfiles();
-
-      debugPrint('Profile standardization completed. Updated: $standardized');
-    } catch (e) {
-      debugPrint('Profile standardization failed: $e');
-    }
-
-    try {
-      final migrated = await DeploymentService().backfillMovementOwners();
-
-      debugPrint('Movement owner check completed. Updated: $migrated');
-    } catch (e) {
-      debugPrint('Movement owner check failed: $e');
     }
   }
 

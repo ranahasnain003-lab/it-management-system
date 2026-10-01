@@ -1,14 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/providers/deployment_provider.dart';
 import '../../core/providers/log_provider.dart';
 import '../../core/providers/request_provider.dart';
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 import '../export/table_export.dart';
 import '../widgets/web_common.dart';
 import '../widgets/web_data_table.dart';
 import 'movement_kind.dart';
+
+/// [cleanError] passes an unrecognised failure through verbatim, so a raw
+/// platform code (`[cloud_firestore/...]`) or a very long internal message
+/// could reach the screen. The mapped, business-readable sentences are the
+/// point of the helper and are kept; only those two cases are replaced.
+String _friendlyError(Object error) {
+  final cleaned = cleanError(error);
+
+  return cleaned.startsWith('[') || cleaned.length > 180
+      ? 'please try again.'
+      : cleaned;
+}
 
 class _LogEntry {
   const _LogEntry({
@@ -51,6 +66,18 @@ class WebActivityLogsPage extends StatefulWidget {
 }
 
 class _WebActivityLogsPageState extends State<WebActivityLogsPage> {
+  /// How long typing has to pause before the table is filtered again.
+  ///
+  /// Filtering walks every derived entry - movements, requests, approvals and
+  /// audit records together - and rebuilds every visible row, so doing it per
+  /// keystroke made a long log stutter under fast typing. Short enough that
+  /// the results still feel immediate.
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
+
+  final TextEditingController _search = TextEditingController();
+
+  Timer? _searchTimer;
+
   String _query = '';
   String _category = 'all';
 
@@ -62,6 +89,35 @@ class _WebActivityLogsPageState extends State<WebActivityLogsPage> {
     // route guard guarantees for this page.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) context.read<LogProvider>().listenToLogs();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Holds the newest text and applies it once typing stops, so the filter
+  /// runs on the final query rather than on every prefix of it.
+  void _onQueryChanged(String value) {
+    _searchTimer?.cancel();
+    _searchTimer = Timer(_searchDebounce, () {
+      if (!mounted || value == _query) return;
+      setState(() => _query = value);
+    });
+  }
+
+  /// Resets everything the toolbar can hide rows with. The pending debounce is
+  /// dropped first, otherwise a keystroke from just before the tap would put
+  /// the search term straight back.
+  void _clearFilters() {
+    _searchTimer?.cancel();
+    _search.clear();
+    setState(() {
+      _query = '';
+      _category = 'all';
     });
   }
 
@@ -129,6 +185,14 @@ class _WebActivityLogsPageState extends State<WebActivityLogsPage> {
     final loading = (movements.isLoading && movements.deployments.isEmpty) ||
         (requests.isLoading && requests.requests.isEmpty);
 
+    // Every source failed and nothing arrived: that is a failure to report,
+    // not a system that has done nothing yet.
+    final failed = entries.isEmpty &&
+        !loading &&
+        (movements.error != null ||
+            audit.errorMessage != null ||
+            requests.errorMessage != null);
+
     return WebPage(
       title: 'Activity Logs',
       subtitle: 'Stock movements, requests, approvals and administrative changes, taken from the permanent records.',
@@ -151,41 +215,101 @@ class _WebActivityLogsPageState extends State<WebActivityLogsPage> {
       children: [
         WebToolbar(
           children: [
-            WebSearchField(hint: 'Search user, action, asset, location…', onChanged: (v) => setState(() => _query = v)),
+            WebSearchField(
+              controller: _search,
+              hint: 'Search user, action, asset, location…',
+              onChanged: _onQueryChanged,
+            ),
             WebFilterDropdown<String>(
               label: 'Category',
               value: _category,
               items: const {'all': 'All activity', 'Stock movement': 'Stock movements', 'Request': 'Requests', 'Approval': 'Approvals / rejections', 'Administration': 'Administration (roles, handovers)'},
               onChanged: (v) => setState(() => _category = v),
             ),
+            // Offered only while something is actually hiding rows, so the
+            // toolbar stays as it was in the common case. Driven from the
+            // controller rather than from the debounced query, so it appears
+            // and clears on the keystroke instead of a quarter second later.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _search,
+              builder: (context, value, _) {
+                final filtered =
+                    value.text.trim().isNotEmpty || _category != 'all';
+
+                if (!filtered) return const SizedBox.shrink();
+
+                return TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                  label: const Text('Clear filters'),
+                );
+              },
+            ),
           ],
         ),
-        if (movements.error != null)
-          _ErrorBanner('Movements could not be loaded: ${cleanError(movements.error!)}'),
-        if (audit.errorMessage != null)
-          _ErrorBanner('Audit log could not be loaded: ${cleanError(audit.errorMessage!)}'),
-        if (requests.errorMessage != null)
-          _ErrorBanner('Requests could not be loaded: ${cleanError(requests.errorMessage!)}'),
-        if (loading)
-          const WebLoadingState(message: 'Loading activity...')
-        else
-          WebDataTable<_LogEntry>(
-            rows: rows,
-            initialSortColumn: 0,
-            initialSortAscending: false,
-            initialRowsPerPage: 50,
-            emptyMessage: 'No activity matches the filters.',
-            columns: [
-              WebColumn(label: 'Date / Time', cell: (e) => _DateTimeCell(e.time), sortValue: (e) => e.time?.millisecondsSinceEpoch),
-              WebColumn(label: 'User', cell: (e) => _PlainCell(e.user.isEmpty ? '—' : e.user, strong: e.user.isNotEmpty), sortValue: (e) => e.user.toLowerCase()),
-              WebColumn(label: 'Action', minWidth: 220, cell: (e) => _ActionCell(action: e.action, category: e.category), sortValue: (e) => e.action),
-              WebColumn(label: 'Asset', minWidth: 150, cell: (e) => _PlainCell(e.asset.isEmpty ? '—' : e.asset, maxWidth: 240), sortValue: (e) => e.asset.toLowerCase()),
-              WebColumn(label: 'Source', cell: (e) => _PlainCell(e.source.isEmpty ? '—' : e.source, muted: true)),
-              WebColumn(label: 'Destination', cell: (e) => _PlainCell(e.destination.isEmpty ? '—' : e.destination, muted: true)),
-              WebColumn(label: 'Qty', numeric: true, cell: (e) => Text(e.quantity == null ? '—' : '${e.quantity}', style: const TextStyle(fontWeight: FontWeight.w600, fontFeatures: [FontFeature.tabularFigures()])), sortValue: (e) => e.quantity),
-              WebColumn(label: 'Details', minWidth: 180, cell: (e) => ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: Text(e.details.isEmpty ? '—' : e.details, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant)))),
-            ],
-          ),
+        // Partial failures keep their own banner: the log is built from three
+        // independent sources, and losing one of them while the other two
+        // arrived is worth naming above the rows that did load. A total
+        // failure is reported by the error state below instead, so the page
+        // never shows a banner and an empty table at the same time.
+        if (entries.isNotEmpty) ...[
+          if (movements.error != null)
+            _ErrorBanner('Movements could not be loaded: ${_friendlyError(movements.error!)}'),
+          if (audit.errorMessage != null)
+            _ErrorBanner('Audit log could not be loaded: ${_friendlyError(audit.errorMessage!)}'),
+          if (requests.errorMessage != null)
+            _ErrorBanner('Requests could not be loaded: ${_friendlyError(requests.errorMessage!)}'),
+        ],
+        // One crossfade between the three things this page can show. A failure
+        // is drawn as a failure, never as a quiet system with nothing in its
+        // log - the table's own empty state says that instead.
+        AppStateSwitcher(
+          child: failed
+              ? SizedBox(
+                  key: const ValueKey('error'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppErrorState(
+                      title: 'Unable to load the activity log',
+                      message: 'The permanent records this page is built from '
+                          'could not be read. Nothing has been lost.',
+                      // Re-runs exactly the subscriptions that feed this page,
+                      // each of them the provider's own load path.
+                      onRetry: () {
+                        audit.listenToLogs();
+                        movements.listenToDeployments();
+                        requests.listenToRequests(forceRestart: true);
+                      },
+                    ),
+                  ),
+                )
+              : loading
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: double.infinity,
+                  child: WebTableSkeleton(columns: 8),
+                )
+              : WebDataTable<_LogEntry>(
+                  key: const ValueKey('rows'),
+                  rows: rows,
+                  initialSortColumn: 0,
+                  initialSortAscending: false,
+                  initialRowsPerPage: 50,
+                  emptyMessage: entries.isEmpty
+                      ? 'Nothing has been recorded yet.'
+                      : 'No activity matches the filters.',
+                  columns: [
+                    WebColumn(label: 'Date / Time', cell: (e) => _DateTimeCell(e.time), sortValue: (e) => e.time?.millisecondsSinceEpoch),
+                    WebColumn(label: 'User', cell: (e) => _PlainCell(e.user.isEmpty ? '—' : e.user, strong: e.user.isNotEmpty), sortValue: (e) => e.user.toLowerCase()),
+                    WebColumn(label: 'Action', minWidth: 220, cell: (e) => _ActionCell(action: e.action, category: e.category), sortValue: (e) => e.action),
+                    WebColumn(label: 'Asset', minWidth: 150, cell: (e) => _PlainCell(e.asset.isEmpty ? '—' : e.asset, maxWidth: 240), sortValue: (e) => e.asset.toLowerCase()),
+                    WebColumn(label: 'Source', cell: (e) => _PlainCell(e.source.isEmpty ? '—' : e.source, muted: true)),
+                    WebColumn(label: 'Destination', cell: (e) => _PlainCell(e.destination.isEmpty ? '—' : e.destination, muted: true)),
+                    WebColumn(label: 'Qty', numeric: true, cell: (e) => Text(e.quantity == null ? '—' : '${e.quantity}', style: const TextStyle(fontWeight: FontWeight.w600, fontFeatures: [FontFeature.tabularFigures()])), sortValue: (e) => e.quantity),
+                    WebColumn(label: 'Details', minWidth: 180, cell: (e) => ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: Text(e.details.isEmpty ? '—' : e.details, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant)))),
+                  ],
+                ),
+        ),
       ],
     );
   }

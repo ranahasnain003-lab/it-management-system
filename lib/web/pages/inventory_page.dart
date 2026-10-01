@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -5,9 +7,12 @@ import 'package:provider/provider.dart';
 import '../../core/assets/screens/add_asset_screen.dart';
 import '../../core/assets/screens/transfer_asset_screen.dart';
 import '../../core/providers/asset_provider.dart';
+import '../../core/providers/category_provider.dart';
 import '../../core/providers/user_provider.dart';
 import '../../core/requests/screens/create_request_screen.dart';
 import '../../core/services/deployment_service.dart';
+import '../../core/services/permission_service.dart';
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 import '../../models/asset_model.dart';
 import '../../models/deployment_model.dart';
@@ -72,9 +77,34 @@ class WebInventoryPage extends StatefulWidget {
 }
 
 class _WebInventoryPageState extends State<WebInventoryPage> {
+  /// How long typing has to pause before the table is filtered again.
+  ///
+  /// Filtering walks every asset and then rebuilds every visible row, so
+  /// doing it per keystroke made a long inventory stutter under fast typing.
+  /// Short enough that the results still feel immediate.
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
+
+  Timer? _searchTimer;
+
   String _query = '';
   String _category = 'All';
   String _status = 'All';
+
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Holds the newest text and applies it once typing stops, so the filter
+  /// runs on the final query rather than on every prefix of it.
+  void _onQueryChanged(String value) {
+    _searchTimer?.cancel();
+    _searchTimer = Timer(_searchDebounce, () {
+      if (!mounted || value == _query) return;
+      setState(() => _query = value);
+    });
+  }
 
   bool _matchesView(AssetProvider provider, AssetModel asset) {
     final group = statusGroup(asset.status);
@@ -130,10 +160,28 @@ class _WebInventoryPageState extends State<WebInventoryPage> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<AssetProvider>();
-    final users = context.watch<UserProvider>();
-    final isManager = users.isSuperAdmin || users.isAdmin;
 
-    final categories = <String>{for (final a in provider.assets) a.category}.toList()..sort();
+    // Only the signed-in role decides what this page offers; the user LIST
+    // that UserProvider also publishes is not read here, so the page does not
+    // rebuild when it changes. The role getters stay in the provider, so the
+    // role logic itself is untouched.
+    final (isSuperAdmin, isAdmin, role) = context
+        .select<UserProvider, (bool, bool, String)>(
+          (users) => (users.isSuperAdmin, users.isAdmin, users.currentUserRole),
+        );
+
+    final isManager = isSuperAdmin || isAdmin;
+
+    // A User may add inventory now; only changing it afterwards stays with the
+    // managers.
+    final canAddAsset = PermissionService.canAddAsset(role);
+
+    // The same merged vocabulary the Add Asset form offers: the catalogue plus
+    // every category already in use on a visible asset, so a category added a
+    // moment ago can be filtered on straight away.
+    final categories = context.watch<CategoryProvider>().mergedNames([
+      for (final a in provider.assets) a.category,
+    ]);
     final statuses = <String>{for (final a in provider.assets) a.status}.toList()..sort();
 
     final rows = _filtered(provider);
@@ -142,7 +190,7 @@ class _WebInventoryPageState extends State<WebInventoryPage> {
       title: widget.view.title,
       subtitle: isManager
           ? 'Live inventory shared with the Android app'
-          : 'Inventory of your assigned Admin. Changes are submitted as requests.',
+          : 'Organisation inventory. Changes to an asset are submitted as requests.',
       actions: [
         OutlinedButton.icon(
           onPressed: rows.isEmpty ? null : () => _export(context, provider, rows),
@@ -155,7 +203,7 @@ class _WebInventoryPageState extends State<WebInventoryPage> {
             icon: const Icon(Icons.upload_file_rounded),
             label: const Text('Import'),
           ),
-        if (isManager)
+        if (canAddAsset)
           FilledButton.icon(
             onPressed: () => showWebFormDialog(context, child: const AddAssetScreen()),
             icon: const Icon(Icons.add_rounded),
@@ -167,7 +215,7 @@ class _WebInventoryPageState extends State<WebInventoryPage> {
           children: [
             WebSearchField(
               hint: 'Search ID, name, serial, brand, location…',
-              onChanged: (v) => setState(() => _query = v),
+              onChanged: _onQueryChanged,
             ),
             WebFilterDropdown<String>(
               label: 'Category',
@@ -183,105 +231,184 @@ class _WebInventoryPageState extends State<WebInventoryPage> {
             ),
           ],
         ),
-        if (provider.errorMessage != null && provider.assets.isEmpty)
-          Card(
-            child: WebMessageState(
-              icon: Icons.error_outline_rounded,
-              title: 'Unable to load inventory',
-              message: cleanError(provider.errorMessage!),
-              isError: true,
-            ),
-          )
-        else if (provider.isLoading && provider.assets.isEmpty)
-          const Card(child: WebLoadingState(message: 'Loading inventory...'))
-        else ...[
-          if (rows.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.md),
-              child: Wrap(
-                spacing: AppSpacing.sm,
-                runSpacing: AppSpacing.sm,
-                children: [
-                  _SummaryPill(label: 'Assets', value: rows.length, tone: AppColors.inventory),
-                  _SummaryPill(
-                    label: 'Units',
-                    value: rows.fold<int>(0, (t, a) => t + a.quantity),
-                    tone: AppColors.quantity,
+        // One crossfade between the three things this page can be showing.
+        // A failed read is drawn as a failure with a way out, never as an
+        // empty inventory - the table's own empty state says that instead.
+        AppStateSwitcher(
+          child: provider.errorMessage != null && provider.assets.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('error'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppErrorState(
+                      title: 'Unable to load inventory',
+                      message: cleanError(provider.errorMessage!),
+                      // Re-subscribes within the same scope, so a User still
+                      // sees only their Admin's inventory afterwards.
+                      onRetry: provider.refreshAssets,
+                    ),
                   ),
-                  _SummaryPill(
-                    label: 'Head Office',
-                    value: rows.fold<int>(0, (t, a) => t + provider.headOfficeQuantityFor(a)),
-                    tone: AppColors.headOffice,
-                  ),
-                  _SummaryPill(
-                    label: 'At Bazaars',
-                    value: rows.fold<int>(0, (t, a) => t + provider.deployedQuantityFor(a)),
-                    tone: AppColors.bazaar,
-                  ),
-                  _SummaryPill(
-                    label: 'Assigned',
-                    value: rows.fold<int>(0, (t, a) => t + provider.assignedQuantityFor(a)),
-                    tone: AppColors.assigned,
-                  ),
-                ],
-              ),
-            ),
-          WebDataTable<AssetModel>(
-            rows: rows,
-            initialSortColumn: 1,
-            emptyMessage: provider.assets.isEmpty
-                ? 'No assets in inventory yet.'
-                : 'No assets match the current view and filters.',
-            onRowTap: (asset) => showAssetDetails(context, asset),
-            columns: [
-              WebColumn(label: 'Asset ID', cell: (a) => _MutedText(a.assetId, mono: true), sortValue: (a) => a.assetId.toLowerCase()),
-              WebColumn(
-                label: 'Asset Name',
-                minWidth: 160,
-                cell: (a) => Text(
-                  a.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontWeight: FontWeight.w600, color: Theme.of(context).colorScheme.onSurface),
+                )
+              : provider.isLoading && provider.assets.isEmpty
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: double.infinity,
+                  child: WebTableSkeleton(),
+                )
+              : Column(
+                  key: const ValueKey('rows'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (rows.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: Wrap(
+                          spacing: AppSpacing.sm,
+                          runSpacing: AppSpacing.sm,
+                          children: [
+                            _SummaryPill(
+                              label: 'Assets',
+                              value: rows.length,
+                              tone: AppColors.inventory,
+                            ),
+                            _SummaryPill(
+                              label: 'Units',
+                              value: rows.fold<int>(0, (t, a) => t + a.quantity),
+                              tone: AppColors.quantity,
+                            ),
+                            _SummaryPill(
+                              label: 'Head Office',
+                              value: rows.fold<int>(
+                                0,
+                                (t, a) => t + provider.headOfficeQuantityFor(a),
+                              ),
+                              tone: AppColors.headOffice,
+                            ),
+                            _SummaryPill(
+                              label: 'At Bazaars',
+                              value: rows.fold<int>(
+                                0,
+                                (t, a) => t + provider.deployedQuantityFor(a),
+                              ),
+                              tone: AppColors.bazaar,
+                            ),
+                            _SummaryPill(
+                              label: 'Assigned',
+                              value: rows.fold<int>(
+                                0,
+                                (t, a) => t + provider.assignedQuantityFor(a),
+                              ),
+                              tone: AppColors.assigned,
+                            ),
+                          ],
+                        ),
+                      ),
+                    WebDataTable<AssetModel>(
+                      rows: rows,
+                      initialSortColumn: 1,
+                      emptyMessage: provider.assets.isEmpty
+                          ? 'No assets in inventory yet.'
+                          : 'No assets match the current view and filters.',
+                      onRowTap: (asset) => showAssetDetails(context, asset),
+                      columns: [
+                        WebColumn(
+                          label: 'Asset ID',
+                          cell: (a) => _MutedText(a.assetId, mono: true),
+                          sortValue: (a) => a.assetId.toLowerCase(),
+                        ),
+                        WebColumn(
+                          label: 'Asset Name',
+                          minWidth: 160,
+                          cell: (a) => Text(
+                            a.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                          sortValue: (a) => a.name.toLowerCase(),
+                        ),
+                        WebColumn(
+                          label: 'Category',
+                          cell: (a) => Text(a.category),
+                          sortValue: (a) => a.category.toLowerCase(),
+                        ),
+                        WebColumn(
+                          label: 'Total',
+                          numeric: true,
+                          cell: (a) => _QtyText(a.quantity, strong: true),
+                          sortValue: (a) => a.quantity,
+                        ),
+                        WebColumn(
+                          label: 'Head Office',
+                          numeric: true,
+                          cell: (a) =>
+                              _QtyText(provider.headOfficeQuantityFor(a)),
+                          sortValue: (a) => provider.headOfficeQuantityFor(a),
+                        ),
+                        WebColumn(
+                          label: 'Bazaars',
+                          numeric: true,
+                          cell: (a) => _QtyText(provider.deployedQuantityFor(a)),
+                          sortValue: (a) => provider.deployedQuantityFor(a),
+                        ),
+                        WebColumn(
+                          label: 'Assigned',
+                          numeric: true,
+                          cell: (a) => _QtyText(provider.assignedQuantityFor(a)),
+                          sortValue: (a) => provider.assignedQuantityFor(a),
+                        ),
+                        WebColumn(
+                          label: 'Location',
+                          cell: (a) => Text(a.location.ifEmpty('—')),
+                          sortValue: (a) => a.location.toLowerCase(),
+                        ),
+                        WebColumn(
+                          label: 'Status',
+                          cell: (a) => WebStatusChip(a.status),
+                          sortValue: (a) => a.status.toLowerCase(),
+                        ),
+                        WebColumn(
+                          label: 'Serial No.',
+                          cell: (a) =>
+                              _MutedText(a.serialNumber.ifEmpty('—'), mono: true),
+                        ),
+                        WebColumn(
+                          label: 'Brand / Model',
+                          cell: (a) => Text(
+                            [a.brand, a.model]
+                                .where((v) => v.isNotEmpty)
+                                .join(' ')
+                                .ifEmpty('—'),
+                          ),
+                        ),
+                        WebColumn(
+                          label: 'Condition',
+                          cell: (a) => _MutedText(a.condition.ifEmpty('—')),
+                        ),
+                        if (isSuperAdmin)
+                          WebColumn(
+                            label: 'Owner',
+                            cell: (a) => Text(a.adminName ?? '—'),
+                            sortValue: (a) =>
+                                (a.adminName ?? '').toLowerCase(),
+                          ),
+                        WebColumn(
+                          label: 'Last Updated',
+                          cell: (a) => _MutedText(
+                            formatDateTime(a.lastUpdated ?? a.createdAt),
+                          ),
+                          sortValue: (a) => (a.lastUpdated ?? a.createdAt)
+                              ?.millisecondsSinceEpoch,
+                        ),
+                      ],
+                      actions: (asset) => AssetActionsMenu(asset: asset),
+                    ),
+                  ],
                 ),
-                sortValue: (a) => a.name.toLowerCase(),
-              ),
-              WebColumn(label: 'Category', cell: (a) => Text(a.category), sortValue: (a) => a.category.toLowerCase()),
-              WebColumn(label: 'Total', numeric: true, cell: (a) => _QtyText(a.quantity, strong: true), sortValue: (a) => a.quantity),
-              WebColumn(
-                label: 'Head Office',
-                numeric: true,
-                cell: (a) => _QtyText(provider.headOfficeQuantityFor(a)),
-                sortValue: (a) => provider.headOfficeQuantityFor(a),
-              ),
-              WebColumn(
-                label: 'Bazaars',
-                numeric: true,
-                cell: (a) => _QtyText(provider.deployedQuantityFor(a)),
-                sortValue: (a) => provider.deployedQuantityFor(a),
-              ),
-              WebColumn(
-                label: 'Assigned',
-                numeric: true,
-                cell: (a) => _QtyText(provider.assignedQuantityFor(a)),
-                sortValue: (a) => provider.assignedQuantityFor(a),
-              ),
-              WebColumn(label: 'Location', cell: (a) => Text(a.location.ifEmpty('—')), sortValue: (a) => a.location.toLowerCase()),
-              WebColumn(label: 'Status', cell: (a) => WebStatusChip(a.status), sortValue: (a) => a.status.toLowerCase()),
-              WebColumn(label: 'Serial No.', cell: (a) => _MutedText(a.serialNumber.ifEmpty('—'), mono: true)),
-              WebColumn(label: 'Brand / Model', cell: (a) => Text([a.brand, a.model].where((v) => v.isNotEmpty).join(' ').ifEmpty('—'))),
-              WebColumn(label: 'Condition', cell: (a) => _MutedText(a.condition.ifEmpty('—'))),
-              if (users.isSuperAdmin)
-                WebColumn(label: 'Owner', cell: (a) => Text(a.adminName ?? '—'), sortValue: (a) => (a.adminName ?? '').toLowerCase()),
-              WebColumn(
-                label: 'Last Updated',
-                cell: (a) => _MutedText(formatDateTime(a.lastUpdated ?? a.createdAt)),
-                sortValue: (a) => (a.lastUpdated ?? a.createdAt)?.millisecondsSinceEpoch,
-              ),
-            ],
-            actions: (asset) => AssetActionsMenu(asset: asset),
-          ),
-        ],
+        ),
       ],
     );
   }
@@ -508,9 +635,17 @@ class AssetActionsMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final users = context.watch<UserProvider>();
     final assets = context.read<AssetProvider>();
-    final isManager = users.isSuperAdmin || users.isAdmin;
+
+    // This menu sits in every row, so it listens for the role alone rather
+    // than for the whole UserProvider: the user list it also publishes
+    // changes nothing about which actions a row offers. The candidate list
+    // for an assignment is read when the action runs instead.
+    final (isSuperAdmin, isAdmin) = context.select<UserProvider, (bool, bool)>(
+      (users) => (users.isSuperAdmin, users.isAdmin),
+    );
+
+    final isManager = isSuperAdmin || isAdmin;
 
     return PopupMenuButton<String>(
       tooltip: 'Actions',
@@ -521,8 +656,8 @@ class AssetActionsMenu extends StatelessWidget {
           case 'view':
             showAssetDetails(context, asset);
           case 'edit':
-            // Super Admin: applied directly. Admin: submitted for approval.
-            // Same behaviour and validation as the Android screen.
+            // Super Admin and Admin alike: applied directly, with the same
+            // behaviour and validation as the Android screen.
             await showWebFormDialog(context, child: AddAssetScreen(asset: asset));
           case 'request-edit':
             await showWebFormDialog(
@@ -543,7 +678,9 @@ class AssetActionsMenu extends StatelessWidget {
           case 'status':
             if (context.mounted) await _changeStatus(context, assets);
           case 'assign':
-            if (context.mounted) await _assign(context, assets, users);
+            if (context.mounted) {
+              await _assign(context, assets, context.read<UserProvider>());
+            }
           case 'return-assigned':
             if (context.mounted) await _returnAssigned(context, assets);
           case 'delete':
@@ -553,12 +690,7 @@ class AssetActionsMenu extends StatelessWidget {
       itemBuilder: (context) => [
         _menuItem(context, 'view', Icons.visibility_outlined, 'View details'),
         if (isManager) ...[
-          _menuItem(
-            context,
-            'edit',
-            Icons.edit_outlined,
-            users.isSuperAdmin ? 'Edit asset' : 'Edit (requires approval)',
-          ),
+          _menuItem(context, 'edit', Icons.edit_outlined, 'Edit asset'),
           _menuItem(context, 'transfer', Icons.swap_horiz_rounded, 'Transfer stock'),
           _menuItem(context, 'status', Icons.flag_outlined, 'Change status'),
           _menuItem(context, 'assign', Icons.person_add_alt_outlined, 'Assign to user'),

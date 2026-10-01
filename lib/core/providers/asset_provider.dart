@@ -4,12 +4,19 @@ import 'package:flutter/foundation.dart';
 
 import '../../models/asset_model.dart';
 import '../services/asset_service.dart';
+import '../services/log_service.dart';
 
 class AssetProvider extends ChangeNotifier {
-  AssetProvider({AssetService? assetService})
-    : _assetService = assetService ?? AssetService();
+  AssetProvider({AssetService? assetService, LogService? logService})
+    : _assetService = assetService ?? AssetService(),
+      _logService = logService ?? LogService();
 
   final AssetService _assetService;
+
+  /// Audit trail. Every entry is written after the operation it describes has
+  /// already succeeded, and a failure to write one is swallowed - see
+  /// [LogService.recordActivity].
+  final LogService _logService;
 
   List<AssetModel> _assets = [];
 
@@ -31,11 +38,38 @@ class AssetProvider extends ChangeNotifier {
   // Scope of the most recently started listener (see _startListener).
   String? _listenerScopeKey;
 
+  /// Every figure the dashboards and screens read, worked out in ONE pass
+  /// over the inventory and then reused until the inventory changes.
+  ///
+  /// Each of these used to be its own getter folding over the whole list, and
+  /// a single dashboard build reads about twenty-five of them - so one frame
+  /// walked the inventory twenty-five times, and every unrelated rebuild did
+  /// it again. With a handful of assets that is invisible; with a few
+  /// thousand it is the difference between a smooth screen and a stuttering
+  /// one. The individual getters below still exist and still mean exactly the
+  /// same thing; they just read this snapshot instead of recomputing.
+  ///
+  /// Rebuilt lazily on first read after [_invalidateStats], which every
+  /// change to [_assets] calls.
+  _InventoryStats get _stats => _cachedStats ??= _InventoryStats.of(_assets);
+
+  _InventoryStats? _cachedStats;
+
+  /// The unmodifiable view handed to callers, cached for the same reason: it
+  /// is read from build methods, and a fresh wrapper per read is a fresh
+  /// allocation per frame.
+  List<AssetModel>? _assetsView;
+
+  void _invalidateStats() {
+    _cachedStats = null;
+    _assetsView = null;
+  }
+
   // ===========================================================================
   // GETTERS
   // ===========================================================================
 
-  List<AssetModel> get assets => List.unmodifiable(_assets);
+  List<AssetModel> get assets => _assetsView ??= List.unmodifiable(_assets);
 
   bool get isLoading => _isLoading;
 
@@ -61,35 +95,17 @@ class AssetProvider extends ChangeNotifier {
 
   int get totalAssets => _assets.length;
 
-  int get totalQuantity {
-    return _assets.fold<int>(0, (sum, asset) => sum + _safeQuantity(asset));
-  }
+  int get totalQuantity => _stats.totalQuantity;
 
   // ===========================================================================
   // HEAD OFFICE STOCK
   // ===========================================================================
 
-  int get availableQuantity {
-    return _assets.fold<int>(0, (sum, asset) {
-      if (_isExcludedFromAvailableStock(asset)) {
-        return sum;
-      }
-
-      return sum + _headOfficeAvailableQuantity(asset);
-    });
-  }
+  int get availableQuantity => _stats.availableQuantity;
 
   int get headOfficeStock => availableQuantity;
 
-  int get availableAssets {
-    return _assets.where((asset) {
-      if (_isExcludedFromAvailableStock(asset)) {
-        return false;
-      }
-
-      return _headOfficeAvailableQuantity(asset) > 0;
-    }).length;
-  }
+  int get availableAssets => _stats.availableAssets;
 
   int get headOfficeAssetCount => availableAssets;
 
@@ -97,31 +113,19 @@ class AssetProvider extends ChangeNotifier {
   // ASSIGNED STOCK
   // ===========================================================================
 
-  int get assignedQuantity {
-    return _assets.fold<int>(0, (sum, asset) => sum + _assignedQuantity(asset));
-  }
+  int get assignedQuantity => _stats.assignedQuantity;
 
-  int get assignedAssets {
-    return _assets.where((asset) {
-      return _assignedQuantity(asset) > 0;
-    }).length;
-  }
+  int get assignedAssets => _stats.assignedAssets;
 
   // ===========================================================================
   // BAZAAR / DEPLOYED STOCK
   // ===========================================================================
 
-  int get deployedToBazaarsQuantity {
-    return _assets.fold<int>(0, (sum, asset) => sum + _deployedQuantity(asset));
-  }
+  int get deployedToBazaarsQuantity => _stats.deployedQuantity;
 
   int get deployedQuantity => deployedToBazaarsQuantity;
 
-  int get deployedToBazaarsAssets {
-    return _assets.where((asset) {
-      return _deployedQuantity(asset) > 0;
-    }).length;
-  }
+  int get deployedToBazaarsAssets => _stats.deployedAssets;
 
   // ===========================================================================
   // STOCK CONSISTENCY
@@ -136,15 +140,8 @@ class AssetProvider extends ChangeNotifier {
   /// stay counted there, so every unit is counted exactly once:
   ///
   ///   total = available at HO + unavailable at HO + assigned + at Bazaars
-  int get unavailableAtHeadOfficeQuantity {
-    return _assets.fold<int>(0, (sum, asset) {
-      if (!_isExcludedFromAvailableStock(asset)) {
-        return sum;
-      }
-
-      return sum + _headOfficeAvailableQuantity(asset);
-    });
-  }
+  int get unavailableAtHeadOfficeQuantity =>
+      _stats.unavailableAtHeadOfficeQuantity;
 
   bool get isStockBalanced {
     return totalQuantity ==
@@ -162,73 +159,33 @@ class AssetProvider extends ChangeNotifier {
   // the dashboard never reports more units than exist.
   // ===========================================================================
 
-  int get damagedQuantity {
-    return _assets.fold<int>(0, (sum, asset) {
-      if (_isDamaged(asset)) {
-        return sum + _headOfficeAvailableQuantity(asset);
-      }
+  int get damagedQuantity => _stats.damagedQuantity;
 
-      return sum;
-    });
-  }
-
-  int get damagedAssets {
-    return _assets.where(_isDamaged).length;
-  }
+  int get damagedAssets => _stats.damagedAssets;
 
   // ===========================================================================
   // UNDER REPAIR
   // ===========================================================================
 
-  int get underRepairQuantity {
-    return _assets.fold<int>(0, (sum, asset) {
-      if (_isUnderRepair(asset)) {
-        return sum + _headOfficeAvailableQuantity(asset);
-      }
+  int get underRepairQuantity => _stats.underRepairQuantity;
 
-      return sum;
-    });
-  }
-
-  int get underRepairAssets {
-    return _assets.where(_isUnderRepair).length;
-  }
+  int get underRepairAssets => _stats.underRepairAssets;
 
   // ===========================================================================
   // LOST
   // ===========================================================================
 
-  int get lostQuantity {
-    return _assets.fold<int>(0, (sum, asset) {
-      if (_isLost(asset)) {
-        return sum + _headOfficeAvailableQuantity(asset);
-      }
+  int get lostQuantity => _stats.lostQuantity;
 
-      return sum;
-    });
-  }
-
-  int get lostAssets {
-    return _assets.where(_isLost).length;
-  }
+  int get lostAssets => _stats.lostAssets;
 
   // ===========================================================================
   // DISPOSED / RETIRED
   // ===========================================================================
 
-  int get disposedQuantity {
-    return _assets.fold<int>(0, (sum, asset) {
-      if (_isDisposed(asset)) {
-        return sum + _headOfficeAvailableQuantity(asset);
-      }
+  int get disposedQuantity => _stats.disposedQuantity;
 
-      return sum;
-    });
-  }
-
-  int get disposedAssets {
-    return _assets.where(_isDisposed).length;
-  }
+  int get disposedAssets => _stats.disposedAssets;
 
   // ===========================================================================
   // INVENTORY VALUE
@@ -238,51 +195,13 @@ class AssetProvider extends ChangeNotifier {
     return totalInventoryValue.round();
   }
 
-  double get totalInventoryValue {
-    return _assets.fold<double>(0, (sum, asset) {
-      return sum + (_safeQuantity(asset) * _safePurchasePrice(asset));
-    });
-  }
+  double get totalInventoryValue => _stats.totalValue;
 
-  double get availableInventoryValue {
-    return _assets.fold<double>(0, (sum, asset) {
-      if (_isExcludedFromAvailableStock(asset)) {
-        return sum;
-      }
+  double get availableInventoryValue => _stats.availableValue;
 
-      final quantity = _headOfficeAvailableQuantity(asset);
+  double get deployedInventoryValue => _stats.deployedValue;
 
-      if (quantity <= 0) {
-        return sum;
-      }
-
-      return sum + (quantity * _safePurchasePrice(asset));
-    });
-  }
-
-  double get deployedInventoryValue {
-    return _assets.fold<double>(0, (sum, asset) {
-      final quantity = _deployedQuantity(asset);
-
-      if (quantity <= 0) {
-        return sum;
-      }
-
-      return sum + (quantity * _safePurchasePrice(asset));
-    });
-  }
-
-  double get assignedInventoryValue {
-    return _assets.fold<double>(0, (sum, asset) {
-      final quantity = _assignedQuantity(asset);
-
-      if (quantity <= 0) {
-        return sum;
-      }
-
-      return sum + (quantity * _safePurchasePrice(asset));
-    });
-  }
+  double get assignedInventoryValue => _stats.assignedValue;
 
   // ===========================================================================
   // ALL INVENTORY STREAM
@@ -372,6 +291,7 @@ class AssetProvider extends ChangeNotifier {
       _activeAdminId = null;
       _isUserScoped = true;
       _assets = [];
+      _invalidateStats();
       _isLoading = false;
 
       _setError('Your account is not assigned to an Admin inventory.');
@@ -423,6 +343,7 @@ class AssetProvider extends ChangeNotifier {
     // must never remain visible while a narrower scope is loading.
     if (scopeChanged) {
       _assets = [];
+      _invalidateStats();
     }
 
     _activeAdminId = adminId;
@@ -440,6 +361,8 @@ class AssetProvider extends ChangeNotifier {
         }
 
         _assets = List<AssetModel>.from(data);
+
+        _invalidateStats();
 
         _isLoading = false;
         _errorMessage = null;
@@ -1076,6 +999,19 @@ class AssetProvider extends ChangeNotifier {
   }
 
   // ===========================================================================
+  // ACTION METHODS AND PROVIDER STATE
+  // ===========================================================================
+  //
+  // [isLoading] and [errorMessage] describe the inventory LISTENER only, the
+  // way DeploymentProvider already treats its own. An action that touched them
+  // made every screen watching this provider report the whole inventory as
+  // broken ("Unable to load inventory") because one write or one duplicate
+  // check had failed - and, through AssetScope.isSettling, told the AI
+  // Assistant the inventory was still loading. Actions therefore only rethrow;
+  // their callers already show the reason in a snackbar.
+  // ===========================================================================
+
+  // ===========================================================================
   // DUPLICATE ASSET ID
   // ===========================================================================
 
@@ -1092,21 +1028,10 @@ class AssetProvider extends ChangeNotifier {
       return false;
     }
 
-    try {
-      return await _assetService.checkDuplicateAssetId(
-        assetId,
-        excludeDocumentId: excludeDocumentId,
-      );
-    } catch (e) {
-      if (_disposed) {
-        return false;
-      }
-
-      _errorMessage = _cleanErrorMessage(e);
-      _notifySafely();
-
-      rethrow;
-    }
+    return _assetService.checkDuplicateAssetId(
+      assetId,
+      excludeDocumentId: excludeDocumentId,
+    );
   }
 
   // ===========================================================================
@@ -1121,21 +1046,10 @@ class AssetProvider extends ChangeNotifier {
       return false;
     }
 
-    try {
-      return await _assetService.checkDuplicateSerial(
-        serialNumber,
-        excludeDocumentId: excludeDocumentId,
-      );
-    } catch (e) {
-      if (_disposed) {
-        return false;
-      }
-
-      _errorMessage = _cleanErrorMessage(e);
-      _notifySafely();
-
-      rethrow;
-    }
+    return _assetService.checkDuplicateSerial(
+      serialNumber,
+      excludeDocumentId: excludeDocumentId,
+    );
   }
 
   // ===========================================================================
@@ -1147,34 +1061,16 @@ class AssetProvider extends ChangeNotifier {
       return;
     }
 
-    _isLoading = true;
-    _errorMessage = null;
+    final documentId = await _assetService.addAsset(asset);
 
-    _notifySafely();
-
-    try {
-      await _assetService.addAsset(asset);
-
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = null;
-
-      _notifySafely();
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = _cleanErrorMessage(e);
-
-      _notifySafely();
-
-      rethrow;
-    }
+    await _logService.recordActivity(
+      action: 'Asset added',
+      description:
+          'Added ${asset.name.trim()} (${asset.assetId.trim()}), '
+          '${asset.quantity} unit(s).',
+      module: 'Inventory',
+      targetId: documentId,
+    );
   }
 
   Future<void> addAssetForAdmin({
@@ -1306,34 +1202,15 @@ class AssetProvider extends ChangeNotifier {
       throw Exception('Asset ID is required.');
     }
 
-    _isLoading = true;
-    _errorMessage = null;
+    await _assetService.updateAsset(cleanId, asset);
 
-    _notifySafely();
-
-    try {
-      await _assetService.updateAsset(cleanId, asset);
-
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = null;
-
-      _notifySafely();
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = _cleanErrorMessage(e);
-
-      _notifySafely();
-
-      rethrow;
-    }
+    await _logService.recordActivity(
+      action: 'Asset edited',
+      description:
+          'Edited ${asset.name.trim()} (${asset.assetId.trim()}).',
+      module: 'Inventory',
+      targetId: cleanId,
+    );
   }
 
   Future<void> updateAssetForAdmin({
@@ -1356,38 +1233,19 @@ class AssetProvider extends ChangeNotifier {
       throw Exception('Admin ID is required.');
     }
 
-    _isLoading = true;
-    _errorMessage = null;
+    await _assetService.updateAssetForAdmin(
+      id: cleanId,
+      adminId: cleanAdminId,
+      asset: asset,
+    );
 
-    _notifySafely();
-
-    try {
-      await _assetService.updateAssetForAdmin(
-        id: cleanId,
-        adminId: cleanAdminId,
-        asset: asset,
-      );
-
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = null;
-
-      _notifySafely();
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = _cleanErrorMessage(e);
-
-      _notifySafely();
-
-      rethrow;
-    }
+    await _logService.recordActivity(
+      action: 'Asset edited',
+      description:
+          'Edited ${asset.name.trim()} (${asset.assetId.trim()}).',
+      module: 'Inventory',
+      targetId: cleanId,
+    );
   }
 
   // ===========================================================================
@@ -1405,34 +1263,18 @@ class AssetProvider extends ChangeNotifier {
       throw Exception('Asset ID is required.');
     }
 
-    _isLoading = true;
-    _errorMessage = null;
+    // Read the description BEFORE the delete: afterwards the asset is gone and
+    // the audit entry could only name its document ID.
+    final deleted = _describeForAudit(cleanId);
 
-    _notifySafely();
+    await _assetService.deleteAsset(cleanId);
 
-    try {
-      await _assetService.deleteAsset(cleanId);
-
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = null;
-
-      _notifySafely();
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = _cleanErrorMessage(e);
-
-      _notifySafely();
-
-      rethrow;
-    }
+    await _logService.recordActivity(
+      action: 'Asset deleted',
+      description: 'Deleted $deleted.',
+      module: 'Inventory',
+      targetId: cleanId,
+    );
   }
 
   Future<void> deleteAssetForAdmin({
@@ -1454,37 +1296,33 @@ class AssetProvider extends ChangeNotifier {
       throw Exception('Admin ID is required.');
     }
 
-    _isLoading = true;
-    _errorMessage = null;
+    final deleted = _describeForAudit(cleanAssetId);
 
-    _notifySafely();
+    await _assetService.deleteAssetForAdmin(
+      id: cleanAssetId,
+      adminId: cleanAdminId,
+    );
 
-    try {
-      await _assetService.deleteAssetForAdmin(
-        id: cleanAssetId,
-        adminId: cleanAdminId,
-      );
+    await _logService.recordActivity(
+      action: 'Asset deleted',
+      description: 'Deleted $deleted.',
+      module: 'Inventory',
+      targetId: cleanAssetId,
+    );
+  }
 
-      if (_disposed) {
-        return;
-      }
+  /// How an asset should read in the audit trail, taken from the loaded list.
+  ///
+  /// Falls back to the document ID: an asset that is not in the current scope
+  /// still has to produce an entry rather than no entry at all.
+  String _describeForAudit(String documentId) {
+    final asset = findById(documentId);
 
-      _isLoading = false;
-      _errorMessage = null;
-
-      _notifySafely();
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _isLoading = false;
-      _errorMessage = _cleanErrorMessage(e);
-
-      _notifySafely();
-
-      rethrow;
+    if (asset == null) {
+      return 'asset $documentId';
     }
+
+    return '${asset.name.trim()} (${asset.assetId.trim()})';
   }
 
   // ===========================================================================
@@ -1510,21 +1348,10 @@ class AssetProvider extends ChangeNotifier {
       throw Exception('Status is required.');
     }
 
-    try {
-      await _assetService.updateAssetStatus(
-        assetId: cleanId,
-        status: cleanStatus,
-      );
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _errorMessage = _cleanErrorMessage(e);
-      _notifySafely();
-
-      rethrow;
-    }
+    await _assetService.updateAssetStatus(
+      assetId: cleanId,
+      status: cleanStatus,
+    );
   }
 
   // ===========================================================================
@@ -1550,21 +1377,10 @@ class AssetProvider extends ChangeNotifier {
       throw Exception('User ID is required.');
     }
 
-    try {
-      await _assetService.assignAsset(
-        assetId: cleanAssetId,
-        userId: cleanUserId,
-      );
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _errorMessage = _cleanErrorMessage(e);
-      _notifySafely();
-
-      rethrow;
-    }
+    await _assetService.assignAsset(
+      assetId: cleanAssetId,
+      userId: cleanUserId,
+    );
   }
 
   // ===========================================================================
@@ -1590,21 +1406,10 @@ class AssetProvider extends ChangeNotifier {
       throw Exception('New user ID is required.');
     }
 
-    try {
-      await _assetService.transferAsset(
-        assetId: cleanAssetId,
-        newUserId: cleanUserId,
-      );
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _errorMessage = _cleanErrorMessage(e);
-      _notifySafely();
-
-      rethrow;
-    }
+    await _assetService.transferAsset(
+      assetId: cleanAssetId,
+      newUserId: cleanUserId,
+    );
   }
 
   // ===========================================================================
@@ -1622,18 +1427,7 @@ class AssetProvider extends ChangeNotifier {
       throw Exception('Asset ID is required.');
     }
 
-    try {
-      await _assetService.returnAsset(cleanId);
-    } catch (e) {
-      if (_disposed) {
-        return;
-      }
-
-      _errorMessage = _cleanErrorMessage(e);
-      _notifySafely();
-
-      rethrow;
-    }
+    await _assetService.returnAsset(cleanId);
   }
 
   // ===========================================================================
@@ -1648,7 +1442,7 @@ class AssetProvider extends ChangeNotifier {
   // STOCK CALCULATIONS
   // ===========================================================================
 
-  int _safeQuantity(AssetModel asset) {
+  static int _safeQuantity(AssetModel asset) {
     if (asset.quantity < 0) {
       return 0;
     }
@@ -1656,7 +1450,7 @@ class AssetProvider extends ChangeNotifier {
     return asset.quantity;
   }
 
-  double _safePurchasePrice(AssetModel asset) {
+  static double _safePurchasePrice(AssetModel asset) {
     if (asset.purchasePrice < 0) {
       return 0.0;
     }
@@ -1664,7 +1458,7 @@ class AssetProvider extends ChangeNotifier {
     return asset.purchasePrice;
   }
 
-  int _assignedQuantity(AssetModel asset) {
+  static int _assignedQuantity(AssetModel asset) {
     final total = _safeQuantity(asset);
     final explicit = asset.assignedQuantity;
 
@@ -1679,7 +1473,7 @@ class AssetProvider extends ChangeNotifier {
     return 0;
   }
 
-  int _deployedQuantity(AssetModel asset) {
+  static int _deployedQuantity(AssetModel asset) {
     final total = _safeQuantity(asset);
     final explicit = asset.deployedQuantity;
 
@@ -1694,7 +1488,7 @@ class AssetProvider extends ChangeNotifier {
     return 0;
   }
 
-  int _headOfficeAvailableQuantity(AssetModel asset) {
+  static int _headOfficeAvailableQuantity(AssetModel asset) {
     final total = _safeQuantity(asset);
     final explicit = asset.headOfficeQuantity;
 
@@ -1718,13 +1512,13 @@ class AssetProvider extends ChangeNotifier {
   // STATUS HELPERS
   // ===========================================================================
 
-  bool _isDamaged(AssetModel asset) {
+  static bool _isDamaged(AssetModel asset) {
     final status = asset.status.trim().toLowerCase();
 
     return status == 'damaged' || status == 'damage';
   }
 
-  bool _isUnderRepair(AssetModel asset) {
+  static bool _isUnderRepair(AssetModel asset) {
     final status = asset.status.trim().toLowerCase();
 
     return status == 'under repair' ||
@@ -1733,19 +1527,19 @@ class AssetProvider extends ChangeNotifier {
         status == 'maintenance';
   }
 
-  bool _isLost(AssetModel asset) {
+  static bool _isLost(AssetModel asset) {
     final status = asset.status.trim().toLowerCase();
 
     return status == 'lost' || status == 'missing';
   }
 
-  bool _isDisposed(AssetModel asset) {
+  static bool _isDisposed(AssetModel asset) {
     final status = asset.status.trim().toLowerCase();
 
     return status == 'disposed' || status == 'retired' || status == 'deleted';
   }
 
-  bool _isExcludedFromAvailableStock(AssetModel asset) {
+  static bool _isExcludedFromAvailableStock(AssetModel asset) {
     final status = asset.status.trim().toLowerCase();
 
     return status == 'damaged' ||
@@ -1787,6 +1581,8 @@ class AssetProvider extends ChangeNotifier {
     _cancelListener();
 
     _assets = [];
+
+    _invalidateStats();
     _activeAdminId = null;
     _isUserScoped = false;
     _listenerScopeKey = null;
@@ -1876,4 +1672,170 @@ class AssetImportResult {
   bool get hasErrors => duplicate > 0 || failed > 0;
 
   bool get isSuccessful => total > 0 && successful == total;
+}
+
+// =============================================================================
+// INVENTORY STATISTICS
+// =============================================================================
+
+/// Every inventory figure the app shows, worked out in one pass.
+///
+/// The arithmetic is unchanged - each field is the same definition the
+/// matching [AssetProvider] getter always had, and the comments on those
+/// getters still describe the meaning. What changed is how often it runs:
+/// once per inventory snapshot instead of once per getter per rebuild.
+///
+/// Immutable, so it can be handed around and cached without a copy.
+@immutable
+class _InventoryStats {
+  const _InventoryStats({
+    required this.totalQuantity,
+    required this.availableQuantity,
+    required this.availableAssets,
+    required this.assignedQuantity,
+    required this.assignedAssets,
+    required this.deployedQuantity,
+    required this.deployedAssets,
+    required this.unavailableAtHeadOfficeQuantity,
+    required this.damagedQuantity,
+    required this.damagedAssets,
+    required this.underRepairQuantity,
+    required this.underRepairAssets,
+    required this.lostQuantity,
+    required this.lostAssets,
+    required this.disposedQuantity,
+    required this.disposedAssets,
+    required this.totalValue,
+    required this.availableValue,
+    required this.deployedValue,
+    required this.assignedValue,
+  });
+
+  final int totalQuantity;
+  final int availableQuantity;
+  final int availableAssets;
+  final int assignedQuantity;
+  final int assignedAssets;
+  final int deployedQuantity;
+  final int deployedAssets;
+  final int unavailableAtHeadOfficeQuantity;
+  final int damagedQuantity;
+  final int damagedAssets;
+  final int underRepairQuantity;
+  final int underRepairAssets;
+  final int lostQuantity;
+  final int lostAssets;
+  final int disposedQuantity;
+  final int disposedAssets;
+  final double totalValue;
+  final double availableValue;
+  final double deployedValue;
+  final double assignedValue;
+
+  /// One walk over [assets], reading each asset's stock figures once.
+  factory _InventoryStats.of(List<AssetModel> assets) {
+    var totalQuantity = 0;
+    var availableQuantity = 0;
+    var availableAssets = 0;
+    var assignedQuantity = 0;
+    var assignedAssets = 0;
+    var deployedQuantity = 0;
+    var deployedAssets = 0;
+    var unavailableAtHeadOffice = 0;
+    var damagedQuantity = 0;
+    var damagedAssets = 0;
+    var underRepairQuantity = 0;
+    var underRepairAssets = 0;
+    var lostQuantity = 0;
+    var lostAssets = 0;
+    var disposedQuantity = 0;
+    var disposedAssets = 0;
+    var totalValue = 0.0;
+    var availableValue = 0.0;
+    var deployedValue = 0.0;
+    var assignedValue = 0.0;
+
+    for (final asset in assets) {
+      final quantity = AssetProvider._safeQuantity(asset);
+      final price = AssetProvider._safePurchasePrice(asset);
+      final assigned = AssetProvider._assignedQuantity(asset);
+      final deployed = AssetProvider._deployedQuantity(asset);
+      final headOffice = AssetProvider._headOfficeAvailableQuantity(asset);
+      final unusable = AssetProvider._isExcludedFromAvailableStock(asset);
+
+      totalQuantity += quantity;
+      totalValue += quantity * price;
+
+      if (assigned > 0) {
+        assignedAssets++;
+        assignedValue += assigned * price;
+      }
+      assignedQuantity += assigned;
+
+      if (deployed > 0) {
+        deployedAssets++;
+        deployedValue += deployed * price;
+      }
+      deployedQuantity += deployed;
+
+      // Head Office units count as available only for a usable asset; for
+      // anything damaged, under repair, lost or disposed they count as
+      // unavailable instead, so no unit is counted twice.
+      if (unusable) {
+        unavailableAtHeadOffice += headOffice;
+      } else {
+        availableQuantity += headOffice;
+
+        if (headOffice > 0) {
+          availableAssets++;
+          availableValue += headOffice * price;
+        }
+      }
+
+      // The condition figures are Head Office units only, as the dashboard
+      // has always reported them.
+      if (AssetProvider._isDamaged(asset)) {
+        damagedAssets++;
+        damagedQuantity += headOffice;
+      }
+
+      if (AssetProvider._isUnderRepair(asset)) {
+        underRepairAssets++;
+        underRepairQuantity += headOffice;
+      }
+
+      if (AssetProvider._isLost(asset)) {
+        lostAssets++;
+        lostQuantity += headOffice;
+      }
+
+      if (AssetProvider._isDisposed(asset)) {
+        disposedAssets++;
+        disposedQuantity += headOffice;
+      }
+    }
+
+    return _InventoryStats(
+      totalQuantity: totalQuantity,
+      availableQuantity: availableQuantity,
+      availableAssets: availableAssets,
+      assignedQuantity: assignedQuantity,
+      assignedAssets: assignedAssets,
+      deployedQuantity: deployedQuantity,
+      deployedAssets: deployedAssets,
+      unavailableAtHeadOfficeQuantity: unavailableAtHeadOffice,
+      damagedQuantity: damagedQuantity,
+      damagedAssets: damagedAssets,
+      underRepairQuantity: underRepairQuantity,
+      underRepairAssets: underRepairAssets,
+      lostQuantity: lostQuantity,
+      lostAssets: lostAssets,
+      disposedQuantity: disposedQuantity,
+      disposedAssets: disposedAssets,
+      totalValue: totalValue,
+      availableValue: availableValue,
+      deployedValue: deployedValue,
+      assignedValue: assignedValue,
+    );
+  }
 }

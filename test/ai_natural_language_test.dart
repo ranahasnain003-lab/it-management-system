@@ -135,6 +135,16 @@ InventorySnapshot snapshot({
   List<BazaarModel>? bazaars,
   List<DeploymentModel>? deployments,
   Map<String, String> holders = const <String, String>{},
+  // The categories the app offers. They are records rather than a constant, so
+  // the planner checks a typed category against this plus whatever the visible
+  // assets already use.
+  List<String> categories = const [
+    'Laptop',
+    'Desktop',
+    'Monitor',
+    'Printer',
+    'Switch',
+  ],
 }) {
   final items = assets ?? [asset()];
 
@@ -164,6 +174,7 @@ InventorySnapshot snapshot({
     roleLabel: 'Super Admin',
     scopeNote: '',
     holders: holders,
+    categories: categories,
   );
 }
 
@@ -834,7 +845,10 @@ void main() {
   // =========================================================================
 
   group('permissions are enforced against the account, not the suggestion', () {
-    test('a normal user cannot create an asset however it is phrased', () {
+    // Where the asset is FILED is the executor's business and is covered in
+    // ai_action_mode_test.dart; this only checks that the plan is offered at
+    // all, and offered as the account's own change rather than a request.
+    test('a normal user may create an asset directly', () {
       final plan = planIntent(
         intent('createAsset', newAsset: const {
           'assetId': 'IT-LAP-777',
@@ -846,8 +860,19 @@ void main() {
         who: normalUser,
       )!;
 
-      expect(plan.isProposal, isFalse);
-      expect(plan.message.toLowerCase(), contains('only an admin or super admin'));
+      expect(plan.isProposal, isTrue, reason: plan.message);
+      expect(plan.action!.kind, AssistantActionKind.createAsset);
+      expect(plan.action!.viaRequest, isFalse);
+    });
+
+    test('a normal user may create a Bazaar', () {
+      final plan = planIntent(
+        intent('createBazaar', bazaarName: 'Shahdara Bazaar'),
+        who: normalUser,
+      )!;
+
+      expect(plan.isProposal, isTrue, reason: plan.message);
+      expect(plan.action!.kind, AssistantActionKind.createBazaar);
     });
 
     test('a normal user cannot disable a Bazaar', () {
@@ -876,9 +901,15 @@ void main() {
         superAdmin.assistantCapabilities,
         containsAll(<String>['createAsset', 'createBazaar', 'disableBazaar']),
       );
-      expect(normalUser.assistantCapabilities, isNot(contains('createAsset')));
-      expect(normalUser.assistantCapabilities, isNot(contains('createBazaar')));
+      // A User registers assets and Bazaars itself, files everything else as a
+      // request, and is never offered a change to a Bazaar that exists.
+      expect(normalUser.assistantCapabilities, contains('createAsset'));
+      expect(normalUser.assistantCapabilities, contains('createBazaar'));
       expect(normalUser.assistantCapabilities, contains('sendToBazaar'));
+      expect(
+        normalUser.assistantCapabilities,
+        isNot(contains('disableBazaar')),
+      );
       expect(AssistantPermissions.none.assistantCapabilities, isEmpty);
       // Navigation is never advertised: the model is not allowed to do it.
       for (final who in [superAdmin, normalUser]) {

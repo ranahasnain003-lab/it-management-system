@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../models/deployment_model.dart';
 import '../../services/deployment_service.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
 
 class DeploymentHistoryScreen extends StatefulWidget {
@@ -27,6 +30,12 @@ class _DeploymentHistoryScreenState extends State<DeploymentHistoryScreen> {
 
   final TextEditingController _searchController = TextEditingController();
 
+  /// Re-filtering on every keystroke rebuilt the whole history list. The
+  /// query is applied once typing settles instead; the results are the same.
+  Timer? _searchDebounce;
+
+  static const Duration _searchDelay = Duration(milliseconds: 250);
+
   // Created once; a stream created in build() re-subscribed to the whole
   // movement history on every keystroke and chip tap.
   late Stream<List<DeploymentModel>> _historyStream;
@@ -47,6 +56,9 @@ class _DeploymentHistoryScreenState extends State<DeploymentHistoryScreen> {
 
   @override
   void dispose() {
+    // Cancelled before the controller it reads, so a pending tick cannot
+    // touch a disposed State.
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -112,11 +124,21 @@ class _DeploymentHistoryScreenState extends State<DeploymentHistoryScreen> {
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting &&
               !snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
+            // Shaped like the movement cards that are coming, so the list
+            // does not jump when the history lands.
+            return const AppListSkeleton();
           }
 
           if (snapshot.hasError) {
-            return _buildErrorState(snapshot.error.toString());
+            // Never the raw Firestore text: it names collections and rule
+            // internals, and it means nothing to the person reading it.
+            return AppErrorState(
+              title: 'Could not load the movement history',
+              message: _historyErrorMessage(snapshot.error),
+              onRetry: () => setState(() {
+                _historyStream = _createStream();
+              }),
+            );
           }
 
           final deployments = snapshot.data ?? [];
@@ -422,8 +444,13 @@ class _DeploymentHistoryScreenState extends State<DeploymentHistoryScreen> {
       controller: _searchController,
       textInputAction: TextInputAction.search,
       onChanged: (value) {
-        setState(() {
-          _searchQuery = value;
+        _searchDebounce?.cancel();
+        _searchDebounce = Timer(_searchDelay, () {
+          if (!mounted) return;
+
+          setState(() {
+            _searchQuery = value;
+          });
         });
       },
       decoration: InputDecoration(
@@ -994,81 +1021,28 @@ class _DeploymentHistoryScreenState extends State<DeploymentHistoryScreen> {
   // ERROR
   // ===========================================================================
 
-  Widget _buildErrorState(String error) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
+  /// A failure to read the history, in words the person can act on.
+  ///
+  /// The movement history is readable by every active account, so in practice
+  /// this is a connection problem or an account that is no longer active -
+  /// both worth saying plainly, neither worth quoting Firestore over.
+  static String _historyErrorMessage(Object? error) {
+    final text = error?.toString().toLowerCase() ?? '';
 
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.error, theme.brightness),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.error_outline_rounded,
-                  size: 30,
-                  color: colors.error,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Unable to load deployment history.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: colors.onSurface,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _cleanErrorMessage(error),
-                textAlign: TextAlign.center,
-                style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              FilledButton.icon(
-                onPressed: () {
-                  setState(() {});
-                },
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Retry'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    if (text.contains('permission-denied') || text.contains('unauthenticated')) {
+      return 'Your account is not allowed to read the movement history. '
+          'Sign in again, or ask an administrator to check your account.';
+    }
+
+    if (text.contains('unavailable') ||
+        text.contains('network') ||
+        text.contains('deadline')) {
+      return 'The movement history could not be reached. Check your '
+          'connection and try again.';
+    }
+
+    return 'Something went wrong while reading the movement history. '
+        'Please try again.';
   }
 
-  String _cleanErrorMessage(String error) {
-    final message = error.trim();
-
-    if (message.startsWith('Exception: ')) {
-      return message.substring(11).trim();
-    }
-
-    if (message.contains('permission-denied')) {
-      return 'You do not have permission to view deployment history.';
-    }
-
-    if (message.contains('network-request-failed')) {
-      return 'Network error. Please check your internet connection.';
-    }
-
-    if (message.isEmpty) {
-      return 'An unexpected error occurred.';
-    }
-
-    return message.length > 180 ? 'Please try again.' : message;
-  }
 }

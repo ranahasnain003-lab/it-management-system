@@ -1,14 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/providers/user_provider.dart';
 import '../../core/services/permission_service.dart';
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 import '../../core/users/screens/add_user_screen.dart';
 import '../../models/user_model.dart';
 import '../export/table_export.dart';
 import '../widgets/web_common.dart';
 import '../widgets/web_data_table.dart';
+
+/// [cleanError] passes an unrecognised failure through verbatim, so a raw
+/// platform code (`[cloud_firestore/...]`) or a very long internal message
+/// could reach the screen. The mapped, business-readable sentences are the
+/// point of the helper and are kept; only those two cases are replaced.
+String _friendlyError(Object error) {
+  final cleaned = cleanError(error);
+
+  return cleaned.startsWith('[') || cleaned.length > 180
+      ? 'Something went wrong. Please try again.'
+      : cleaned;
+}
 
 class WebUsersPage extends StatefulWidget {
   const WebUsersPage({super.key});
@@ -18,9 +33,50 @@ class WebUsersPage extends StatefulWidget {
 }
 
 class _WebUsersPageState extends State<WebUsersPage> {
+  /// How long typing has to pause before the table is filtered again.
+  ///
+  /// Filtering walks every account and rebuilds every visible row, so doing
+  /// it per keystroke made a long user list stutter under fast typing. Short
+  /// enough that the results still feel immediate.
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
+
+  final TextEditingController _search = TextEditingController();
+
+  Timer? _searchTimer;
+
   String _query = '';
   String _role = 'all';
   String _status = 'all';
+
+  @override
+  void dispose() {
+    _searchTimer?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Holds the newest text and applies it once typing stops, so the filter
+  /// runs on the final query rather than on every prefix of it.
+  void _onQueryChanged(String value) {
+    _searchTimer?.cancel();
+    _searchTimer = Timer(_searchDebounce, () {
+      if (!mounted || value == _query) return;
+      setState(() => _query = value);
+    });
+  }
+
+  /// Resets everything the toolbar can hide rows with. The pending debounce is
+  /// dropped first, otherwise a keystroke from just before the tap would put
+  /// the search term straight back.
+  void _clearFilters() {
+    _searchTimer?.cancel();
+    _search.clear();
+    setState(() {
+      _query = '';
+      _role = 'all';
+      _status = 'all';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +88,8 @@ class _WebUsersPageState extends State<WebUsersPage> {
     final rows = provider.users.where((u) {
       if (_role != 'all' && u.effectiveRole != _role) return false;
       if (_status == 'active' && !u.isActive) return false;
-      if (_status == 'inactive' && u.isActive) return false;
+      if (_status == 'pending' && !u.isPending) return false;
+      if (_status == 'inactive' && (u.isActive || u.isPending)) return false;
       if (q.isEmpty) return true;
       return [u.name, u.email, u.employeeId, u.department, u.designation, u.role]
           .any((v) => v.toLowerCase().contains(q));
@@ -42,7 +99,8 @@ class _WebUsersPageState extends State<WebUsersPage> {
       title: 'Users',
       subtitle: provider.isSuperAdmin
           ? 'All accounts. Only Super Admin can change roles and account status.'
-          : 'Users assigned to you.',
+          : 'All accounts. You can edit the Users assigned to you and activate '
+                'the ones waiting for approval.',
       actions: [
         OutlinedButton.icon(
           onPressed: rows.isEmpty
@@ -71,7 +129,11 @@ class _WebUsersPageState extends State<WebUsersPage> {
       children: [
         WebToolbar(
           children: [
-            WebSearchField(hint: 'Search name, email, employee ID, department…', onChanged: (v) => setState(() => _query = v)),
+            WebSearchField(
+              controller: _search,
+              hint: 'Search name, email, employee ID, department…',
+              onChanged: _onQueryChanged,
+            ),
             WebFilterDropdown<String>(
               label: 'Role',
               value: _role,
@@ -81,34 +143,83 @@ class _WebUsersPageState extends State<WebUsersPage> {
             WebFilterDropdown<String>(
               label: 'Status',
               value: _status,
-              items: const {'all': 'All', 'active': 'Active', 'inactive': 'Inactive / Blocked'},
+              items: const {
+                'all': 'All',
+                'active': 'Active',
+                // Self-registrations waiting to be admitted: they have no
+                // access at all until somebody activates them.
+                'pending': 'Pending activation',
+                'inactive': 'Inactive / Blocked',
+              },
               onChanged: (v) => setState(() => _status = v),
+            ),
+            // Offered only while something is actually hiding rows, so the
+            // toolbar stays as it was in the common case. Driven from the
+            // controller rather than from the debounced query, so it appears
+            // and clears on the keystroke instead of a quarter second later.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _search,
+              builder: (context, value, _) {
+                final filtered = value.text.trim().isNotEmpty ||
+                    _role != 'all' ||
+                    _status != 'all';
+
+                if (!filtered) return const SizedBox.shrink();
+
+                return TextButton.icon(
+                  onPressed: _clearFilters,
+                  icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                  label: const Text('Clear filters'),
+                );
+              },
             ),
           ],
         ),
-        if (provider.errorMessage != null && provider.users.isEmpty)
-          WebMessageState(icon: Icons.error_outline_rounded, title: 'Unable to load users', message: cleanError(provider.errorMessage!), isError: true)
-        else if (provider.isLoading && provider.users.isEmpty)
-          const WebLoadingState(message: 'Loading users...')
-        else
-          WebDataTable<UserModel>(
-            rows: rows,
-            initialSortColumn: 0,
-            emptyMessage: 'No users match the filters.',
-            columns: [
-              WebColumn(label: 'Name', minWidth: 220, cell: (u) => _UserIdentityCell(user: u), sortValue: (u) => u.name.toLowerCase()),
-              WebColumn(label: 'Employee ID', cell: (u) => _MutedText(u.employeeId.isEmpty ? '—' : u.employeeId), sortValue: (u) => u.employeeId),
-              WebColumn(label: 'Department', cell: (u) => _MutedText(u.department.isEmpty ? '—' : u.department), sortValue: (u) => u.department.toLowerCase()),
-
-              WebColumn(label: 'Designation', cell: (u) => _MutedText(u.designation.isEmpty ? '—' : u.designation)),
-              WebColumn(label: 'Role', cell: (u) => _RoleBadge(role: u.effectiveRole), sortValue: (u) => u.effectiveRole),
-              if (provider.isSuperAdmin)
-                WebColumn(label: 'Admin', cell: (u) => _MutedText(u.isUser ? (admins[u.createdBy] ?? '—') : '—')),
-              WebColumn(label: 'Status', cell: (u) => WebStatusChip(u.status), sortValue: (u) => u.status),
-              WebColumn(label: 'Created', cell: (u) => _MutedText(formatDate(u.createdAt)), sortValue: (u) => u.createdAt?.millisecondsSinceEpoch),
-            ],
-            actions: (u) => _UserActions(user: u),
-          ),
+        // One crossfade between the three things this page can show. A failed
+        // read is drawn as a failure with a way out, never as an empty account
+        // list - the table's own empty state says that instead.
+        AppStateSwitcher(
+          child: provider.errorMessage != null && provider.users.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('error'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppErrorState(
+                      title: 'Unable to load users',
+                      message: _friendlyError(provider.errorMessage!),
+                      // Restarts the same scoped subscription, so an Admin
+                      // still sees only the Users assigned to them.
+                      onRetry: () => provider.listenToUsers(forceRestart: true),
+                    ),
+                  ),
+                )
+              : provider.isLoading && provider.users.isEmpty
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: double.infinity,
+                  child: WebTableSkeleton(columns: 8),
+                )
+              : WebDataTable<UserModel>(
+                  key: const ValueKey('rows'),
+                  rows: rows,
+                  initialSortColumn: 0,
+                  emptyMessage: provider.users.isEmpty
+                      ? 'No user accounts to show yet.'
+                      : 'No users match the filters.',
+                  columns: [
+                    WebColumn(label: 'Name', minWidth: 220, cell: (u) => _UserIdentityCell(user: u), sortValue: (u) => u.name.toLowerCase()),
+                    WebColumn(label: 'Employee ID', cell: (u) => _MutedText(u.employeeId.isEmpty ? '—' : u.employeeId), sortValue: (u) => u.employeeId),
+                    WebColumn(label: 'Department', cell: (u) => _MutedText(u.department.isEmpty ? '—' : u.department), sortValue: (u) => u.department.toLowerCase()),
+                    WebColumn(label: 'Designation', cell: (u) => _MutedText(u.designation.isEmpty ? '—' : u.designation)),
+                    WebColumn(label: 'Role', cell: (u) => _RoleBadge(role: u.effectiveRole), sortValue: (u) => u.effectiveRole),
+                    if (provider.isSuperAdmin)
+                      WebColumn(label: 'Admin', cell: (u) => _MutedText(u.isUser ? (admins[u.createdBy] ?? '—') : '—')),
+                    WebColumn(label: 'Status', cell: (u) => WebStatusChip(u.status), sortValue: (u) => u.status),
+                    WebColumn(label: 'Created', cell: (u) => _MutedText(formatDate(u.createdAt)), sortValue: (u) => u.createdAt?.millisecondsSinceEpoch),
+                  ],
+                  actions: (u) => _UserActions(user: u),
+                ),
+        ),
       ],
     );
   }
@@ -160,6 +271,10 @@ class _UserActions extends StatelessWidget {
     final canEdit = provider.isSuperAdmin || (provider.isAdmin && user.isUser && user.createdBy == provider.currentUserUid);
     final canAppoint = provider.isSuperAdmin && user.isAdmin && user.isActive;
 
+    // Admitting a self-registered account. An Admin may do this for the Users
+    // it manages, so it is not part of the Super-Admin-only status block.
+    final canActivate = provider.canActivateUser(user);
+
     return PopupMenuButton<String>(
       tooltip: 'Actions',
       icon: const Icon(Icons.more_horiz_rounded, size: 20),
@@ -168,6 +283,20 @@ class _UserActions extends StatelessWidget {
         switch (value) {
           case 'edit':
             await _edit(context, provider);
+          case 'activate-pending':
+            if (await confirmWebAction(
+              context,
+              title: 'Activate account',
+              message:
+                  '${_name()} registered itself and has no access yet. '
+                  'Activating it lets the account sign in as a User: read all '
+                  'inventory and movement history, add assets, Bazaars and '
+                  'categories, and submit requests.',
+              confirmLabel: 'Activate',
+            )) {
+              await provider.activateUser(user.uid);
+              if (context.mounted) showWebToast(context, '${_name()} can now sign in.');
+            }
           case 'role-admin':
           case 'role-user':
             final role = value == 'role-admin' ? 'admin' : 'user';
@@ -228,6 +357,8 @@ class _UserActions extends StatelessWidget {
       }),
       itemBuilder: (context) => [
         if (canEdit) _menuItem(context, 'edit', Icons.edit_outlined, 'Edit details'),
+        if (canActivate)
+          _menuItem(context, 'activate-pending', Icons.how_to_reg_outlined, 'Activate account'),
         if (provider.isSuperAdmin) ...[
           const PopupMenuDivider(),
           if (!user.isAdmin) _menuItem(context, 'role-admin', Icons.manage_accounts_outlined, 'Make Admin'),
@@ -237,9 +368,13 @@ class _UserActions extends StatelessWidget {
             _menuItem(context, 'handover', Icons.swap_horiz_rounded, 'Hand over Super Admin & step down'),
           ],
           const PopupMenuDivider(),
-          if (!user.isActive) _menuItem(context, 'active', Icons.check_circle_outline_rounded, 'Activate'),
+          // 'Activate' above covers a pending account; this toggle is for an
+          // account that was deliberately switched off.
+          if (!user.isActive && !user.isPending)
+            _menuItem(context, 'active', Icons.check_circle_outline_rounded, 'Activate'),
           if (user.isActive) _menuItem(context, 'inactive', Icons.pause_circle_outline_rounded, 'Deactivate'),
-          if (user.status.toLowerCase() != 'blocked') _menuItem(context, 'blocked', Icons.block_rounded, 'Block'),
+          if (PermissionService.normalizeStatus(user.status) != 'blocked')
+            _menuItem(context, 'blocked', Icons.block_rounded, 'Block'),
         ],
         if (provider.isSuperAdmin || canEdit) ...[
           const PopupMenuDivider(),
@@ -283,7 +418,7 @@ class _UserActions extends StatelessWidget {
     try {
       await action();
     } catch (e) {
-      if (context.mounted) showWebToast(context, cleanError(e), isError: true);
+      if (context.mounted) showWebToast(context, _friendlyError(e), isError: true);
     }
   }
 
@@ -481,7 +616,7 @@ class _EditUserDialogState extends State<_EditUserDialog> {
     } catch (e) {
       if (!mounted) return;
 
-      final message = cleanError(e);
+      final message = _friendlyError(e);
 
       setState(() {
         _saving = false;
@@ -567,7 +702,15 @@ class _EditUserDialogState extends State<_EditUserDialog> {
                     key: const ValueKey('edit-user-status'),
                     label: 'Status',
                     value: _status,
-                    items: const {'active': 'Active', 'inactive': 'Inactive', 'blocked': 'Blocked'},
+                    items: {
+                      'active': 'Active',
+                      'inactive': 'Inactive',
+                      'blocked': 'Blocked',
+                      // Listed only while the account really is pending, so
+                      // the field shows what is stored instead of silently
+                      // falling back to another value.
+                      if (widget.user.isPending) 'pending': 'Pending activation',
+                    },
                     onChanged: _canChangeAccess ? (v) => setState(() => _status = v) : null,
                   ),
                   const SizedBox(height: AppSpacing.md),
@@ -630,9 +773,14 @@ class _EditUserDialogState extends State<_EditUserDialog> {
 /// value ("approved") opens on the matching option instead of crashing the
 /// selection - and counts as unchanged until it is really edited.
 String _statusValue(UserModel user) {
-  final value = user.status.trim().toLowerCase();
+  final value = PermissionService.normalizeStatus(user.status);
 
-  if (value == 'active' || value == 'inactive' || value == 'blocked') return value;
+  if (value == 'active' ||
+      value == 'inactive' ||
+      value == 'blocked' ||
+      value == 'pending') {
+    return value;
+  }
 
   return user.isActive ? 'active' : 'inactive';
 }

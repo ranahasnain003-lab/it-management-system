@@ -42,12 +42,12 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions web = FirebaseOptions(
     apiKey: 'AIzaSyCixY3ldoEkhjURx1YrQ65R2-2ilyeVI6Q',
-    appId: '1:315288299970:web:6aa5720e86d0fb1511ce5b',
+    appId: '1:315288299970:web:0f2cf8892375521d11ce5b',
     messagingSenderId: '315288299970',
     projectId: 'it-inventory-8e690',
     authDomain: 'it-inventory-8e690.firebaseapp.com',
     storageBucket: 'it-inventory-8e690.firebasestorage.app',
-    measurementId: 'G-Z1MS20L4T2',
+    measurementId: 'G-1QHW75MK3R',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
@@ -55,18 +55,16 @@ class DefaultFirebaseOptions {
     appId: '1:315288299970:android:f61bff62f4f7418711ce5b',
     messagingSenderId: '315288299970',
     projectId: 'it-inventory-8e690',
-    storageBucket: 'it-inventory-8e690.firebasestorage.app',
+    storageBucket: 'it-inventory-8e690.firebasestorage.app', 
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyDbp5zl55NFpVuPm9uPu4aZtdQe8zFjHjo',
     appId: '1:315288299970:ios:6e2f76846735cc4d11ce5b',
-    messagingSenderId: '315288299970',
-    projectId: 'it-inventory-8e690',
+    messagingSenderId: '315288299970', 
+    projectId: 'it-inventory-8e690', 
     storageBucket: 'it-inventory-8e690.firebasestorage.app',
     iosBundleId: 'com.example.itManagementSystem',
   );
-
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyDbp5zl55NFpVuPm9uPu4aZtdQe8zFjHjo',
     appId: '1:315288299970:ios:6e2f76846735cc4d11ce5b',

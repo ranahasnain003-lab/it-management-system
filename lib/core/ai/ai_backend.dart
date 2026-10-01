@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_app_check/firebase_app_check.dart';
@@ -58,6 +59,12 @@ abstract class AssistantBackend {
 
   /// Answers [question] from [facts], or returns null to use the answer the
   /// app computed locally.
+  ///
+  /// [onFailed] is called with a readable reason whenever a call that was
+  /// supposed to happen did not produce an answer. It fires only for a build
+  /// that has the model switched on, so a deliberately offline build stays
+  /// silent, and it exists so a broken deployment is visible to the user
+  /// instead of looking identical to a working one.
   Future<BackendReply?> ask({
     required String question,
     required Map<String, dynamic> facts,
@@ -65,6 +72,51 @@ abstract class AssistantBackend {
     List<Map<String, dynamic>> history = const [],
     List<String> capabilities = const [],
     void Function(String notice)? onLimited,
+    void Function(String reason)? onFailed,
+  });
+}
+
+/// A backend that answers in words only: it never reads a message as an
+/// instruction, so its replies carry no [BackendReply.intent].
+///
+/// With one of these the assistant keeps planning actions itself, exactly as
+/// it does with no model at all, and keeps its own exact wording for
+/// proposals, refusals and outcomes. Only questions are answered by the
+/// model. Handing a half-understood command to a model that cannot hand it
+/// back as an intent would quietly turn "transfer this" into a chat reply.
+abstract interface class WordsOnlyBackend implements AssistantBackend {}
+
+/// A backend that can show its answer while it is still being written.
+///
+/// Qwen3 on a CPU-only laptop writes about nine tokens (word pieces) a second,
+/// so a typical answer takes 10-30 seconds to finish. Shown only once it is complete, that
+/// is 10-30 seconds of typing dots; shown as it arrives, the first words
+/// appear as soon as the model has read the question. Nothing about the
+/// answer itself changes - only when the user starts seeing it.
+///
+/// A separate interface rather than a new parameter on [AssistantBackend.ask],
+/// so backends that answer in one piece - and every test fake written against
+/// [AssistantBackend] - are untouched and simply keep showing the dots.
+abstract interface class StreamingBackend implements AssistantBackend {
+  /// Exactly [AssistantBackend.ask], and additionally calls [onPartial] with
+  /// the answer written so far, each time more of it arrives.
+  ///
+  /// [onPartial] is given the whole answer so far, not the latest piece, so
+  /// the caller only ever has to show what it was last given. It is a preview
+  /// and nothing more: the returned [BackendReply] is the answer. That may
+  /// differ from the last preview, and when the model fails part-way through
+  /// it is null, so the caller shows its own answer instead - as it would
+  /// have without the preview. [onPartial] is never called after the returned
+  /// future completes.
+  Future<BackendReply?> askStreaming({
+    required String question,
+    required Map<String, dynamic> facts,
+    String groundedAnswer = '',
+    List<Map<String, dynamic>> history = const [],
+    List<String> capabilities = const [],
+    void Function(String notice)? onLimited,
+    void Function(String reason)? onFailed,
+    required void Function(String partialText) onPartial,
   });
 }
 
@@ -146,6 +198,66 @@ class AiBackend implements AssistantBackend {
     return message.isEmpty ? _defaultQuotaNotice : message;
   }
 
+  /// Why a call that should have produced an answer did not, in words worth
+  /// showing the user.
+  ///
+  /// The point is that a broken deployment must not look like a working one.
+  /// The Worker already sends a specific message with every refusal, so that
+  /// message is preferred over anything invented here; only the transport
+  /// failures, which never reach the Worker, are described locally.
+  static String failureNotice(Object error) {
+    if (error is AssistantBackendException) {
+      final message = error.message.trim();
+      if (message.isNotEmpty) return message;
+
+      switch (error.code) {
+        case 'resource-exhausted':
+          return _defaultQuotaNotice;
+        case 'unauthenticated':
+          return 'The AI assistant could not confirm your sign-in. '
+              'Please sign out and back in.';
+        case 'permission-denied':
+          return 'The AI assistant needs a verified email address.';
+        case 'failed-precondition':
+          return 'The AI assistant did not recognise this app installation.';
+        case 'invalid-argument':
+          return 'The AI assistant could not read that question.';
+        default:
+          return 'The AI assistant is unavailable right now.';
+      }
+    }
+
+    if (error is TimeoutException) {
+      return 'The AI assistant took too long to reply. Please try again.';
+    }
+
+    if (error is http.ClientException || error is FormatException) {
+      return 'The AI assistant could not be reached. Check your connection.';
+    }
+
+    return 'The AI assistant is unavailable right now.';
+  }
+
+  /// A one-line description of how this build is configured.
+  ///
+  /// Logged once per question so a build that answers from the on-device
+  /// engine can be told apart from one that tried the model and failed -
+  /// which, before this existed, looked exactly the same from the outside.
+  static String get configurationSummary {
+    if (!isEnabled) {
+      return 'AI_LLM_ENABLED is false, so the on-device engine answers. '
+          'Build with --dart-define=AI_LLM_ENABLED=true to use the model.';
+    }
+
+    if (proxyUrl.isEmpty) {
+      return 'AI_LLM_ENABLED is true but AI_PROXY_URL is empty, so the '
+          'on-device engine answers. Build with '
+          '--dart-define=AI_PROXY_URL=<worker address> as well.';
+    }
+
+    return 'The model is enabled, calling $proxyUrl';
+  }
+
   @override
   Future<BackendReply?> ask({
     required String question,
@@ -154,18 +266,33 @@ class AiBackend implements AssistantBackend {
     List<Map<String, dynamic>> history = const [],
     List<String> capabilities = const [],
     void Function(String notice)? onLimited,
+    void Function(String reason)? onFailed,
   }) async {
-    if (!enabled) return null;
+    if (!enabled) {
+      debugPrint('AI assistant: ${AiBackend.configurationSummary}');
+      return null;
+    }
 
     try {
       // Who is asking. The Worker verifies this against Google's public keys,
       // so it cannot be forged, and it is the only thing that identifies the
       // account: the app never tells the backend who it is in the body.
       final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return null;
+      if (user == null) {
+        onFailed?.call('The AI assistant needs you to be signed in.');
+        debugPrint('AI assistant: no signed-in user, cannot call the model.');
+        return null;
+      }
 
       final idToken = await user.getIdToken();
-      if (idToken == null || idToken.isEmpty) return null;
+      if (idToken == null || idToken.isEmpty) {
+        onFailed?.call(
+          'The AI assistant could not confirm your sign-in. '
+          'Please sign out and back in.',
+        );
+        debugPrint('AI assistant: could not obtain a Firebase ID token.');
+        return null;
+      }
 
       // That this is a genuine installation of this app, verified the same
       // way. A build that cannot produce one sends no header and is refused,
@@ -207,6 +334,16 @@ class AiBackend implements AssistantBackend {
       if (response.statusCode != 200) {
         final error = data['error'];
 
+        // The exact reason, named: HTTP status plus the Worker's own code and
+        // message. Without this line a misconfigured key, a rejected App
+        // Check token and an unreachable Worker all looked the same.
+        debugPrint(
+          'AI assistant: the backend refused the call. '
+          'HTTP ${response.statusCode} from $proxyUrl, '
+          'code=${error is Map ? error['code'] : 'none'}, '
+          'message=${error is Map ? error['message'] : response.body}',
+        );
+
         throw AssistantBackendException(
           code: error is Map && error['code'] is String
               ? error['code'] as String
@@ -218,7 +355,11 @@ class AiBackend implements AssistantBackend {
       }
 
       final text = (data['text'] as String?)?.trim();
-      if (text == null || text.isEmpty) return null;
+      if (text == null || text.isEmpty) {
+        onFailed?.call('The AI assistant returned an empty answer.');
+        debugPrint('AI assistant: the backend replied 200 with no text.');
+        return null;
+      }
 
       return BackendReply(
         text: text,
@@ -228,12 +369,21 @@ class AiBackend implements AssistantBackend {
         provider: (data['provider'] as String?) ?? '',
       );
     } catch (error) {
-      // Never surface backend problems as a failed answer: the grounded answer
-      // is already correct, so the assistant keeps working without the model.
+      // The grounded answer is still correct and is still shown, so nothing is
+      // lost - but the user is told the model did not answer, because a build
+      // that silently falls back is indistinguishable from a working one, and
+      // that is precisely how a broken deployment goes unnoticed.
       final notice = quotaNotice(error);
-      if (notice != null) onLimited?.call(notice);
+      if (notice != null) {
+        onLimited?.call(notice);
+      } else {
+        onFailed?.call(failureNotice(error));
+      }
 
-      debugPrint('AI backend unavailable, using the computed answer: $error');
+      debugPrint(
+        'AI assistant: falling back to the on-device answer. '
+        'Reason: $error. Endpoint: $proxyUrl',
+      );
       return null;
     }
   }

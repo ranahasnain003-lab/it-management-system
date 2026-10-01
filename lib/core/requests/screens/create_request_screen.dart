@@ -4,8 +4,10 @@ import 'package:provider/provider.dart';
 
 import '../../../models/asset_model.dart';
 import '../../../models/request_model.dart';
+import '../../assets/screens/add_asset_screen.dart';
 import '../../providers/asset_scope.dart';
 import '../../providers/asset_provider.dart';
+import '../../providers/category_provider.dart';
 import '../../providers/request_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../theme/app_theme.dart';
@@ -32,18 +34,22 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
 
   final assetIdController = TextEditingController();
   final nameController = TextEditingController();
-  final categoryController = TextEditingController();
-  final statusController = TextEditingController();
   final quantityController = TextEditingController();
-  final assignedToController = TextEditingController();
   final serialNumberController = TextEditingController();
   final brandController = TextEditingController();
   final modelController = TextEditingController();
   final purchasePriceController = TextEditingController();
   final warrantyMonthsController = TextEditingController();
   final locationController = TextEditingController();
-  final conditionController = TextEditingController();
   final notesController = TextEditingController();
+
+  // Category, Status and Condition are picked from a list rather than typed.
+  // Free text let a request ask for a category or a status the rest of the app
+  // does not recognise, and the approval then wrote it straight onto the asset
+  // - so the asset dropped out of every filter that matches on those values.
+  String selectedCategory = '';
+  String selectedStatus = 'Available';
+  String selectedCondition = 'Good';
 
   late String requestType;
 
@@ -65,6 +71,11 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       _loadAssetIntoFields(selectedAsset!);
     }
 
+    // The catalogue normally starts listening when the session does; asking
+    // again is free and keeps the Category field populated if this screen is
+    // the first thing to need it.
+    context.read<CategoryProvider>().listenToCategories();
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
 
@@ -83,32 +94,19 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
     AssetScope.listenFromContext(context);
   }
 
-  static const List<String> _allowedStatuses = [
-    'Available',
-    'Assigned',
-    'Under Repair',
-    'Damaged',
-    'Lost',
-    'Retired',
-  ];
-
   @override
   void dispose() {
     reasonController.dispose();
 
     assetIdController.dispose();
     nameController.dispose();
-    categoryController.dispose();
-    statusController.dispose();
     quantityController.dispose();
-    assignedToController.dispose();
     serialNumberController.dispose();
     brandController.dispose();
     modelController.dispose();
     purchasePriceController.dispose();
     warrantyMonthsController.dispose();
     locationController.dispose();
-    conditionController.dispose();
     notesController.dispose();
 
     super.dispose();
@@ -375,8 +373,8 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
                   requestType == 'Edit'
                       ? isUser
                             ? 'Your requested changes will be '
-                                  'sent to the Admin responsible for '
-                                  'this asset. The changes will only '
+                                  'sent to an Admin for review. '
+                                  'The changes will only '
                                   'be applied after approval.'
                             : 'Requested asset changes require '
                                   'approval before they are applied.'
@@ -503,15 +501,19 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         label: 'Asset Name',
         icon: Icons.inventory_2_outlined,
       ),
-      _buildTextField(
-        controller: categoryController,
-        label: 'Category',
-        icon: Icons.category_outlined,
-      ),
-      _buildTextField(
-        controller: statusController,
+      _buildCategoryField(),
+      _buildDropdownField(
         label: 'Status',
         icon: Icons.flag_outlined,
+        value: selectedStatus,
+        items: _statusOptions(),
+        onChanged: (value) {
+          if (value == null) return;
+
+          setState(() {
+            selectedStatus = value;
+          });
+        },
       ),
       _buildTextField(
         controller: quantityController,
@@ -519,11 +521,11 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         icon: Icons.numbers_rounded,
         keyboardType: TextInputType.number,
       ),
-      _buildTextField(
-        controller: assignedToController,
-        label: 'Assigned To (User UID)',
-        icon: Icons.person_outline_rounded,
-      ),
+      // 'Assigned To' is deliberately absent: an approval applies
+      // buildSafeEditUpdate, which never touches assignedTo because the
+      // holder is owned by the assign/return workflow. Offering the field
+      // meant a request could ask to hand an asset over, be approved, and
+      // change nothing - while both sides were told it had worked.
       _buildTextField(
         controller: serialNumberController,
         label: 'Serial Number',
@@ -557,10 +559,18 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         label: 'Location',
         icon: Icons.location_on_outlined,
       ),
-      _buildTextField(
-        controller: conditionController,
+      _buildDropdownField(
         label: 'Condition',
         icon: Icons.health_and_safety_outlined,
+        value: selectedCondition,
+        items: _conditionOptions(),
+        onChanged: (value) {
+          if (value == null) return;
+
+          setState(() {
+            selectedCondition = value;
+          });
+        },
       ),
     ];
 
@@ -568,7 +578,7 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       icon: Icons.edit_note_rounded,
       title: 'Requested Asset Changes',
       subtitle:
-          'These values will be submitted to the responsible Admin. '
+          'These values will be submitted to an Admin for review. '
           'They will only be applied after approval.',
       children: [
         LayoutBuilder(
@@ -597,6 +607,96 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
           maxLines: 4,
         ),
       ],
+    );
+  }
+
+  // ===========================================================================
+  // CANONICAL VOCABULARIES
+  //
+  // The SAME lists the Add/Edit Asset form offers, taken from AddAssetScreen
+  // rather than copied, so a request can never ask for a status or a condition
+  // the form itself would refuse. The asset's stored value is added when it is
+  // not in the list, so an imported or legacy value is never silently rewritten
+  // by filing a request about it.
+  // ===========================================================================
+
+  List<String> _statusOptions() {
+    return _withValue(AddAssetScreen.statuses, selectedAsset?.status);
+  }
+
+  List<String> _conditionOptions() {
+    return _withValue(AddAssetScreen.conditions, selectedAsset?.condition);
+  }
+
+  /// Categories are records in the `categories` collection, not a constant, so
+  /// the options come from CategoryProvider - the catalogue UNION every
+  /// category already in use on an asset this account can see.
+  List<String> _categoryOptions() {
+    return context.watch<CategoryProvider>().mergedNames([
+      for (final asset in context.watch<AssetProvider>().assets) asset.category,
+      selectedAsset?.category ?? '',
+    ]);
+  }
+
+  static List<String> _withValue(List<String> items, String? value) {
+    final clean = value?.trim() ?? '';
+
+    if (clean.isEmpty || items.contains(clean)) {
+      return List<String>.from(items);
+    }
+
+    return [...items, clean];
+  }
+
+  // ===========================================================================
+  // DROPDOWN FIELD
+  // ===========================================================================
+
+  Widget _buildCategoryField() {
+    final options = _categoryOptions();
+
+    return _buildDropdownField(
+      label: 'Category',
+      icon: Icons.category_outlined,
+      value: options.contains(selectedCategory) ? selectedCategory : null,
+      items: options,
+      onChanged: (value) {
+        if (value == null) return;
+
+        setState(() {
+          selectedCategory = value;
+        });
+      },
+      validator: (value) {
+        if (value == null || value.trim().isEmpty) {
+          return 'Category is required';
+        }
+
+        return null;
+      },
+    );
+  }
+
+  Widget _buildDropdownField({
+    required String label,
+    required IconData icon,
+    required String? value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+    String? Function(String?)? validator,
+  }) {
+    return DropdownButtonFormField<String>(
+      initialValue: value,
+      isExpanded: true,
+      decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
+      items: items.map((item) {
+        return DropdownMenuItem<String>(
+          value: item,
+          child: Text(item, overflow: TextOverflow.ellipsis),
+        );
+      }).toList(),
+      onChanged: _isSubmitting ? null : onChanged,
+      validator: validator,
     );
   }
 
@@ -707,18 +807,22 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
   void _loadAssetIntoFields(AssetModel asset) {
     assetIdController.text = asset.assetId;
     nameController.text = asset.name;
-    categoryController.text = asset.category;
-    statusController.text = asset.status;
     quantityController.text = asset.quantity.toString();
-    assignedToController.text = asset.assignedTo ?? '';
     serialNumberController.text = asset.serialNumber;
     brandController.text = asset.brand;
     modelController.text = asset.model;
     purchasePriceController.text = asset.purchasePrice.toString();
     warrantyMonthsController.text = asset.warrantyMonths.toString();
     locationController.text = asset.location;
-    conditionController.text = asset.condition;
     notesController.text = asset.notes;
+
+    selectedCategory = asset.category.trim();
+    selectedStatus = asset.status.trim().isEmpty
+        ? 'Available'
+        : asset.status.trim();
+    selectedCondition = asset.condition.trim().isEmpty
+        ? 'Good'
+        : asset.condition.trim();
 
     purchaseDate = asset.purchaseDate;
   }
@@ -726,18 +830,18 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
   void _clearEditFields() {
     assetIdController.clear();
     nameController.clear();
-    categoryController.clear();
-    statusController.clear();
     quantityController.clear();
-    assignedToController.clear();
     serialNumberController.clear();
     brandController.clear();
     modelController.clear();
     purchasePriceController.clear();
     warrantyMonthsController.clear();
     locationController.clear();
-    conditionController.clear();
     notesController.clear();
+
+    selectedCategory = '';
+    selectedStatus = 'Available';
+    selectedCondition = 'Good';
 
     purchaseDate = null;
   }
@@ -786,8 +890,11 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
 
     final requestProvider = context.read<RequestProvider>();
 
-    final profileName =
-        context.read<UserProvider>().currentUserProfile?.name.trim() ?? '';
+    final userProvider = context.read<UserProvider>();
+
+    final isManager = userProvider.isSuperAdmin || userProvider.isAdmin;
+
+    final profileName = userProvider.currentUserProfile?.name.trim() ?? '';
 
     final requesterName = profileName.isNotEmpty
         ? profileName
@@ -807,6 +914,10 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       // Current values are stored with the request so reviewers see exactly
       // what changes, and the original data is never modified before
       // approval.
+      // 'assignedTo' is absent from BOTH maps on purpose. The form no longer
+      // offers it, and leaving it in the previous data alone would make the
+      // holder look as if it had been cleared - which RequestService reads as a
+      // legacy unassign request and would act on.
       final previousAssetData = requestType == 'Edit'
           ? <String, dynamic>{
               'assetId': asset.assetId,
@@ -814,7 +925,6 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
               'category': asset.category,
               'status': asset.status,
               'quantity': asset.quantity,
-              'assignedTo': asset.assignedTo,
               'serialNumber': asset.serialNumber,
               'brand': asset.brand,
               'model': asset.model,
@@ -839,7 +949,7 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
             : asset.name,
 
         category: requestType == 'Edit'
-            ? categoryController.text.trim()
+            ? selectedCategory.trim()
             : asset.category,
 
         reason: reasonController.text.trim(),
@@ -862,11 +972,16 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
 
         approvedBy: '',
 
-        // Send request to the Admin who owns
-        // this asset. If there is no owner, the
-        // request can still be reviewed by Super Admin.
-        receiverId: asset.adminId?.trim().isNotEmpty == true
-            ? asset.adminId!
+        // Routing has to agree with the requests create rule: a User may only
+        // send a request unrouted ('') or to its OWN Admin, so aiming it at
+        // the asset's owner made every request about another Admin's
+        // inventory fail with permission-denied - and a User now sees the
+        // whole organisation's inventory. '' leaves it for any manager to
+        // pick up, and RequestService fills in the User's own Admin when
+        // there is one. A manager may route freely, so it still goes to the
+        // owner.
+        receiverId: isManager && asset.adminId?.trim().isNotEmpty == true
+            ? asset.adminId!.trim()
             : '',
 
         previousAssetData: previousAssetData,
@@ -893,13 +1008,10 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
     } catch (e) {
       if (!mounted) return;
 
-      var reason = e.toString().trim();
-
-      if (reason.startsWith('Exception: ')) {
-        reason = reason.substring('Exception: '.length);
-      }
-
-      _showMessage('Failed to submit request: $reason', isError: true);
+      _showMessage(
+        'Unable to submit this request: ${_cleanErrorMessage(e)}',
+        isError: true,
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -922,16 +1034,12 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       return 'Asset name is required.';
     }
 
-    if (categoryController.text.trim().isEmpty) {
+    if (selectedCategory.trim().isEmpty) {
       return 'Category is required.';
     }
 
-    final status = statusController.text.trim().toLowerCase();
-
-    if (status.isNotEmpty &&
-        !_allowedStatuses.any((allowed) => allowed.toLowerCase() == status)) {
-      return 'Status must be one of: ${_allowedStatuses.join(', ')}.';
-    }
+    // Status and Condition come from a dropdown, so they can only ever hold a
+    // value the app recognises; nothing left to validate here.
 
     final quantity = int.tryParse(quantityController.text.trim());
 
@@ -963,14 +1071,9 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       'id': selectedAsset?.id ?? '',
       'assetId': assetIdController.text.trim(),
       'name': nameController.text.trim(),
-      'category': categoryController.text.trim(),
-      'status': statusController.text.trim().isEmpty
-          ? 'Available'
-          : statusController.text.trim(),
+      'category': selectedCategory.trim(),
+      'status': selectedStatus.trim(),
       'quantity': int.parse(quantityController.text.trim()),
-      'assignedTo': assignedToController.text.trim().isEmpty
-          ? null
-          : assignedToController.text.trim(),
       'serialNumber': serialNumberController.text.trim(),
       'brand': brandController.text.trim(),
       'model': modelController.text.trim(),
@@ -978,9 +1081,7 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
       'purchaseDate': purchaseDate,
       'warrantyMonths': int.parse(warrantyMonthsController.text.trim()),
       'location': locationController.text.trim(),
-      'condition': conditionController.text.trim().isEmpty
-          ? 'Good'
-          : conditionController.text.trim(),
+      'condition': selectedCondition.trim(),
       'notes': notesController.text.trim(),
     };
   }
@@ -1000,6 +1101,30 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
   // ===========================================================================
   // MESSAGE
   // ===========================================================================
+
+  /// A reason the requester can act on.
+  ///
+  /// Raw Firebase text ("[cloud_firestore/permission-denied] ...") told them
+  /// nothing, so the two causes they can do something about are named and
+  /// anything else becomes one short sentence.
+  String _cleanErrorMessage(Object error) {
+    final message = error.toString().trim();
+
+    if (message.contains('permission-denied')) {
+      return 'you do not have permission to do this.';
+    }
+
+    if (message.contains('unavailable') ||
+        message.contains('network-request-failed')) {
+      return 'please check your internet connection and try again.';
+    }
+
+    if (message.startsWith('Exception: ')) {
+      return message.substring('Exception: '.length).trim();
+    }
+
+    return 'something went wrong. Please try again.';
+  }
 
   void _showMessage(String message, {bool isError = false}) {
     final colors = Theme.of(context).colorScheme;

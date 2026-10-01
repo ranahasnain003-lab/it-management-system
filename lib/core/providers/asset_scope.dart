@@ -13,6 +13,12 @@ import 'user_provider.dart';
 /// it starts the same listener, against the same service, under the same
 /// Firestore rules.
 ///
+/// Reading inventory is organisation-wide for every active account: the
+/// `assets` read rule is `isActiveUser()`, so a Super Admin and a User stream
+/// the very same query. Only the Admin scope still narrows, and what an
+/// account may WRITE is decided by the services and by firestore.rules, never
+/// by which listener started here.
+///
 /// This replaces the copy of this branching that previously lived in both
 /// dashboard_screen.dart and assets_screen.dart.
 class AssetScope {
@@ -54,17 +60,15 @@ class AssetScope {
     }
 
     // ============================================================
-    // USER - never organization-wide. Their scope is the Admin who
-    // created and manages their profile.
+    // USER - the whole inventory, read-only.
+    //
+    // The same unscoped listener the Super Admin uses, because every
+    // active account may now read every asset. Scoping a User to the
+    // Admin in their createdBy hid inventory they are allowed to see,
+    // and a self-registered account (whose createdBy is '') was shown
+    // nothing at all - which is why the clearAssets() path is gone.
     // ============================================================
-    final assignedAdminUid = users.currentUserProfile?.createdBy.trim() ?? '';
-
-    if (assignedAdminUid.isEmpty) {
-      assets.clearAssets();
-      return;
-    }
-
-    assets.listenToUserAssets(assignedAdminUid, forceRestart: forceRestart);
+    assets.listenToAssets(forceRestart: forceRestart);
   }
 
   /// [listenForRole] for callers that have a [BuildContext] rather than the

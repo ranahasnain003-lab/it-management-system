@@ -9,6 +9,7 @@ import '../../core/providers/deployment_provider.dart';
 import '../../core/providers/request_provider.dart';
 import '../../core/providers/user_provider.dart';
 import '../../core/services/permission_service.dart';
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 import '../../models/deployment_model.dart';
 import '../widgets/web_common.dart';
@@ -28,6 +29,12 @@ class WebDashboardPage extends StatelessWidget {
     final profile = users.currentUserProfile;
     final isUnassignedUser =
         users.isNormalUser && (profile?.createdBy.trim().isEmpty ?? true);
+
+    // Nothing has arrived yet, so the figures below would all read zero. The
+    // tiles are drawn as placeholders of the same shape instead: the page
+    // keeps its layout and the wait reads as the numbers landing.
+    final isFirstLoad =
+        assets.isLoading && assets.assets.isEmpty && !isUnassignedUser;
 
     return WebPage(
       title: 'Dashboard',
@@ -61,6 +68,9 @@ class WebDashboardPage extends StatelessWidget {
             title: 'Unable to load inventory',
             message: cleanError(assets.errorMessage!),
             isError: true,
+            // The same scope-preserving refresh the Android screens use, so a
+            // transient network failure does not need a reload of the app.
+            onRetry: () => context.read<AssetProvider>().refreshAssets(),
           ),
 
         // Other live sources feed several cards; a failure must not be shown
@@ -79,121 +89,139 @@ class WebDashboardPage extends StatelessWidget {
             isError: true,
           ),
 
-        if (assets.isLoading && assets.assets.isEmpty && !isUnassignedUser)
-          Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-              child: const LinearProgressIndicator(minHeight: 3),
-            ),
-          ),
-
         const _GroupLabel('Inventory overview'),
-        _KpiGrid(
-          columnsFor: (width) => width >= 900
-              ? 4
-              : width >= 520
-              ? 2
-              : 1,
-          children: [
-            WebStatCard(
-              // The number is a count of asset records, so it is named the way
-              // the Android dashboard names it instead of reading as a total.
-              label: 'Total Assets',
-              value: '${assets.totalAssets}',
-              caption: 'Asset records',
-              icon: Icons.inventory_2_rounded,
-              color: AppColors.inventory,
-              onTap: () => context.go('/inventory'),
-            ),
-            WebStatCard(
-              label: 'Total Quantity',
-              value: '${assets.totalQuantity}',
-              caption: 'All units in inventory',
-              icon: Icons.numbers_rounded,
-              color: AppColors.quantity,
-              onTap: () => context.go('/inventory'),
-            ),
-            WebStatCard(
-              label: 'Head Office Stock',
-              value: '${assets.headOfficeStock}',
-              caption: 'Units available at Head Office',
-              icon: Icons.warehouse_rounded,
-              color: AppColors.headOffice,
-              onTap: () => context.go('/inventory/head-office'),
-            ),
-            WebStatCard(
-              label: 'Stock at Bazaars',
-              value: '${assets.deployedToBazaarsQuantity}',
-              caption: 'Units currently at Bazaars',
-              icon: Icons.local_shipping_rounded,
-              color: AppColors.bazaar,
-              onTap: () => context.go('/transfers/current-stock'),
-            ),
-          ],
+        AppStateSwitcher(
+          child: isFirstLoad
+              // Full width, so the placeholder tiles start at the left edge
+              // exactly where the real ones do.
+              ? const SizedBox(
+                  key: ValueKey('overview-loading'),
+                  width: double.infinity,
+                  child: AppStatSkeleton(count: 4),
+                )
+              : _KpiGrid(
+                  key: const ValueKey('overview'),
+                  columnsFor: (width) => width >= 900
+                      ? 4
+                      : width >= 520
+                      ? 2
+                      : 1,
+                  children: [
+                    WebStatCard(
+                      // The number is a count of asset records, so it is named
+                      // the way the Android dashboard names it instead of
+                      // reading as a total.
+                      label: 'Total Assets',
+                      value: '${assets.totalAssets}',
+                      caption: 'Asset records',
+                      icon: Icons.inventory_2_rounded,
+                      color: AppColors.inventory,
+                      onTap: () => context.go('/inventory'),
+                    ),
+                    WebStatCard(
+                      label: 'Total Quantity',
+                      value: '${assets.totalQuantity}',
+                      caption: 'All units in inventory',
+                      icon: Icons.numbers_rounded,
+                      color: AppColors.quantity,
+                      onTap: () => context.go('/inventory'),
+                    ),
+                    WebStatCard(
+                      label: 'Head Office Stock',
+                      value: '${assets.headOfficeStock}',
+                      caption: 'Units available at Head Office',
+                      icon: Icons.warehouse_rounded,
+                      color: AppColors.headOffice,
+                      onTap: () => context.go('/inventory/head-office'),
+                    ),
+                    WebStatCard(
+                      label: 'Stock at Bazaars',
+                      value: '${assets.deployedToBazaarsQuantity}',
+                      caption: 'Units currently at Bazaars',
+                      icon: Icons.local_shipping_rounded,
+                      color: AppColors.bazaar,
+                      onTap: () => context.go('/transfers/current-stock'),
+                    ),
+                  ],
+                ),
         ),
         const SizedBox(height: AppSpacing.xl),
         const _GroupLabel('Status and activity'),
-        _KpiGrid(
-          columnsFor: (width) => width >= 1200
-              ? 5
-              : width >= 760
-              ? 3
-              : width >= 520
-              ? 2
-              : 1,
-          children: [
-            WebStatCard(
-              label: 'Assigned',
-              value: '${assets.assignedQuantity}',
-              caption: '${assets.assignedAssets} asset records',
-              icon: Icons.person_pin_rounded,
-              color: AppColors.assigned,
-              onTap: () => context.go('/inventory/assigned'),
-            ),
-            WebStatCard(
-              label: 'Damaged',
-              value: '${assets.damagedQuantity}',
-              caption: 'Units at Head Office · ${assets.damagedAssets} records',
-              icon: Icons.report_problem_rounded,
-              color: AppColors.damaged,
-              onTap: () => context.go('/inventory/damaged'),
-            ),
-            WebStatCard(
-              label: 'Under Repair',
-              value: '${assets.underRepairQuantity}',
-              caption: 'Units at Head Office · ${assets.underRepairAssets} records',
-              icon: Icons.build_rounded,
-              color: AppColors.repair,
-              onTap: () => context.go('/inventory/under-repair'),
-            ),
-            WebStatCard(
-              label: 'Pending Requests',
-              value: '${requests.pendingRequests}',
-              caption: '${requests.totalRequests} total',
-              icon: Icons.assignment_late_rounded,
-              color: AppColors.pending,
-              onTap: () => context.go('/requests'),
-            ),
-            WebStatCard(
-              label: 'All Bazaars',
-              value: bazaars.isLoading && bazaars.bazaars.isEmpty
-                  ? '—'
-                  : '${bazaars.activeBazaarCount}',
-              caption: '${bazaars.inactiveBazaarCount} disabled',
-              icon: Icons.storefront_rounded,
-              color: AppColors.info,
-              // Bazaar MASTER, not the stock-at-Bazaars screen.
-              onTap: () => context.go('/bazaars'),
-            ),
-          ],
+        AppStateSwitcher(
+          child: isFirstLoad
+              ? const SizedBox(
+                  key: ValueKey('activity-loading'),
+                  width: double.infinity,
+                  child: AppStatSkeleton(count: 5),
+                )
+              : _KpiGrid(
+                  key: const ValueKey('activity'),
+                  columnsFor: (width) => width >= 1200
+                      ? 5
+                      : width >= 760
+                      ? 3
+                      : width >= 520
+                      ? 2
+                      : 1,
+                  children: [
+                    WebStatCard(
+                      label: 'Assigned',
+                      value: '${assets.assignedQuantity}',
+                      caption: '${assets.assignedAssets} asset records',
+                      icon: Icons.person_pin_rounded,
+                      color: AppColors.assigned,
+                      onTap: () => context.go('/inventory/assigned'),
+                    ),
+                    WebStatCard(
+                      label: 'Damaged',
+                      value: '${assets.damagedQuantity}',
+                      caption:
+                          'Units at Head Office · ${assets.damagedAssets} records',
+                      icon: Icons.report_problem_rounded,
+                      color: AppColors.damaged,
+                      onTap: () => context.go('/inventory/damaged'),
+                    ),
+                    WebStatCard(
+                      label: 'Under Repair',
+                      value: '${assets.underRepairQuantity}',
+                      caption:
+                          'Units at Head Office · ${assets.underRepairAssets} records',
+                      icon: Icons.build_rounded,
+                      color: AppColors.repair,
+                      onTap: () => context.go('/inventory/under-repair'),
+                    ),
+                    WebStatCard(
+                      label: 'Pending Requests',
+                      value: '${requests.pendingRequests}',
+                      caption: '${requests.totalRequests} total',
+                      icon: Icons.assignment_late_rounded,
+                      color: AppColors.pending,
+                      onTap: () => context.go('/requests'),
+                    ),
+                    WebStatCard(
+                      label: 'All Bazaars',
+                      value: bazaars.isLoading && bazaars.bazaars.isEmpty
+                          ? '—'
+                          : '${bazaars.activeBazaarCount}',
+                      caption: '${bazaars.inactiveBazaarCount} disabled',
+                      icon: Icons.storefront_rounded,
+                      color: AppColors.info,
+                      // Bazaar MASTER, not the stock-at-Bazaars screen.
+                      onTap: () => context.go('/bazaars'),
+                    ),
+                  ],
+                ),
         ),
         const SizedBox(height: AppSpacing.xl),
         LayoutBuilder(
           builder: (context, constraints) {
-            final distribution = _DistributionChart(assets: assets);
-            final bazaarChart = _BazaarStockChart(
-              movements: movements.activeDeployments,
+            // Charts repaint on their own while a tooltip follows the
+            // pointer; a boundary each keeps that off the rest of the page.
+            final distribution = RepaintBoundary(
+              child: _DistributionChart(assets: assets),
+            );
+            final bazaarChart = RepaintBoundary(
+              child: _BazaarStockChart(movements: movements.activeDeployments),
             );
 
             if (constraints.maxWidth < 1100) {
@@ -265,7 +293,11 @@ class _GroupLabel extends StatelessWidget {
 /// KPI grid with an explicit column count per width, so rows divide evenly
 /// instead of leaving a lone card on the last row.
 class _KpiGrid extends StatelessWidget {
-  const _KpiGrid({required this.columnsFor, required this.children});
+  const _KpiGrid({
+    super.key,
+    required this.columnsFor,
+    required this.children,
+  });
 
   final int Function(double width) columnsFor;
   final List<Widget> children;
@@ -443,12 +475,17 @@ class _DashboardNotice extends StatelessWidget {
     required this.title,
     required this.message,
     this.isError = false,
+    this.onRetry,
   });
 
   final IconData icon;
   final String title;
   final String message;
   final bool isError;
+
+  /// A way out of a failure. Omitted for notices that are information
+  /// rather than a fault, where there is nothing to try again.
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -489,39 +526,21 @@ class _DashboardNotice extends StatelessWidget {
                       color: colors.onSurfaceVariant,
                     ),
                   ),
+                  if (onRetry != null) ...[
+                    const SizedBox(height: AppSpacing.md),
+                    // Same control as AppErrorState, so a retry looks the
+                    // same wherever the app offers one.
+                    OutlinedButton.icon(
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                      label: const Text('Try again'),
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// Muted centred placeholder inside a chart card.
-class _ChartEmpty extends StatelessWidget {
-  const _ChartEmpty({required this.icon, required this.message});
-
-  final IconData icon;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 36, color: colors.onSurfaceVariant.withValues(alpha: 0.6)),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: colors.onSurfaceVariant),
-          ),
-        ],
       ),
     );
   }
@@ -676,9 +695,10 @@ class _DistributionChart extends StatelessWidget {
       child: total == 0
           ? const SizedBox(
               height: _chartHeight,
-              child: _ChartEmpty(
+              child: AppEmptyState(
                 icon: Icons.donut_large_rounded,
-                message: 'No inventory yet.',
+                title: 'No inventory yet.',
+                compact: true,
               ),
             )
           : LayoutBuilder(
@@ -754,9 +774,10 @@ class _BazaarStockChart extends StatelessWidget {
       child: SizedBox(
         height: _chartHeight,
         child: shown.isEmpty
-            ? const _ChartEmpty(
+            ? const AppEmptyState(
                 icon: Icons.bar_chart_rounded,
-                message: 'No stock is currently at Bazaars.',
+                title: 'No stock is currently at Bazaars.',
+                compact: true,
               )
             : LayoutBuilder(
                 builder: (context, box) {
@@ -905,20 +926,17 @@ class _RecentMovements extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
+    // A failure and an empty history are drawn as two clearly different
+    // things, so "we could not read your movements" is never mistaken for
+    // "nothing has moved yet".
     if (movements.error != null && movements.deployments.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
-        child: Row(
-          children: [
-            Icon(Icons.error_outline_rounded, size: 20, color: colors.error),
-            const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: Text(
-                cleanError(movements.error!),
-                style: TextStyle(color: colors.onSurfaceVariant),
-              ),
-            ),
-          ],
+      return SizedBox(
+        height: 140,
+        child: AppErrorState(
+          title: 'Unable to load stock movements',
+          message: cleanError(movements.error!),
+          onRetry: movements.refresh,
+          compact: true,
         ),
       );
     }
@@ -928,9 +946,10 @@ class _RecentMovements extends StatelessWidget {
     if (recent.isEmpty) {
       return const SizedBox(
         height: 140,
-        child: _ChartEmpty(
+        child: AppEmptyState(
           icon: Icons.swap_horiz_rounded,
-          message: 'No stock movements recorded yet.',
+          title: 'No stock movements recorded yet.',
+          compact: true,
         ),
       );
     }

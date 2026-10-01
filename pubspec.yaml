@@ -26,6 +26,17 @@ dependencies:
   intl: ^0.19.0
   shared_preferences: ^2.5.5
 
+  # The Local AI server's API key is a real credential: it grants use of the
+  # model to whoever holds it. shared_preferences keeps values in plain text on
+  # disk, so the key goes here instead - Android Keystore / EncryptedSharedPrefs
+  # on Android, the Keychain on iOS/macOS.
+  flutter_secure_storage: ^9.2.4
+
+  # Derives the opaque per-user conversation scope sent to the Local AI server.
+  # Hashing means the server can keep one signed-in account's chats away from
+  # another's without ever learning a Firebase uid.
+  crypto: ^3.0.3
+
   file_picker: ^8.0.7
   excel: ^4.0.6
   csv: ^6.0.0

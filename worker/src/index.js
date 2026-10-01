@@ -50,9 +50,16 @@ const MAX_HISTORY = 6;
  *
  * The innermost of the deadlines, each of which must strictly exceed the one
  * inside it, or a good answer is thrown away after the account has already
- * been charged a request for it: Gemini 15s, then the app's own 25s.
+ * been charged a request for it: Gemini 20s, then the app's own 25s.
+ *
+ * 15s was too tight. Current Flash models think before answering, and that
+ * thinking is inside this window: a four-part question over a full inventory
+ * payload was measured at 13.1s on gemini-3.8-flash, and the slower Lite
+ * models exceeded 15s outright. Every one of those is a correct answer the
+ * user would never have seen, against a request their daily allowance had
+ * already paid for. 20s keeps a clear 5s margin under the app's 25s.
  */
-const TIMEOUT_MS = 15000;
+const TIMEOUT_MS = 20000;
 
 /** Refusals, in the shape the app already understands. */
 function refuse(status, code, message, extra = {}) {
@@ -271,11 +278,52 @@ export default {
       // content straight back into the logs, and the key is scrubbed because
       // a transport-level failure is not ours to make promises about.
       const detail = String(error && error.message).slice(0, 300);
+      const scrub = (value) =>
+        String(value || '').split(env.GEMINI_API_KEY).join('[redacted]');
 
+      // `upstream` is what Gemini itself said, which is the difference between
+      // "could not be reached" and knowing the key was rejected, the model
+      // name was wrong, or the service was merely busy.
       console.error('Assistant error', {
+        model,
         status: error && error.status,
-        message: detail.split(env.GEMINI_API_KEY).join('[redacted]'),
+        message: scrub(detail),
+        upstream: scrub(error && error.detail).slice(0, 300),
       });
+
+      // A bad key or a wrong model name is a deployment problem, not a passing
+      // outage, and saying "could not be reached" for it sends whoever is
+      // looking at the wrong thing entirely.
+      const status = error && error.status;
+      if (status === 400 || status === 401 || status === 403) {
+        return refuse(
+          503,
+          'unavailable',
+          'The assistant is not configured correctly. Check the Gemini API key.',
+        );
+      }
+
+      if (status === 404) {
+        return refuse(
+          503,
+          'unavailable',
+          `The assistant model "${model}" was not found. Check AI_MODEL.`,
+        );
+      }
+
+      // Gemini's own rate limit, which is a different thing from this
+      // Worker's per-account cap but reads the same to whoever is asking.
+      // Reporting it as "could not be reached" sends them looking for a
+      // network fault that is not there; `resource-exhausted` is the code the
+      // app already turns into a plain "try again shortly" note.
+      if (status === 429) {
+        return refuse(
+          429,
+          'resource-exhausted',
+          'The AI assistant is answering a lot of questions right now. '
+            + 'Please wait a minute and ask again.',
+        );
+      }
 
       return refuse(503, 'unavailable', 'The assistant could not be reached.');
     } finally {

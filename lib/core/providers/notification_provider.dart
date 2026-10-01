@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:flutter/foundation.dart';
 
 import '../../models/notification_model.dart';
@@ -81,6 +82,10 @@ class NotificationProvider extends ChangeNotifier {
       return;
     }
 
+    // Whether this is a different account taking over, or the same account
+    // re-subscribing after a failure or a pull-to-refresh.
+    final sameAccount = _listeningUserId == normalizedUserId;
+
     _notificationsSubscription?.cancel();
     _unreadSubscription?.cancel();
 
@@ -89,8 +94,16 @@ class NotificationProvider extends ChangeNotifier {
 
     _listeningUserId = normalizedUserId;
 
-    _notifications = [];
-    _unreadCount = 0;
+    // A DIFFERENT account must never be shown the previous one's
+    // notifications, so its list goes immediately. The same account keeps
+    // what it already has while the new snapshot is on its way: emptying it
+    // made a refresh blink the inbox away and replace it with a placeholder,
+    // which reads as losing the notifications rather than reloading them.
+    if (!sameAccount) {
+      _notifications = [];
+      _unreadCount = 0;
+    }
+
     _isLoading = true;
     _errorMessage = null;
 
@@ -309,15 +322,37 @@ class NotificationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A failure in words the person can read.
+  ///
+  /// The fall-through used to hand over whatever the platform said, which for
+  /// an unmapped Firestore code is raw plugin text like
+  /// `[cloud_firestore/unknown] ...`. That names internals, means nothing to
+  /// the reader and looks like a crash, so anything that is not plainly a
+  /// sentence becomes the general message instead.
   String _cleanError(Object error) {
-    final message = error.toString().trim();
+    const fallback = 'Unable to load notifications.';
 
-    if (message.isEmpty) {
-      return 'Unable to load notifications.';
+    if (error is FirebaseException) {
+      switch (error.code) {
+        case 'permission-denied':
+          return 'You are not allowed to read these notifications.';
+
+        case 'unavailable':
+        case 'deadline-exceeded':
+        case 'network-request-failed':
+          return 'Your notifications could not be reached. Check your '
+              'connection and try again.';
+      }
     }
 
+    var message = error.toString().trim();
+
     if (message.startsWith('Exception: ')) {
-      return message.substring('Exception: '.length);
+      message = message.substring('Exception: '.length).trim();
+    }
+
+    if (message.isEmpty || message.startsWith('[') || message.length > 180) {
+      return fallback;
     }
 
     return message;

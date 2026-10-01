@@ -4,8 +4,21 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/providers/notification_provider.dart';
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 import '../widgets/web_common.dart';
+
+/// [cleanError] passes an unrecognised failure through verbatim, so a raw
+/// platform code (`[cloud_firestore/...]`) or a very long internal message
+/// could reach the screen. The mapped, business-readable sentences are the
+/// point of the helper and are kept; only those two cases are replaced.
+String _friendlyError(Object error) {
+  final cleaned = cleanError(error);
+
+  return cleaned.startsWith('[') || cleaned.length > 180
+      ? 'Something went wrong. Please try again.'
+      : cleaned;
+}
 
 class WebNotificationsPage extends StatefulWidget {
   const WebNotificationsPage({super.key});
@@ -41,7 +54,7 @@ class _WebNotificationsPageState extends State<WebNotificationsPage> {
                   try {
                     await provider.markAllAsRead(uid);
                   } catch (e) {
-                    if (context.mounted) showWebToast(context, cleanError(e), isError: true);
+                    if (context.mounted) showWebToast(context, _friendlyError(e), isError: true);
                   }
                 },
           icon: const Icon(Icons.done_all_rounded),
@@ -49,46 +62,91 @@ class _WebNotificationsPageState extends State<WebNotificationsPage> {
         ),
       ],
       children: [
-        if (provider.errorMessage != null && provider.notifications.isEmpty)
-          WebMessageState(
-            icon: Icons.error_outline_rounded,
-            title: 'Unable to load notifications',
-            message: cleanError(provider.errorMessage!),
-            isError: true,
-            action: FilledButton(onPressed: () => provider.listenToNotifications(uid), child: const Text('Retry')),
-          )
-        else if (provider.isLoading && provider.notifications.isEmpty)
-          const WebLoadingState()
-        else if (items.isEmpty)
-          WebMessageState(
-            icon: Icons.notifications_off_outlined,
-            title: _unreadOnly ? 'No unread notifications' : 'No notifications yet',
-          )
-        else
-          Card(
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (var i = 0; i < items.length; i++) ...[
-                  if (i > 0) Divider(height: 1, color: colors.outlineVariant),
-                  _NotificationTile(
-                    title: items[i].title,
-                    message: items[i].message,
-                    type: items[i].type,
-                    createdAt: items[i].createdAt,
-                    isRead: items[i].isRead,
-                    onMarkRead: () => _markRead(context, provider, items[i].id),
-                    onTap: () async {
-                      final n = items[i];
-                      if (!n.isRead) await _markRead(context, provider, n.id);
-                      if (context.mounted && n.requestId.isNotEmpty) context.go('/requests?id=${Uri.encodeQueryComponent(n.requestId)}');
-                    },
+        // One crossfade between the four things this page can show. The list
+        // is cards rather than a table, so the first load is a card-shaped
+        // placeholder; a failed read is drawn as a failure with a way out,
+        // never as an empty inbox.
+        AppStateSwitcher(
+          child: provider.errorMessage != null && provider.notifications.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('error'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppErrorState(
+                      title: 'Unable to load notifications',
+                      message: _friendlyError(provider.errorMessage!),
+                      onRetry: () => provider.listenToNotifications(uid),
+                    ),
                   ),
-                ],
-              ],
-            ),
-          ),
+                )
+              : provider.isLoading && provider.notifications.isEmpty
+              ? const SizedBox(
+                  key: ValueKey('loading'),
+                  width: double.infinity,
+                  // The skeleton is a (non-scrolling) ListView, so it needs a
+                  // height: five rows of 40px content inside 16px padding,
+                  // separated by 12px, is the shape the real cards arrive in.
+                  height: 5 * 72 + 4 * AppSpacing.md,
+                  child: AppListSkeleton(rows: 5, padding: EdgeInsets.zero),
+                )
+              : items.isEmpty
+              ? SizedBox(
+                  key: const ValueKey('empty'),
+                  width: double.infinity,
+                  child: Card(
+                    child: AppEmptyState(
+                      icon: Icons.notifications_off_outlined,
+                      title: _unreadOnly
+                          ? 'No unread notifications'
+                          : 'No notifications yet',
+                      message: _unreadOnly
+                          ? 'Everything here has been read.'
+                          : 'Decisions on your requests and stock you receive '
+                                'are announced here.',
+                      // The filter is the only reason this list can be empty
+                      // while notifications exist, so switching it off is the
+                      // one next step worth offering.
+                      action: _unreadOnly
+                          ? OutlinedButton.icon(
+                              onPressed: () => setState(() => _unreadOnly = false),
+                              icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                              label: const Text('Show all'),
+                            )
+                          : null,
+                    ),
+                  ),
+                )
+              : Card(
+                  key: const ValueKey('items'),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var i = 0; i < items.length; i++) ...[
+                        if (i > 0) Divider(height: 1, color: colors.outlineVariant),
+                        // Each tile tints itself on hover and carries its own
+                        // icon, dot and buttons, so it keeps its own paint
+                        // layer: pointing at one row repaints that row alone.
+                        RepaintBoundary(
+                          child: _NotificationTile(
+                            title: items[i].title,
+                            message: items[i].message,
+                            type: items[i].type,
+                            createdAt: items[i].createdAt,
+                            isRead: items[i].isRead,
+                            onMarkRead: () => _markRead(context, provider, items[i].id),
+                            onTap: () async {
+                              final n = items[i];
+                              if (!n.isRead) await _markRead(context, provider, n.id);
+                              if (context.mounted && n.requestId.isNotEmpty) context.go('/requests?id=${Uri.encodeQueryComponent(n.requestId)}');
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+        ),
       ],
     );
   }
@@ -97,7 +155,7 @@ class _WebNotificationsPageState extends State<WebNotificationsPage> {
     try {
       await provider.markAsRead(id);
     } catch (e) {
-      if (context.mounted) showWebToast(context, cleanError(e), isError: true);
+      if (context.mounted) showWebToast(context, _friendlyError(e), isError: true);
     }
   }
 }

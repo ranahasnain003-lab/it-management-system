@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../core/shared/widgets/app_states.dart';
+import '../../core/theme/colors.dart';
+
 /// Column definition for [WebDataTable].
 class WebColumn<T> {
   const WebColumn({
@@ -73,6 +76,13 @@ class _WebDataTableState<T> extends State<WebDataTable<T>> {
   late int _rowsPerPage;
   int _page = 0;
 
+  // The sorted copy is kept between builds. Sorting is the most expensive
+  // thing this widget does, and paging, changing the page size, hovering a
+  // row or any unrelated rebuild of the page above used to pay for a full
+  // copy-and-sort of every record. The cache is dropped the moment a new row
+  // list arrives, so what is drawn is never stale.
+  List<T>? _cachedSorted;
+
   @override
   void initState() {
     super.initState();
@@ -90,20 +100,38 @@ class _WebDataTableState<T> extends State<WebDataTable<T>> {
     if (oldWidget.rows.length != widget.rows.length) {
       _page = 0;
     }
+
+    // Any new list may hold different records even at the same length, so
+    // only the very same instance keeps the cached order.
+    if (!identical(oldWidget.rows, widget.rows) ||
+        !identical(oldWidget.columns, widget.columns)) {
+      _cachedSorted = null;
+    }
+  }
+
+  void _sortBy(int column, bool ascending) {
+    setState(() {
+      _sortColumn = column;
+      _ascending = ascending;
+      _cachedSorted = null;
+    });
   }
 
   List<T> get _sortedRows {
+    final cached = _cachedSorted;
+    if (cached != null) return cached;
+
     final rows = List<T>.from(widget.rows);
     final index = _sortColumn;
 
     if (index == null || index >= widget.columns.length) {
-      return rows;
+      return _cachedSorted = rows;
     }
 
     final sortValue = widget.columns[index].sortValue;
 
     if (sortValue == null) {
-      return rows;
+      return _cachedSorted = rows;
     }
 
     rows.sort((a, b) {
@@ -118,13 +146,35 @@ class _WebDataTableState<T> extends State<WebDataTable<T>> {
       return _ascending ? result : -result;
     });
 
-    return rows;
+    return _cachedSorted = rows;
+  }
+
+  /// Row background for pointer and keyboard states.
+  ///
+  /// Hover answers the pointer, which web users expect of anything clickable.
+  /// Focus is drawn stronger and on its own, because a keyboard user has no
+  /// cursor to tell them which row Enter would open.
+  WidgetStateProperty<Color?> _rowColor(ColorScheme colors) {
+    return WidgetStateProperty.resolveWith((states) {
+      if (states.contains(WidgetState.focused)) {
+        return colors.primary.withValues(alpha: 0.12);
+      }
+
+      if (states.contains(WidgetState.hovered)) {
+        return colors.primary.withValues(alpha: 0.04);
+      }
+
+      return null;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final rows = _sortedRows;
+
+    // One resolver for the whole table instead of one per row.
+    final rowColor = _rowColor(colors);
 
     final pageCount = rows.isEmpty ? 1 : (rows.length / _rowsPerPage).ceil();
 
@@ -144,95 +194,106 @@ class _WebDataTableState<T> extends State<WebDataTable<T>> {
         children: [
           LayoutBuilder(
             builder: (context, constraints) {
-              if (rows.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 52, horizontal: 24),
-                  child: Column(
-                    children: [
-                      Icon(Icons.inbox_outlined, size: 40, color: colors.onSurfaceVariant.withValues(alpha: 0.6)),
-                      const SizedBox(height: 10),
-                      Text(
-                        widget.emptyMessage,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: colors.onSurfaceVariant, fontWeight: FontWeight.w500),
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              return Scrollbar(
-                controller: _horizontal,
-                thumbVisibility: true,
-                notificationPredicate: (n) => n.depth == 0,
-                child: SingleChildScrollView(
-                  controller: _horizontal,
-                  scrollDirection: Axis.horizontal,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                    child: DataTable(
-                      // Heading, row heights and text styles come from the
-                      // shared DataTableThemeData (app_theme.dart).
-                      showCheckboxColumn: false,
-                      dividerThickness: 1,
-                      sortColumnIndex: _sortColumn,
-                      sortAscending: _ascending,
-                      columns: [
-                        for (var i = 0; i < widget.columns.length; i++)
-                          DataColumn(
-                            numeric: widget.columns[i].numeric,
-                            label: ConstrainedBox(
-                              constraints: BoxConstraints(
-                                minWidth: widget.columns[i].minWidth ?? 0,
+              // Crossfaded so a filter that empties the table reads as the
+              // rows leaving rather than as the card snapping shut.
+              return AppStateSwitcher(
+                child: rows.isEmpty
+                    ? AppEmptyState(
+                        key: const ValueKey('empty'),
+                        icon: Icons.inbox_outlined,
+                        // Same sentence the pages already pass in, so "no
+                        // matches" never reads as "could not load".
+                        title: widget.emptyMessage,
+                        compact: true,
+                      )
+                    : Scrollbar(
+                        key: const ValueKey('rows'),
+                        controller: _horizontal,
+                        thumbVisibility: true,
+                        notificationPredicate: (n) => n.depth == 0,
+                        child: SingleChildScrollView(
+                          controller: _horizontal,
+                          scrollDirection: Axis.horizontal,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minWidth: constraints.maxWidth,
+                            ),
+                            // Scrolling a wide table sideways repaints only
+                            // the table, not the page and charts behind it.
+                            child: RepaintBoundary(
+                              child: DataTable(
+                                // Heading, row heights and text styles come
+                                // from the shared DataTableThemeData
+                                // (app_theme.dart).
+                                showCheckboxColumn: false,
+                                dividerThickness: 1,
+                                sortColumnIndex: _sortColumn,
+                                sortAscending: _ascending,
+                                columns: [
+                                  for (var i = 0; i < widget.columns.length; i++)
+                                    DataColumn(
+                                      numeric: widget.columns[i].numeric,
+                                      label: ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          minWidth:
+                                              widget.columns[i].minWidth ?? 0,
+                                        ),
+                                        child: Text(widget.columns[i].label),
+                                      ),
+                                      onSort: widget.columns[i].sortValue == null
+                                          ? null
+                                          : _sortBy,
+                                    ),
+                                  if (widget.actions != null)
+                                    const DataColumn(label: Text('Actions')),
+                                ],
+                                rows: [
+                                  for (final row in pageRows)
+                                    DataRow(
+                                      color: rowColor,
+                                      onSelectChanged: widget.onRowTap == null
+                                          ? null
+                                          : (_) => widget.onRowTap!(row),
+                                      cells: [
+                                        for (final column in widget.columns)
+                                          DataCell(
+                                            // Chips, menus and tinted cells
+                                            // keep their own paint layer, so
+                                            // pointing at a row repaints the
+                                            // row tint and nothing else.
+                                            RepaintBoundary(
+                                              child: column.cell(row),
+                                            ),
+                                          ),
+                                        if (widget.actions != null)
+                                          DataCell(
+                                            RepaintBoundary(
+                                              child: widget.actions!(row),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                ],
                               ),
-                              child: Text(widget.columns[i].label),
                             ),
-                            onSort: widget.columns[i].sortValue == null
-                                ? null
-                                : (column, ascending) {
-                                    setState(() {
-                                      _sortColumn = column;
-                                      _ascending = ascending;
-                                    });
-                                  },
                           ),
-                        if (widget.actions != null)
-                          const DataColumn(label: Text('Actions')),
-                      ],
-                      rows: [
-                        for (final row in pageRows)
-                          DataRow(
-                            color: WidgetStateProperty.resolveWith(
-                              (states) => states.contains(WidgetState.hovered)
-                                  ? colors.primary.withValues(alpha: 0.04)
-                                  : null,
-                            ),
-                            onSelectChanged: widget.onRowTap == null
-                                ? null
-                                : (_) => widget.onRowTap!(row),
-                            cells: [
-                              for (final column in widget.columns)
-                                DataCell(column.cell(row)),
-                              if (widget.actions != null)
-                                DataCell(widget.actions!(row)),
-                            ],
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+                        ),
+                      ),
               );
             },
           ),
           Divider(height: 1, color: colors.outlineVariant),
           Container(
             color: colors.surfaceContainerLow,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.lg,
+              vertical: 6,
+            ),
             child: Wrap(
               alignment: WrapAlignment.spaceBetween,
               crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 16,
-              runSpacing: 4,
+              spacing: AppSpacing.lg,
+              runSpacing: AppSpacing.xs,
               children: [
                 Text(
                   '${rows.length} record${rows.length == 1 ? '' : 's'}',
@@ -240,57 +301,66 @@ class _WebDataTableState<T> extends State<WebDataTable<T>> {
                 ),
                 Wrap(
                   crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 16,
+                  spacing: AppSpacing.lg,
+                  runSpacing: AppSpacing.xs,
                   children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Rows per page',
-                      style: TextStyle(fontSize: 12.5, color: colors.onSurfaceVariant),
-                    ),
-                    const SizedBox(width: 8),
-                    DropdownButton<int>(
-                      value: _rowsPerPage,
-                      underline: const SizedBox.shrink(),
-                      isDense: true,
-                      items: [
-                        for (final option in widget.rowsPerPageOptions)
-                          DropdownMenuItem(value: option, child: Text('$option')),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Rows per page',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        DropdownButton<int>(
+                          value: _rowsPerPage,
+                          underline: const SizedBox.shrink(),
+                          isDense: true,
+                          items: [
+                            for (final option in widget.rowsPerPageOptions)
+                              DropdownMenuItem(
+                                value: option,
+                                child: Text('$option'),
+                              ),
+                          ],
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() {
+                              _rowsPerPage = value;
+                              _page = 0;
+                            });
+                          },
+                        ),
                       ],
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setState(() {
-                          _rowsPerPage = value;
-                          _page = 0;
-                        });
-                      },
                     ),
-                  ],
-                ),
-                Text(
-                  rows.isEmpty
-                      ? '0 of 0'
-                      : '${start + 1}–$end of ${rows.length}',
-                  style: TextStyle(fontSize: 12.5, color: colors.onSurface),
-                ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'Previous page',
-                      onPressed: _page > 0 ? () => setState(() => _page--) : null,
-                      icon: const Icon(Icons.chevron_left_rounded),
+                    Text(
+                      rows.isEmpty
+                          ? '0 of 0'
+                          : '${start + 1}–$end of ${rows.length}',
+                      style: TextStyle(fontSize: 12.5, color: colors.onSurface),
                     ),
-                    IconButton(
-                      tooltip: 'Next page',
-                      onPressed: _page < pageCount - 1
-                          ? () => setState(() => _page++)
-                          : null,
-                      icon: const Icon(Icons.chevron_right_rounded),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Previous page',
+                          onPressed: _page > 0
+                              ? () => setState(() => _page--)
+                              : null,
+                          icon: const Icon(Icons.chevron_left_rounded),
+                        ),
+                        IconButton(
+                          tooltip: 'Next page',
+                          onPressed: _page < pageCount - 1
+                              ? () => setState(() => _page++)
+                              : null,
+                          icon: const Icon(Icons.chevron_right_rounded),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
                   ],
                 ),
               ],

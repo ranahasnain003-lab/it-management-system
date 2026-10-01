@@ -10,7 +10,9 @@ import 'package:provider/provider.dart';
 import '../../../models/asset_model.dart';
 import '../../../models/user_model.dart';
 import '../../providers/asset_provider.dart';
+import '../../providers/category_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../services/category_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
 import '../../../web/export/file_download.dart';
@@ -33,6 +35,13 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
 
   List<_ImportRow> _rows = [];
 
+  /// Lower-cased category name -> the spelling already stored for it.
+  ///
+  /// Filled by validation and used when the rows are turned into assets, so a
+  /// file that says "laptop" imports under the existing "Laptop" instead of
+  /// adding a second spelling of the same category to the inventory.
+  Map<String, String> _canonicalCategories = const {};
+
   int _totalRows = 0;
   int _readyRows = 0;
   int _duplicateRows = 0;
@@ -46,6 +55,11 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
   @override
   void initState() {
     super.initState();
+
+    // Started here rather than at validation time: the catalogue has to be in
+    // memory before a row's category can be checked against it, or a perfectly
+    // good category would be reported as unknown.
+    context.read<CategoryProvider>().listenToCategories();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final userProvider = context.read<UserProvider>();
@@ -1265,6 +1279,40 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
 
     final assetProvider = context.read<AssetProvider>();
 
+    // The importer offers the same vocabulary as the Add Asset form: the
+    // catalogue plus every category already in use on a visible asset. An
+    // unknown category is a row error rather than a new category, so a typo
+    // can never quietly become a second spelling in the inventory.
+    // Keyed on the same key the catalogue documents are keyed on, so a cell
+    // that differs from the stored spelling only in punctuation or spacing is
+    // recognised rather than reported as a category that does not exist.
+    _canonicalCategories = {
+      for (final name in context.read<CategoryProvider>().mergedNames([
+        for (final asset in assetProvider.assets) asset.category,
+      ]))
+        CategoryService.matchKeyFor(name): name,
+    };
+
+    if (_canonicalCategories.isEmpty) {
+      // An empty catalogue AND an empty inventory means the very first import,
+      // which must not be impossible. The rows are then their own vocabulary:
+      // the first spelling of each category wins and every later row is
+      // rewritten to it, so one import still cannot seed two spellings of the
+      // same category.
+      for (final row in _rows) {
+        final clean = row.category.trim();
+
+        if (clean.isEmpty) {
+          continue;
+        }
+
+        _canonicalCategories.putIfAbsent(
+          CategoryService.matchKeyFor(clean),
+          () => clean,
+        );
+      }
+    }
+
     final seenAssetIds = <String>{};
     final seenSerials = <String>{};
 
@@ -1298,6 +1346,13 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
 
       if (row.category.trim().isEmpty) {
         row.errors.add('Category is required.');
+      } else if (!_canonicalCategories.containsKey(
+        CategoryService.matchKeyFor(row.category),
+      )) {
+        row.errors.add(
+          'Category "${row.category.trim()}" does not exist. Add it on the '
+          'Add Asset screen first, or correct the spelling.',
+        );
       }
 
       // A cell that is not a number is reported as such: it must never be
@@ -1457,7 +1512,10 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
       id: '',
       assetId: row.assetId.trim(),
       name: row.name.trim(),
-      category: row.category.trim(),
+      // Imported under the spelling the inventory already uses.
+      category:
+          _canonicalCategories[CategoryService.matchKeyFor(row.category)] ??
+          row.category.trim(),
       status: status,
       quantity: row.quantity,
       adminId: owner.uid,
@@ -1484,6 +1542,17 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
   }
 
   Future<void> _downloadTemplate() async {
+    // The sample row must import as-is: a hard-coded category would be
+    // reported as "does not exist" on any system that happens not to use that
+    // spelling, and the template is how people learn the format.
+    final vocabulary = context.read<CategoryProvider>().mergedNames([
+      for (final asset in context.read<AssetProvider>().assets) asset.category,
+    ]);
+
+    // With nothing to choose from the category check is skipped anyway, so a
+    // plain example keeps the sample row importable.
+    final sampleCategory = vocabulary.isEmpty ? 'Laptop' : vocabulary.first;
+
     try {
       final workbook = excel.Excel.createExcel();
 
@@ -1523,7 +1592,7 @@ class _ImportAssetsScreenState extends State<ImportAssetsScreen> {
       final sample = [
         'AST-0001',
         'Dell Latitude 5440',
-        'Laptop',
+        sampleCategory,
         'SN123456',
         'Dell',
         'Latitude 5440',

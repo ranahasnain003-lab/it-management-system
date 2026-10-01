@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../models/user_model.dart';
+import '../services/permission_service.dart';
 import '../services/user_service.dart';
 
 class UserProvider extends ChangeNotifier {
@@ -54,17 +55,11 @@ class UserProvider extends ChangeNotifier {
 
   bool get isTransferringSuperAdmin => _isTransferringSuperAdmin;
 
-  int get activeUsers {
-    return _users.where((user) {
-      final status = user.status.trim().toLowerCase();
-
-      return status == 'active' || status == 'approved';
-    }).length;
-  }
+  int get activeUsers => _users.where((user) => user.isActive).length;
 
   int get inactiveUsers {
     return _users.where((user) {
-      final status = user.status.trim().toLowerCase();
+      final status = PermissionService.normalizeStatus(user.status);
 
       return status == 'inactive' ||
           status == 'blocked' ||
@@ -72,22 +67,22 @@ class UserProvider extends ChangeNotifier {
     }).length;
   }
 
+  /// Self-registered accounts still waiting to be admitted.
+  int get pendingUsers => _users.where((user) => user.isPending).length;
+
+  List<UserModel> get pendingAccounts =>
+      _users.where((user) => user.isPending).toList();
+
   int get adminUsers {
-    return _users.where((user) {
-      return _normalizeRole(user.role) == 'admin';
-    }).length;
+    return _users.where((user) => user.effectiveRole == 'admin').length;
   }
 
   int get normalUsers {
-    return _users.where((user) {
-      return _normalizeRole(user.role) == 'user';
-    }).length;
+    return _users.where((user) => user.effectiveRole == 'user').length;
   }
 
   int get superAdminUsers {
-    return _users.where((user) {
-      return _normalizeRole(user.role) == 'super_admin';
-    }).length;
+    return _users.where((user) => user.effectiveRole == 'super_admin').length;
   }
 
   User? get currentFirebaseUser => _firebaseAuth.currentUser;
@@ -102,9 +97,29 @@ class UserProvider extends ChangeNotifier {
 
   String? get currentUserError => _currentUserError;
 
-  String get currentUserRole {
-    return _normalizeRole(_currentUserProfile?.role ?? '');
-  }
+  /// The role every permission check in the app is made from: the canonical
+  /// value of the primary `role` field, or '' when the profile is missing,
+  /// stores something that is not one of the three roles, OR is not active.
+  ///
+  /// An inactive account deliberately has no role here. A 'pending' self
+  /// registration, a blocked and a deleted profile all have to end up with no
+  /// permissions, and screens pass this value straight into PermissionService,
+  /// so withholding the role in one place is what keeps every one of them from
+  /// offering an action Firestore would refuse.
+  ///
+  /// Use `currentUserProfile?.effectiveRole` where the stored role is only
+  /// being displayed.
+  String get currentUserRole =>
+      _isCurrentUserActive ? _currentUserProfile!.effectiveRole : '';
+
+  /// A profile that is not active grants nothing, so a 'pending' self
+  /// registration is treated exactly like a blocked one: no role, no
+  /// listeners, no actions - the same answer Firestore gives.
+  bool get _isCurrentUserActive => _currentUserProfile?.isActive ?? false;
+
+  /// The signed-in account registered itself and is waiting for a Super Admin
+  /// (or its Admin) to activate it.
+  bool get isCurrentUserPending => _currentUserProfile?.isPending ?? false;
 
   bool get isSuperAdmin => currentUserRole == 'super_admin';
 
@@ -130,6 +145,10 @@ class UserProvider extends ChangeNotifier {
 
   bool get canDeleteUsers => isSuperAdmin || isAdmin;
 
+  /// Admitting a self-registered account. A Super Admin may admit anyone; an
+  /// Admin only the Users it manages, which [canActivateUser] checks per row.
+  bool get canActivateUsers => isSuperAdmin || isAdmin;
+
   bool get canManageRequests => isSuperAdmin;
 
   bool get canCreateRequests => isSuperAdmin || isAdmin || isNormalUser;
@@ -137,6 +156,29 @@ class UserProvider extends ChangeNotifier {
   bool get canManageAssets => isSuperAdmin || isAdmin;
 
   bool get canAccessSuperAdminControls => isSuperAdmin;
+
+  /// Whether this account may set [user] from 'pending' to 'active'.
+  ///
+  /// Mirrors the ADMIN UPDATE rule: an Admin may admit a User whose
+  /// `createdBy` is its own uid or still empty (a self-signup carries no
+  /// owner). A Super Admin may admit any pending account.
+  bool canActivateUser(UserModel user) {
+    if (!user.isPending || user.uid == currentUserUid) {
+      return false;
+    }
+
+    if (isSuperAdmin) {
+      return true;
+    }
+
+    if (!isAdmin || user.effectiveRole != 'user') {
+      return false;
+    }
+
+    final owner = user.createdBy.trim();
+
+    return owner.isEmpty || owner == currentUserUid;
+  }
 
   // ============================================================
   // AUTHENTICATION STATE LISTENER
@@ -383,6 +425,7 @@ class UserProvider extends ChangeNotifier {
             }
 
             final previousRole = currentUserRole;
+            final previousActive = _isCurrentUserActive;
             final hadProfile = _currentUserProfile != null;
 
             _currentUserProfile = profile;
@@ -390,8 +433,12 @@ class UserProvider extends ChangeNotifier {
             _currentUserError = null;
             _isLoadingCurrentUser = false;
 
-            if (!hadProfile || _normalizeRole(profile.role) != previousRole) {
-              // Scope of visible users depends on the role.
+            if (!hadProfile ||
+                profile.effectiveRole != previousRole ||
+                profile.isActive != previousActive) {
+              // Scope of visible users depends on the role, and an account
+              // that was just activated (or deactivated) gains or loses the
+              // listener entirely.
               _startUsersListenerForCurrentUser(uid, generation);
             } else {
               notifyListeners();
@@ -568,7 +615,9 @@ class UserProvider extends ChangeNotifier {
       return;
     }
 
-    final role = _normalizeRole(profile.role);
+    // A pending or otherwise inactive account never opens a users listener:
+    // the rules deny the query, so the only result would be an error banner.
+    final role = profile.isActive ? profile.effectiveRole : '';
 
     final Stream<List<UserModel>> stream;
 
@@ -925,7 +974,7 @@ class UserProvider extends ChangeNotifier {
         throw Exception('Your user profile could not be found.');
       }
 
-      final currentRole = _normalizeRole(currentProfile.role);
+      final currentRole = currentProfile.effectiveRole;
 
       final currentEmail = currentUser.email?.trim().toLowerCase() ?? '';
 
@@ -938,7 +987,7 @@ class UserProvider extends ChangeNotifier {
       // --------------------------------------------------------
 
       if (currentRole == 'super_admin') {
-        final requestedRole = _normalizeRole(user.role);
+        final requestedRole = PermissionService.normalizeRole(user.role);
 
         String? selectedAdminUid;
 
@@ -1006,7 +1055,7 @@ class UserProvider extends ChangeNotifier {
         throw Exception('Your user profile could not be found.');
       }
 
-      final currentRole = _normalizeRole(currentProfile.role);
+      final currentRole = currentProfile.effectiveRole;
 
       final currentEmail = currentUser.email?.trim().toLowerCase() ?? '';
 
@@ -1019,7 +1068,7 @@ class UserProvider extends ChangeNotifier {
       // --------------------------------------------------------
 
       if (currentRole == 'super_admin') {
-        final requestedRole = _normalizeRole(user.role);
+        final requestedRole = PermissionService.normalizeRole(user.role);
 
         String? selectedAdminUid;
 
@@ -1171,7 +1220,7 @@ class UserProvider extends ChangeNotifier {
         throw Exception('User could not be found.');
       }
 
-      if (_normalizeRole(target.role) == 'super_admin') {
+      if (target.effectiveRole == 'super_admin') {
         throw Exception('The Super Admin account cannot be deleted.');
       }
 
@@ -1248,7 +1297,7 @@ class UserProvider extends ChangeNotifier {
         throw Exception('User could not be found.');
       }
 
-      if (_normalizeRole(target.role) == 'super_admin') {
+      if (target.effectiveRole == 'super_admin') {
         throw Exception('Super Admin account status cannot be changed.');
       }
 
@@ -1257,6 +1306,59 @@ class UserProvider extends ChangeNotifier {
       }
 
       await _userService.changeUserStatus(cleanUid, cleanStatus);
+    } catch (e) {
+      _errorMessage = _cleanError(e);
+
+      notifyListeners();
+
+      rethrow;
+    }
+  }
+
+  // ============================================================
+  // ACTIVATE A PENDING ACCOUNT
+  // ============================================================
+
+  /// Admits a self-registered account: status 'pending' -> 'active'.
+  ///
+  /// Separate from [updateUserStatus] because an Admin may do this for the
+  /// Users it manages while every other status change stays with the Super
+  /// Admin - exactly the split the ADMIN UPDATE rule makes.
+  Future<void> activateUser(String uid) async {
+    final cleanUid = uid.trim();
+
+    if (cleanUid.isEmpty) {
+      return;
+    }
+
+    _errorMessage = null;
+
+    try {
+      if (_firebaseAuth.currentUser == null) {
+        throw Exception('You must be logged in.');
+      }
+
+      if (!canActivateUsers) {
+        throw Exception('You are not allowed to activate accounts.');
+      }
+
+      // Re-read the profile: the row on screen may be a moment old, and the
+      // rules only accept the change while the account is still pending.
+      final target = await _userService.getUserById(cleanUid);
+
+      if (target == null) {
+        throw Exception('That account no longer exists.');
+      }
+
+      if (!target.isPending) {
+        throw Exception('This account is not waiting for activation.');
+      }
+
+      if (!canActivateUser(target)) {
+        throw Exception('You can only activate accounts assigned to you.');
+      }
+
+      await _userService.activateUser(cleanUid);
     } catch (e) {
       _errorMessage = _cleanError(e);
 
@@ -1290,7 +1392,7 @@ class UserProvider extends ChangeNotifier {
         throw Exception('The Super Admin role cannot be changed here.');
       }
 
-      final normalizedRole = _normalizeRole(cleanRole);
+      final normalizedRole = PermissionService.normalizeRole(cleanRole);
 
       if (normalizedRole != 'admin' && normalizedRole != 'user') {
         throw Exception(
@@ -1304,7 +1406,7 @@ class UserProvider extends ChangeNotifier {
         throw Exception('User could not be found.');
       }
 
-      if (_normalizeRole(targetUser.role) == 'super_admin') {
+      if (targetUser.effectiveRole == 'super_admin') {
         throw Exception('Super Admin role is protected.');
       }
 
@@ -1365,7 +1467,7 @@ class UserProvider extends ChangeNotifier {
         throw Exception('Target Admin account could not be found.');
       }
 
-      final targetRole = _normalizeRole(targetUser.role);
+      final targetRole = targetUser.effectiveRole;
 
       if (targetRole != 'admin') {
         throw Exception(
@@ -1373,9 +1475,7 @@ class UserProvider extends ChangeNotifier {
         );
       }
 
-      final targetStatus = targetUser.status.trim().toLowerCase();
-
-      if (targetStatus != 'active' && targetStatus != 'approved') {
+      if (!targetUser.isActive) {
         throw Exception(
           'The selected Admin account must be active before becoming Super Admin.',
         );
@@ -1444,7 +1544,7 @@ class UserProvider extends ChangeNotifier {
         throw Exception('User could not be found.');
       }
 
-      if (_normalizeRole(target.role) != 'user') {
+      if (target.effectiveRole != 'user') {
         throw Exception('Only a User account can be assigned to an Admin.');
       }
 
@@ -1454,6 +1554,9 @@ class UserProvider extends ChangeNotifier {
         await _userService.assignUserToAdmin(
           userUid: cleanUid,
           adminUid: cleanAdminUid,
+          // A Super Admin may take ownership of a User itself, so the service
+          // has to know who is acting to accept its own account as the owner.
+          actingUid: currentUserUid,
         );
       }
     } catch (e) {
@@ -1704,43 +1807,69 @@ class UserProvider extends ChangeNotifier {
   }
 
   // ============================================================
-  // NORMALIZE ROLE
-  // ============================================================
-
-  String _normalizeRole(String role) {
-    final value = role.trim().toLowerCase();
-
-    switch (value) {
-      case 'super_admin':
-      case 'super admin':
-      case 'superadmin':
-      case 'super-admin':
-        return 'super_admin';
-
-      case 'admin':
-      case 'administrator':
-        return 'admin';
-
-      case 'user':
-      case 'normal user':
-      case 'normal_user':
-      case 'employee':
-        return 'user';
-
-      default:
-        return value;
-    }
-  }
-
-  // ============================================================
   // ERROR CLEANER
   // ============================================================
 
+  /// Screens show whatever lands in [errorMessage], so a raw Firestore
+  /// exception is translated here once instead of leaking
+  /// "[cloud_firestore/permission-denied] ..." into the UI.
   String _cleanError(Object error) {
+    if (error is FirebaseException) {
+      switch (error.code) {
+        case 'permission-denied':
+          return 'You do not have permission to perform this action.';
+
+        case 'unavailable':
+        case 'deadline-exceeded':
+        case 'network-request-failed':
+          return 'Network error. Check your connection and try again.';
+
+        case 'not-found':
+          return 'That account no longer exists.';
+
+        case 'already-exists':
+          return 'That account already exists.';
+      }
+
+      return _readableOr(
+        error.message,
+        'Something went wrong. Please try again.',
+      );
+    }
+
     final message = error.toString();
 
     if (message.startsWith('Exception: ')) {
-      return message.substring(11);
+      return _readableOr(message.substring(11), 'Please try again.');
+    }
+
+    return _readableOr(message, 'Something went wrong. Please try again.');
+  }
+
+  /// [text] if it is something a person can read, otherwise [fallback].
+  ///
+  /// Every message this provider produces can end up on screen, and the
+  /// fall-through used to hand over whatever the platform said - which for
+  /// an unmapped code is raw plugin text like
+  /// `[cloud_firestore/unknown] ...`. That names collections and rule
+  /// internals, means nothing to the reader, and looks like a crash. Mapped
+  /// codes above still give their own specific wording; this only catches
+  /// what they do not.
+  static String _readableOr(String? text, String fallback) {
+    final message = text?.trim() ?? '';
+
+    if (message.isEmpty) {
+      return fallback;
+    }
+
+    // Plugin exceptions arrive as "[plugin/code] message".
+    if (message.startsWith('[')) {
+      return fallback;
+    }
+
+    // A stack trace or a dumped object rather than a sentence.
+    if (message.length > 180 || message.contains('\n')) {
+      return fallback;
     }
 
     return message;

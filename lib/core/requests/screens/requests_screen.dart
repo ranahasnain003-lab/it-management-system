@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../../providers/request_provider.dart';
 import '../../providers/user_provider.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
 
@@ -18,6 +21,15 @@ class RequestsScreen extends StatefulWidget {
 
 class _RequestsScreenState extends State<RequestsScreen> {
   final TextEditingController _searchController = TextEditingController();
+
+  /// Filtering waits for a short pause in typing.
+  ///
+  /// A request card is one of the heaviest in the app - panels, diffs and
+  /// action buttons - so re-filtering on every keystroke rebuilt all of them
+  /// for a query the person had not finished writing yet.
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
+
+  Timer? _searchDebounceTimer;
 
   String _searchQuery = '';
   String _statusFilter = 'All';
@@ -43,20 +55,37 @@ class _RequestsScreenState extends State<RequestsScreen> {
 
   @override
   void dispose() {
+    _searchDebounceTimer?.cancel();
     _searchController.removeListener(_handleSearchChanged);
     _searchController.dispose();
     super.dispose();
   }
 
   void _handleSearchChanged() {
+    _searchDebounceTimer?.cancel();
+
     final value = _searchController.text.trim().toLowerCase();
 
     if (value == _searchQuery || !mounted) {
       return;
     }
 
+    _searchDebounceTimer = Timer(_searchDebounce, () {
+      if (!mounted) return;
+
+      setState(() {
+        _searchQuery = value;
+      });
+    });
+  }
+
+  void _clearSearchAndFilter() {
+    _searchDebounceTimer?.cancel();
+    _searchController.clear();
+
     setState(() {
-      _searchQuery = value;
+      _searchQuery = '';
+      _statusFilter = 'All';
     });
   }
 
@@ -193,95 +222,160 @@ class _RequestsScreenState extends State<RequestsScreen> {
       ),
       body: Consumer2<RequestProvider, UserProvider>(
         builder: (context, requestProvider, userProvider, _) {
-          final canManageRequests =
-              userProvider.isSuperAdmin || userProvider.isAdmin;
-
-          if (requestProvider.isLoading && requestProvider.requests.isEmpty) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (requestProvider.errorMessage != null &&
-              requestProvider.requests.isEmpty) {
-            return _buildErrorState(context, requestProvider);
-          }
-
-          if (requestProvider.requests.isEmpty) {
-            return _buildEmptyState(context);
-          }
-
-          final filteredRequests = _filteredRequests(requestProvider.requests);
-
-          return RefreshIndicator(
-            onRefresh: () async {
-              // Reload once, then restart the live listener: a listener that
-              // failed after rows were shown would otherwise stay stopped.
-              await requestProvider.loadRequests();
-              requestProvider.listenToRequests(forceRestart: true);
-            },
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final horizontalPadding = constraints.maxWidth >= 1000
-                    ? 28.0
-                    : AppSpacing.lg;
-
-                return ListView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: EdgeInsets.fromLTRB(
-                    horizontalPadding,
-                    AppSpacing.lg,
-                    horizontalPadding,
-                    AppSpacing.xxl,
-                  ),
-                  children: [
-                    Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1450),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _buildSummaryHeader(
-                              context,
-                              requestProvider,
-                              canManageRequests,
-                            ),
-                            const SizedBox(height: AppSpacing.md),
-                            _buildSearchAndFilters(context),
-                            if (_focusedRequestId.isNotEmpty) ...[
-                              const SizedBox(height: AppSpacing.md),
-                              _buildFocusedRequestBanner(context),
-                            ],
-                            const SizedBox(height: AppSpacing.lg),
-                            if (filteredRequests.isEmpty)
-                              _buildFilteredEmptyState(context)
-                            else
-                              ...filteredRequests.map((request) {
-                                final isFocused =
-                                    request.id.toString() == _focusedRequestId;
-
-                                return Padding(
-                                  padding: const EdgeInsets.only(
-                                    bottom: AppSpacing.md,
-                                  ),
-                                  child: _buildRequestCard(
-                                    context,
-                                    request,
-                                    requestProvider,
-                                    canManageRequests,
-                                    userProvider,
-                                    isFocused: isFocused,
-                                  ),
-                                );
-                              }),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
+          // One switcher for all four states, so the skeleton fades into the
+          // list instead of being swapped out in a single frame.
+          return AppStateSwitcher(
+            child: _buildBodyState(context, requestProvider, userProvider),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildBodyState(
+    BuildContext context,
+    RequestProvider requestProvider,
+    UserProvider userProvider,
+  ) {
+    final canManageRequests = userProvider.isSuperAdmin || userProvider.isAdmin;
+
+    if (requestProvider.isLoading && requestProvider.requests.isEmpty) {
+      return const AppListSkeleton(key: ValueKey('requests-loading'));
+    }
+
+    final error = requestProvider.errorMessage;
+
+    if (error != null &&
+        error.trim().isNotEmpty &&
+        requestProvider.requests.isEmpty) {
+      // RequestProvider already turns a Firebase code into a sentence, so the
+      // stored message is shown as it is.
+      return AppErrorState(
+        key: const ValueKey('requests-error'),
+        title: 'Unable to load requests',
+        message: error.trim(),
+        onRetry: () {
+          requestProvider.listenToRequests(forceRestart: true);
+        },
+      );
+    }
+
+    if (requestProvider.requests.isEmpty) {
+      // Still scrollable, so pull-to-refresh works on an empty list too.
+      return RefreshIndicator(
+        key: const ValueKey('requests-empty'),
+        onRefresh: () async {
+          await requestProvider.loadRequests();
+          requestProvider.listenToRequests(forceRestart: true);
+        },
+        child: const CustomScrollView(
+          physics: AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: AppEmptyState(
+                icon: Icons.assignment_outlined,
+                title: 'No requests yet',
+                message:
+                    'IT requests raised from the inventory will appear here '
+                    'for review.',
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final filteredRequests = _filteredRequests(requestProvider.requests);
+
+    return RefreshIndicator(
+      key: const ValueKey('requests-content'),
+      onRefresh: () async {
+        // Reload once, then restart the live listener: a listener that
+        // failed after rows were shown would otherwise stay stopped.
+        await requestProvider.loadRequests();
+        requestProvider.listenToRequests(forceRestart: true);
+      },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final horizontalPadding = constraints.maxWidth >= 1000
+              ? 28.0
+              : AppSpacing.lg;
+
+          // Built on demand rather than mapped into a Column: only the cards
+          // on screen are laid out, which is what keeps a long request list
+          // scrolling smoothly. Index 0 is the header block.
+          return ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              AppSpacing.lg,
+              horizontalPadding,
+              AppSpacing.xxl,
+            ),
+            itemCount: filteredRequests.isEmpty
+                ? 2
+                : filteredRequests.length + 1,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return _constrained(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildSummaryHeader(
+                        context,
+                        requestProvider,
+                        canManageRequests,
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      _buildSearchAndFilters(context),
+                      if (_focusedRequestId.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.md),
+                        _buildFocusedRequestBanner(context),
+                      ],
+                      const SizedBox(height: AppSpacing.lg),
+                    ],
+                  ),
+                );
+              }
+
+              if (filteredRequests.isEmpty) {
+                return _constrained(_buildFilteredEmptyState(context));
+              }
+
+              final request = filteredRequests[index - 1];
+
+              final isFocused = request.id.toString() == _focusedRequestId;
+
+              // A request card draws panels, diffs and buttons; its own layer
+              // keeps scrolling from repainting all of that.
+              return RepaintBoundary(
+                child: _constrained(
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                    child: _buildRequestCard(
+                      context,
+                      request,
+                      requestProvider,
+                      canManageRequests,
+                      userProvider,
+                      isFocused: isFocused,
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _constrained(Widget child) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1450),
+        child: child,
       ),
     );
   }
@@ -408,6 +502,7 @@ class _RequestsScreenState extends State<RequestsScreen> {
                 Text(
                   data.value.toString(),
                   maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
@@ -433,15 +528,22 @@ class _RequestsScreenState extends State<RequestsScreen> {
           decoration: InputDecoration(
             hintText: 'Search by request, asset, requester, type or bazaar...',
             prefixIcon: const Icon(Icons.search_rounded, size: 20),
-            suffixIcon: _searchQuery.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: 'Clear search',
-                    onPressed: () {
-                      _searchController.clear();
-                    },
-                    icon: const Icon(Icons.clear_rounded, size: 20),
-                  ),
+            // Driven by the controller, not by the debounced query, so the
+            // clear button appears the moment there is something to clear.
+            suffixIcon: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _searchController,
+              builder: (context, value, _) {
+                if (value.text.isEmpty) {
+                  return const SizedBox.shrink();
+                }
+
+                return IconButton(
+                  tooltip: 'Clear search',
+                  onPressed: _searchController.clear,
+                  icon: const Icon(Icons.clear_rounded, size: 20),
+                );
+              },
+            ),
           ),
         ),
         const SizedBox(height: AppSpacing.sm + 2),
@@ -1390,7 +1492,12 @@ class _RequestsScreenState extends State<RequestsScreen> {
   }
 
   Widget _statusChip(BuildContext context, String status) {
-    return _StatusPill(label: status, color: AppColors.forStatus(status));
+    // Capped so an unexpected status string cannot push the pill past the
+    // card edge on a phone; the label ellipsises inside it.
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 150),
+      child: _StatusPill(label: status, color: AppColors.forStatus(status)),
+    );
   }
 
   Future<void> _handleRequestAction({
@@ -1497,17 +1604,9 @@ class _RequestsScreenState extends State<RequestsScreen> {
     } catch (e) {
       if (!context.mounted) return;
 
-      // Show the real reason (e.g. "already processed", "quantity cannot be
-      // less than ... deployed", permission denied).
-      var reason = e.toString().trim();
-
-      if (reason.startsWith('Exception: ')) {
-        reason = reason.substring('Exception: '.length);
-      }
-
       _showMessage(
         context,
-        'Unable to $actionText this request: $reason',
+        'Unable to $actionText this request: ${_cleanErrorMessage(e)}',
         isError: true,
       );
     } finally {
@@ -1519,129 +1618,50 @@ class _RequestsScreenState extends State<RequestsScreen> {
     }
   }
 
-  Widget _stateIcon(BuildContext context, IconData icon, Color tone) {
-    final brightness = Theme.of(context).brightness;
-
-    return Container(
-      width: 64,
-      height: 64,
-      decoration: BoxDecoration(
-        color: AppColors.tint(tone, brightness),
-        borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-      ),
-      child: Icon(icon, size: 30, color: AppColors.onTint(tone, brightness)),
-    );
-  }
-
-  Widget _buildErrorState(BuildContext context, RequestProvider provider) {
-    final colors = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 460),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _stateIcon(context, Icons.cloud_off_rounded, colors.error),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Unable to load requests',
-                textAlign: TextAlign.center,
-                style: textTheme.titleMedium,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Something went wrong while loading requests.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              FilledButton.icon(
-                onPressed: () {
-                  provider.listenToRequests();
-                },
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Try Again'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _stateIcon(context, Icons.assignment_outlined, colors.primary),
-            const SizedBox(height: AppSpacing.lg),
-            Text('No Requests Found', style: textTheme.titleMedium),
-            const SizedBox(height: 6),
-            Text(
-              'There are currently no IT requests to display.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
+  /// Nothing matched the search or the status filter - which is a different
+  /// situation from having no requests at all, so it keeps the card shape and
+  /// offers the filters back.
   Widget _buildFilteredEmptyState(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.xl,
-          vertical: AppSpacing.xxl,
-        ),
-        child: SizedBox(
-          width: double.infinity,
-          child: Column(
-            children: [
-              _stateIcon(
-                context,
-                Icons.search_off_rounded,
-                colors.onSurfaceVariant,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              Text('No Matching Requests', style: textTheme.titleMedium),
-              const SizedBox(height: 6),
-              Text(
-                'Try another search term or clear the selected filter.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: colors.onSurfaceVariant),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              OutlinedButton.icon(
-                onPressed: () {
-                  _searchController.clear();
-
-                  setState(() {
-                    _statusFilter = 'All';
-                  });
-                },
-                icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
-                label: const Text('Clear Search & Filter'),
-              ),
-            ],
+      child: SizedBox(
+        width: double.infinity,
+        child: AppEmptyState(
+          icon: Icons.search_off_rounded,
+          title: 'No matching requests',
+          message: 'Try another search term or clear the selected filter.',
+          action: OutlinedButton.icon(
+            onPressed: _clearSearchAndFilter,
+            icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+            label: const Text('Clear Search & Filter'),
           ),
         ),
       ),
     );
+  }
+
+  /// A reason the approver can act on.
+  ///
+  /// The business reasons ("This request has already been processed.",
+  /// "Quantity cannot be less than 4 unit(s)...") are the point of this
+  /// message, so an Exception keeps its own text. Raw Firebase codes are
+  /// translated instead, and anything unrecognised becomes one short sentence.
+  String _cleanErrorMessage(Object error) {
+    final message = error.toString().trim();
+
+    if (message.contains('permission-denied')) {
+      return 'you do not have permission to do this.';
+    }
+
+    if (message.contains('unavailable') ||
+        message.contains('network-request-failed')) {
+      return 'please check your internet connection and try again.';
+    }
+
+    if (message.startsWith('Exception: ')) {
+      return message.substring('Exception: '.length).trim();
+    }
+
+    return 'something went wrong. Please try again.';
   }
 
   void _showMessage(
@@ -1704,12 +1724,16 @@ class _StatusPill extends StatelessWidget {
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           const SizedBox(width: 6),
-          Text(
-            label.trim().isEmpty ? '—' : label,
-            style: TextStyle(
-              color: AppColors.onTint(color, brightness),
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          Flexible(
+            child: Text(
+              label.trim().isEmpty ? '—' : label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppColors.onTint(color, brightness),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/colors.dart';
 
 // =============================================================================
@@ -28,13 +29,13 @@ class WebPage extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final horizontal = constraints.maxWidth >= 1100
-            ? 32.0
+            ? AppSpacing.xxl
             : constraints.maxWidth >= 600
-            ? 24.0
-            : 16.0;
+            ? AppSpacing.xl
+            : AppSpacing.lg;
 
         return SingleChildScrollView(
-          padding: EdgeInsets.fromLTRB(horizontal, 24, horizontal, 40),
+          padding: EdgeInsets.fromLTRB(horizontal, AppSpacing.xl, horizontal, 40),
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1760),
@@ -44,7 +45,7 @@ class WebPage extends StatelessWidget {
                   Wrap(
                     alignment: WrapAlignment.spaceBetween,
                     crossAxisAlignment: WrapCrossAlignment.end,
-                    spacing: 16,
+                    spacing: AppSpacing.lg,
                     runSpacing: 14,
                     children: [
                       ConstrainedBox(
@@ -67,7 +68,7 @@ class WebPage extends StatelessWidget {
                               ),
                             ),
                             if (subtitle != null) ...[
-                              const SizedBox(height: 4),
+                              const SizedBox(height: AppSpacing.xs),
                               Text(
                                 subtitle!,
                                 style: TextStyle(
@@ -84,7 +85,7 @@ class WebPage extends StatelessWidget {
                         Wrap(spacing: 10, runSpacing: 10, children: actions),
                     ],
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xl),
                   ...children,
                 ],
               ),
@@ -107,7 +108,7 @@ class WebToolbar extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
@@ -115,12 +116,12 @@ class WebToolbar extends StatelessWidget {
           border: Border.all(color: colors.outlineVariant),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(AppSpacing.md),
           child: SizedBox(
             width: double.infinity,
             child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
+              spacing: AppSpacing.md,
+              runSpacing: AppSpacing.md,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: children,
             ),
@@ -149,7 +150,13 @@ class WebSearchField extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final available = MediaQuery.sizeOf(context).width - 72;
+        // The toolbar's own width is what the field actually has to fit in;
+        // the window width is kept as a second bound because the field also
+        // appears inside dialogs that are narrower than the toolbar.
+        final window = MediaQuery.sizeOf(context).width - 72;
+        final available = constraints.maxWidth.isFinite
+            ? (window < constraints.maxWidth ? window : constraints.maxWidth)
+            : window;
 
         return SizedBox(
           width: width.clamp(0, available < 200 ? 200 : available).toDouble(),
@@ -161,7 +168,9 @@ class WebSearchField extends StatelessWidget {
               isDense: true,
               hintText: hint,
               prefixIcon: const Icon(Icons.search_rounded, size: 20),
-              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              contentPadding: const EdgeInsets.symmetric(
+                vertical: AppSpacing.md,
+              ),
             ),
           ),
         );
@@ -210,7 +219,7 @@ class WebFilterDropdown<T> extends StatelessWidget {
         decoration: InputDecoration(
           isDense: true,
           labelText: label,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          contentPadding: const EdgeInsets.all(AppSpacing.md),
         ),
         items: [
           for (final entry in items.entries)
@@ -232,7 +241,12 @@ class WebFilterDropdown<T> extends StatelessWidget {
 // =============================================================================
 
 /// Key metric tile: tinted icon, label, large value and a caption.
-class WebStatCard extends StatelessWidget {
+///
+/// A tile with an [onTap] answers the pointer with a lift and a tint, and a
+/// keyboard focus with a ring: on the web a card that navigates has to look
+/// like it does something, and a keyboard user has no cursor to tell them
+/// which tile Enter would open.
+class WebStatCard extends StatefulWidget {
   const WebStatCard({
     super.key,
     required this.label,
@@ -251,13 +265,45 @@ class WebStatCard extends StatelessWidget {
   final VoidCallback? onTap;
 
   @override
+  State<WebStatCard> createState() => _WebStatCardState();
+}
+
+class _WebStatCardState extends State<WebStatCard> {
+  bool _hovered = false;
+  bool _focused = false;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
 
+    final label = widget.label;
+    final value = widget.value;
+    final icon = widget.icon;
+    final color = widget.color;
+    final caption = widget.caption;
+    final onTap = widget.onTap;
+
+    final interactive = onTap != null;
+
     return Card(
+      // Only a lift, not a new colour or border: the resting look is the one
+      // the dashboard was designed with.
+      elevation: interactive && (_hovered || _focused) ? 3 : null,
       child: InkWell(
         onTap: onTap,
+        onHover: interactive
+            ? (hovered) {
+                if (hovered != _hovered) setState(() => _hovered = hovered);
+              }
+            : null,
+        onFocusChange: interactive
+            ? (focused) {
+                if (focused != _focused) setState(() => _focused = focused);
+              }
+            : null,
+        hoverColor: colors.primary.withValues(alpha: 0.04),
+        focusColor: colors.primary.withValues(alpha: 0.06),
         child: Stack(
           children: [
             // Thin accent bar identifies the metric at a glance.
@@ -305,7 +351,7 @@ class WebStatCard extends StatelessWidget {
                         if (caption != null) ...[
                           const SizedBox(height: 2),
                           Text(
-                            caption!,
+                            caption,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -339,7 +385,7 @@ class WebStatCard extends StatelessWidget {
                 ],
               ),
             ),
-            if (onTap != null)
+            if (interactive)
               Positioned(
                 right: 6,
                 bottom: 4,
@@ -347,6 +393,19 @@ class WebStatCard extends StatelessWidget {
                   Icons.arrow_forward_rounded,
                   size: 14,
                   color: colors.onSurfaceVariant.withValues(alpha: 0.7),
+                ),
+              ),
+            // Focus ring. A tint alone is easy to miss on a grid of tiles,
+            // and it has to be drawn over the accent bar, not under it.
+            if (_focused)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+                      border: Border.all(color: colors.primary, width: 2),
+                    ),
+                  ),
                 ),
               ),
           ],
@@ -373,7 +432,7 @@ class WebCardGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        const spacing = 16.0;
+        const spacing = AppSpacing.lg;
         final columns = ((constraints.maxWidth + spacing) / (minItemWidth + spacing))
             .floor()
             .clamp(1, 8);
@@ -474,6 +533,98 @@ class WebLoadingState extends StatelessWidget {
             style: TextStyle(color: colors.onSurfaceVariant, fontWeight: FontWeight.w500),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// First-load placeholder shaped like [WebDataTable]: heading band, rows and
+/// footer, inside the same card.
+///
+/// Shown instead of a spinner on a first load because the page then keeps its
+/// shape: the toolbar does not jump down the screen when the rows arrive, and
+/// the wait reads as a table filling in rather than as a stalled card.
+class WebTableSkeleton extends StatelessWidget {
+  const WebTableSkeleton({super.key, this.rows = 8, this.columns = 6});
+
+  final int rows;
+  final int columns;
+
+  /// Uneven column widths, so the placeholder reads as a table of names,
+  /// numbers and dates instead of a grid of identical bars.
+  /// Uneven column widths, so the placeholder reads as a table of real
+  /// values rather than as a grid of identical bars.
+  ///
+  /// Walked forwards then backwards rather than cycled: a plain repeat makes
+  /// the same pattern restart visibly every sixth column, which a nine-column
+  /// table (the movement history) shows up at once.
+  static const List<int> _flexes = [3, 2, 2, 1, 2, 1];
+
+  static int _flexFor(int column) {
+    final span = (_flexes.length - 1) * 2;
+    final step = column % span;
+
+    return _flexes[step < _flexes.length ? step : span - step];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    Widget band(double barHeight) {
+      return Row(
+        children: [
+          for (var column = 0; column < columns; column++) ...[
+            if (column > 0) const SizedBox(width: AppSpacing.xl),
+            Expanded(
+              flex: _flexFor(column),
+              child: AppSkeleton(height: barHeight),
+            ),
+          ],
+        ],
+      );
+    }
+
+    return AppSkeletonGroup(
+      child: Card(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Same tint and height as the real heading row, so the header
+            // does not move when the data lands.
+            Container(
+              color: colors.surfaceContainerLow,
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+              child: Center(child: band(11)),
+            ),
+            Divider(height: 1, color: colors.outlineVariant),
+            for (var row = 0; row < rows; row++) ...[
+              if (row > 0) Divider(height: 1, color: colors.outlineVariant),
+              Container(
+                height: 50,
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                child: Center(child: band(13)),
+              ),
+            ],
+            Divider(height: 1, color: colors.outlineVariant),
+            Container(
+              color: colors.surfaceContainerLow,
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.lg,
+                vertical: AppSpacing.lg,
+              ),
+              child: const Row(
+                children: [
+                  AppSkeleton(width: 70, height: 11),
+                  Spacer(),
+                  AppSkeleton(width: 120, height: 11),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -608,6 +759,26 @@ String cleanError(Object error) {
 
   if (text.contains('unavailable') || text.contains('network')) {
     return 'Network error. Check your connection and try again.';
+  }
+
+  if (text.contains('not-found')) {
+    return 'That record no longer exists.';
+  }
+
+  if (text.contains('already-exists')) {
+    return 'That record already exists.';
+  }
+
+  // Anything still unrecognised must not reach the screen as it stands. An
+  // unmapped Firestore code arrives as "[cloud_firestore/unknown] ...",
+  // which names internals, means nothing to the reader and looks like a
+  // crash; a dumped object or a stack trace is no better. Every mapped case
+  // above keeps its own specific wording, so this only catches the rest.
+  if (text.isEmpty ||
+      text.startsWith('[') ||
+      text.length > 180 ||
+      text.contains('\n')) {
+    return 'Something went wrong. Please try again.';
   }
 
   return text;

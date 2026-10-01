@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +12,8 @@ import '../../providers/asset_scope.dart';
 import '../../providers/request_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../requests/screens/create_request_screen.dart';
+import '../../services/permission_service.dart';
+import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
 import 'add_asset_screen.dart';
 import 'transfer_asset_screen.dart';
@@ -25,6 +29,14 @@ class AssetsScreen extends StatefulWidget {
 
 class _AssetsScreenState extends State<AssetsScreen> {
   final TextEditingController _searchController = TextEditingController();
+
+  /// The text the list is actually filtered on. It trails the field by
+  /// [_searchDebounce] because re-filtering a long inventory on every
+  /// keystroke is what makes typing here feel sticky.
+  String _searchQuery = '';
+  Timer? _searchDebounceTimer;
+
+  static const Duration _searchDebounce = Duration(milliseconds: 250);
 
   late String _selectedStatus;
   late _StockView _stockView;
@@ -127,15 +139,62 @@ class _AssetsScreenState extends State<AssetsScreen> {
 
   @override
   void dispose() {
+    // A pending debounce would call setState on a dead State, so it goes
+    // before the controller it reads from.
+    _searchDebounceTimer?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// Holds the filter until typing pauses. The filter itself is unchanged -
+  /// only how often it runs.
+  void _onSearchChanged(String value) {
+    _searchDebounceTimer?.cancel();
+
+    final query = value.trim();
+
+    _searchDebounceTimer = Timer(_searchDebounce, () {
+      if (!mounted || query == _searchQuery) return;
+
+      setState(() {
+        _searchQuery = query;
+      });
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounceTimer?.cancel();
+    _searchController.clear();
+
+    setState(() {
+      _searchQuery = '';
+    });
+  }
+
+  /// The way out of an empty filtered list: back to every record this
+  /// account can already see.
+  void _clearFilters() {
+    _searchDebounceTimer?.cancel();
+    _searchController.clear();
+
+    setState(() {
+      _searchQuery = '';
+      _selectedStatus = 'All';
+      _stockView = _StockView.none;
+    });
+  }
+
+  bool get _hasActiveFilter {
+    return _searchQuery.isNotEmpty ||
+        _selectedStatus != 'All' ||
+        _stockView != _StockView.none;
   }
 
   List<AssetModel> _filteredAssets(
     AssetProvider provider,
     List<AssetModel> assets,
   ) {
-    final query = _searchController.text.trim().toLowerCase();
+    final query = _searchQuery.toLowerCase();
 
     return assets.where((asset) {
       final matchesSearch =
@@ -279,11 +338,19 @@ class _AssetsScreenState extends State<AssetsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final userProvider = context.watch<UserProvider>();
+    // The same two role questions as before, asked through select so an
+    // unrelated change inside UserProvider (a loaded user list, say) no
+    // longer rebuilds the whole inventory screen.
+    final canImport = context.select<UserProvider, bool>(
+      (provider) => provider.isSuperAdmin || provider.isAdmin,
+    );
 
-    final canImport = userProvider.isSuperAdmin || userProvider.isAdmin;
-
-    final canManageAssets = userProvider.isSuperAdmin || userProvider.isAdmin;
+    // A User may add inventory now - only changing it afterwards stays with
+    // the managers - so the Add action is gated on the permission, not on the
+    // role.
+    final canAddAsset = context.select<UserProvider, bool>(
+      (provider) => PermissionService.canAddAsset(provider.currentUserRole),
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -339,10 +406,10 @@ class _AssetsScreenState extends State<AssetsScreen> {
             },
             icon: const Icon(Icons.refresh_rounded),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: AppSpacing.xs),
         ],
       ),
-      floatingActionButton: canManageAssets
+      floatingActionButton: canAddAsset
           ? FloatingActionButton.extended(
               onPressed: () {
                 Navigator.of(context).push(
@@ -379,7 +446,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                     provider,
                     allAssets,
                     assets,
-                    canManageAssets: canManageAssets,
+                    canAddAsset: canAddAsset,
                   ),
                 ),
               ],
@@ -416,27 +483,30 @@ class _AssetsScreenState extends State<AssetsScreen> {
       ),
       child: Column(
         children: [
-          TextField(
-            textInputAction: TextInputAction.search,
-            controller: _searchController,
-            onChanged: (_) {
-              setState(() {});
+          // Listening to the controller keeps the clear button instant while
+          // the list below it waits for the debounce; rebuilding the field is
+          // cheap, rebuilding the inventory is not.
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: _searchController,
+            builder: (context, value, _) {
+              return TextField(
+                textInputAction: TextInputAction.search,
+                controller: _searchController,
+                onChanged: _onSearchChanged,
+                decoration: InputDecoration(
+                  hintText: 'Search assets, ID, serial, category...',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: value.text.isNotEmpty
+                      ? IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: _clearSearch,
+                          icon: const Icon(Icons.close_rounded),
+                        )
+                      : null,
+                  isDense: true,
+                ),
+              );
             },
-            decoration: InputDecoration(
-              hintText: 'Search assets, ID, serial, category...',
-              prefixIcon: const Icon(Icons.search_rounded),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
-                      tooltip: 'Clear search',
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() {});
-                      },
-                      icon: const Icon(Icons.close_rounded),
-                    )
-                  : null,
-              isDense: true,
-            ),
           ),
           const SizedBox(height: AppSpacing.md),
           Row(
@@ -458,7 +528,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: AppSpacing.sm),
                           Flexible(
                             child: Text(
                               '• $visibleAssets record${visibleAssets == 1 ? '' : 's'}',
@@ -474,8 +544,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                         ],
                       )
                     : Text(
-                        _searchController.text.isEmpty &&
-                                _selectedStatus == 'All'
+                        _searchQuery.isEmpty && _selectedStatus == 'All'
                             ? '$totalAssets asset records'
                             : '$visibleAssets result${visibleAssets == 1 ? '' : 's'}',
                         maxLines: 1,
@@ -487,7 +556,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                         ),
                       ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: AppSpacing.sm),
               PopupMenuButton<String>(
                 tooltip: 'Filter by status',
                 onSelected: (value) {
@@ -535,9 +604,11 @@ class _AssetsScreenState extends State<AssetsScreen> {
                   }).toList();
                 },
                 child: Container(
+                  // 44 high so the filter is a comfortable tap target rather
+                  // than a chip you have to aim at.
                   constraints: const BoxConstraints(
                     maxWidth: 170,
-                    minHeight: 36,
+                    minHeight: 44,
                   ),
                   padding: const EdgeInsets.symmetric(
                     horizontal: AppSpacing.md,
@@ -612,51 +683,86 @@ class _AssetsScreenState extends State<AssetsScreen> {
     AssetProvider provider,
     List<AssetModel> allAssets,
     List<AssetModel> assets, {
-    required bool canManageAssets,
+    required bool canAddAsset,
   }) {
+    // Crossfading the four states keeps the screen from snapping from a
+    // skeleton to a full list.
+    return AppStateSwitcher(
+      child: _buildAssetState(
+        context,
+        provider,
+        allAssets,
+        assets,
+        canAddAsset: canAddAsset,
+      ),
+    );
+  }
+
+  Widget _buildAssetState(
+    BuildContext context,
+    AssetProvider provider,
+    List<AssetModel> allAssets,
+    List<AssetModel> assets, {
+    required bool canAddAsset,
+  }) {
+    // A failed read gets its own shape, because a failure drawn like an empty
+    // list is how a permission error reads as an empty inventory.
     if (provider.error != null && provider.error!.trim().isNotEmpty) {
-      return _buildErrorState(context, provider.error!);
+      return AppErrorState(
+        key: const ValueKey('assets-error'),
+        title: 'Unable to Load Assets',
+        message:
+            'We could not read your assets just now. Please check your '
+            'connection and try again.',
+        onRetry: () {
+          _listenForCurrentRole(forceRestart: true);
+        },
+      );
     }
 
     if (provider.isLoading && allAssets.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(
-              width: 32,
-              height: 32,
-              child: CircularProgressIndicator(strokeWidth: 3),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            Text(
-              'Loading...',
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
+      // Shaped like the card list that is coming, so nothing jumps when the
+      // records land.
+      return const AppListSkeleton(
+        key: ValueKey('assets-loading'),
+        padding: EdgeInsets.fromLTRB(
+          AppSpacing.md,
+          AppSpacing.md,
+          AppSpacing.md,
+          100,
         ),
       );
     }
 
     if (allAssets.isEmpty) {
-      return _buildEmptyState(
+      return AppEmptyState(
+        key: const ValueKey('assets-empty'),
         icon: Icons.inventory_2_outlined,
         title: 'No Assets Found',
-        message:
-            'Your asset inventory is currently empty.\n'
-            'Add your first asset to get started.',
-        showAddButton: canManageAssets,
+        message: canAddAsset
+            ? 'Your asset inventory is currently empty. Add your first asset '
+                  'to get started.'
+            : 'Your asset inventory is currently empty.',
+        action: canAddAsset
+            ? FilledButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const AddAssetScreen()),
+                  );
+                },
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('Add First Asset'),
+              )
+            : null,
       );
     }
 
     if (assets.isEmpty) {
-      return _buildEmptyState(
+      return AppEmptyState(
+        key: const ValueKey('assets-no-match'),
         icon: Icons.search_off_rounded,
         title: 'No Matching Assets',
-        message: _searchController.text.trim().isNotEmpty
+        message: _searchQuery.isNotEmpty
             ? 'No assets match your current search.'
             : _stockView == _StockView.headOffice
             ? 'There is currently no stock available at Head Office.'
@@ -667,11 +773,20 @@ class _AssetsScreenState extends State<AssetsScreen> {
             : _selectedStatus == 'All'
             ? 'No assets match your current search.'
             : 'There are currently no $_selectedStatus assets.',
-        showAddButton: false,
+        // The filters are the reason this is empty, so the way out is to
+        // drop them rather than to go hunting for the control again.
+        action: _hasActiveFilter
+            ? OutlinedButton.icon(
+                onPressed: _clearFilters,
+                icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+                label: const Text('Clear filters'),
+              )
+            : null,
       );
     }
 
     return LayoutBuilder(
+      key: const ValueKey('assets-list'),
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 800;
 
@@ -731,83 +846,6 @@ class _AssetsScreenState extends State<AssetsScreen> {
     );
   }
 
-  Widget _buildErrorState(BuildContext context, String error) {
-    final theme = Theme.of(context);
-
-    final colors = theme.colorScheme;
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.error, theme.brightness),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.cloud_off_rounded,
-                  size: 30,
-                  color: colors.error,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'Unable to Load Assets',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: colors.onSurface,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Firestore returned an error while loading your assets.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(AppSpacing.md),
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.error, theme.brightness),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                  border: Border.all(
-                    color: colors.error.withValues(alpha: 0.25),
-                  ),
-                ),
-                child: Text(
-                  'Please check your connection and try again.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: AppColors.onTint(colors.error, theme.brightness),
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              FilledButton.icon(
-                onPressed: () {
-                  _listenForCurrentRole(forceRestart: true);
-                },
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Try Again'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildAssetCard(
     BuildContext context,
     AssetProvider provider,
@@ -828,141 +866,146 @@ class _AssetsScreenState extends State<AssetsScreen> {
       if (asset.serialNumber.isNotEmpty) 'Serial: ${asset.serialNumber}',
     ].join('  ·  ');
 
-    return Card(
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () {
-          _showAssetDetails(context, provider, asset);
-        },
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.md,
-            AppSpacing.md,
-            AppSpacing.xs,
-            AppSpacing.md,
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.primary, theme.brightness),
-                  borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+    // A card is an icon tile, two text blocks and up to five chips, so it
+    // earns its own layer: scrolling then repaints the rows that moved
+    // instead of every card on screen.
+    return RepaintBoundary(
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            _showAssetDetails(context, provider, asset);
+          },
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.xs,
+              AppSpacing.md,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: AppColors.tint(colors.primary, theme.brightness),
+                    borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
+                  ),
+                  child: Icon(
+                    _categoryIcon(asset.category),
+                    size: 22,
+                    color: colors.primary,
+                  ),
                 ),
-                child: Icon(
-                  _categoryIcon(asset.category),
-                  size: 22,
-                  color: colors.primary,
-                ),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 2),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  asset.name.isEmpty
-                                      ? 'Unnamed Asset'
-                                      : asset.name,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.25,
-                                    color: colors.onSurface,
-                                  ),
-                                ),
-                                if (secondary.isNotEmpty) ...[
-                                  const SizedBox(height: 3),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
                                   Text(
-                                    secondary,
+                                    asset.name.isEmpty
+                                        ? 'Unnamed Asset'
+                                        : asset.name,
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
-                                      color: colors.onSurfaceVariant,
-                                      fontSize: 12,
-                                      height: 1.3,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.25,
+                                      color: colors.onSurface,
                                     ),
                                   ),
+                                  if (secondary.isNotEmpty) ...[
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      secondary,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: colors.onSurfaceVariant,
+                                        fontSize: 12,
+                                        height: 1.3,
+                                      ),
+                                    ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
                           ),
-                        ),
-                        _buildAssetMenu(context, provider, asset),
-                      ],
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                    Padding(
-                      padding: const EdgeInsets.only(right: AppSpacing.sm),
-                      child: Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          _statusChip(context, asset.status, statusColor),
-                          _infoChip(
-                            context,
-                            Icons.inventory_2_outlined,
-                            '${_quantityLabel()} $displayedQuantity',
-                          ),
-                          if (_stockView != _StockView.headOffice)
-                            _quantityChip(
-                              context,
-                              icon: Icons.business_outlined,
-                              label: 'HO',
-                              value: headOfficeQuantity,
-                              tone: AppColors.headOffice,
-                            ),
-                          if (_stockView != _StockView.bazaar)
-                            _quantityChip(
-                              context,
-                              icon: Icons.storefront_outlined,
-                              label: 'Bazaars',
-                              value: deployedQuantity,
-                              tone: AppColors.bazaar,
-                            ),
-                          if (_stockView != _StockView.assigned)
-                            _quantityChip(
-                              context,
-                              icon: Icons.person_outline_rounded,
-                              label: 'Assigned',
-                              value: assignedQuantity,
-                              tone: AppColors.assigned,
-                            ),
+                          _buildAssetMenu(context, provider, asset),
                         ],
                       ),
-                    ),
-                    if (asset.location.isNotEmpty) ...[
                       const SizedBox(height: AppSpacing.sm),
                       Padding(
                         padding: const EdgeInsets.only(right: AppSpacing.sm),
-                        child: _compactMetaText(
-                          context,
-                          Icons.location_on_outlined,
-                          'Location: ${asset.location}',
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            _statusChip(context, asset.status, statusColor),
+                            _infoChip(
+                              context,
+                              Icons.inventory_2_outlined,
+                              '${_quantityLabel()} $displayedQuantity',
+                            ),
+                            if (_stockView != _StockView.headOffice)
+                              _quantityChip(
+                                context,
+                                icon: Icons.business_outlined,
+                                label: 'HO',
+                                value: headOfficeQuantity,
+                                tone: AppColors.headOffice,
+                              ),
+                            if (_stockView != _StockView.bazaar)
+                              _quantityChip(
+                                context,
+                                icon: Icons.storefront_outlined,
+                                label: 'Bazaars',
+                                value: deployedQuantity,
+                                tone: AppColors.bazaar,
+                              ),
+                            if (_stockView != _StockView.assigned)
+                              _quantityChip(
+                                context,
+                                icon: Icons.person_outline_rounded,
+                                label: 'Assigned',
+                                value: assignedQuantity,
+                                tone: AppColors.assigned,
+                              ),
+                          ],
                         ),
                       ),
+                      if (asset.location.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        Padding(
+                          padding: const EdgeInsets.only(right: AppSpacing.sm),
+                          child: _compactMetaText(
+                            context,
+                            Icons.location_on_outlined,
+                            'Location: ${asset.location}',
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1034,12 +1077,13 @@ class _AssetsScreenState extends State<AssetsScreen> {
   ) {
     final userProvider = context.read<UserProvider>();
 
-    final bool isSuperAdmin = userProvider.isSuperAdmin;
-    final bool isAdmin = userProvider.isAdmin;
-    final bool isPrivileged = isSuperAdmin || isAdmin;
+    final String role = userProvider.currentUserRole;
 
-    final bool canTransfer = isPrivileged;
-    final bool canDelete = isPrivileged;
+    // A User never edits or deletes inventory; the two entries it does get
+    // only ASK for the change through a request, which it may create.
+    final bool canEdit = PermissionService.canEditAsset(role);
+    final bool canTransfer = PermissionService.canTransferAsset(role);
+    final bool canDelete = PermissionService.canDeleteAsset(role);
 
     return PopupMenuButton<String>(
       tooltip: 'Asset Options',
@@ -1057,7 +1101,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
             break;
 
           case 'edit':
-            await _editAsset(context, asset, isPrivileged: isPrivileged);
+            await _editAsset(context, asset, canEdit: canEdit);
             break;
 
           case 'transfer':
@@ -1067,12 +1111,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
             break;
 
           case 'delete':
-            await _deleteAsset(
-              context,
-              provider,
-              asset,
-              isPrivileged: canDelete,
-            );
+            await _deleteAsset(context, provider, asset, canDelete: canDelete);
             break;
         }
       },
@@ -1098,7 +1137,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                 const SizedBox(width: 10),
                 Flexible(
                   child: Text(
-                    isPrivileged ? 'Edit Asset' : 'Request Edit',
+                    canEdit ? 'Edit Asset' : 'Request Edit',
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -1134,14 +1173,12 @@ class _AssetsScreenState extends State<AssetsScreen> {
               children: [
                 Icon(
                   Icons.delete_outline,
-                  color: isPrivileged
-                      ? Theme.of(context).colorScheme.error
-                      : null,
+                  color: canDelete ? Theme.of(context).colorScheme.error : null,
                 ),
                 const SizedBox(width: 10),
                 Flexible(
                   child: Text(
-                    isPrivileged ? 'Delete Asset' : 'Request Delete',
+                    canDelete ? 'Delete Asset' : 'Request Delete',
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -1158,9 +1195,9 @@ class _AssetsScreenState extends State<AssetsScreen> {
   Future<void> _editAsset(
     BuildContext context,
     AssetModel asset, {
-    required bool isPrivileged,
+    required bool canEdit,
   }) async {
-    if (!isPrivileged) {
+    if (!canEdit) {
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => CreateRequestScreen(
@@ -1266,74 +1303,13 @@ class _AssetsScreenState extends State<AssetsScreen> {
     );
   }
 
-  Widget _buildEmptyState({
-    required IconData icon,
-    required String title,
-    required String message,
-    required bool showAddButton,
-  }) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(AppSpacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: AppColors.tint(colors.primary, theme.brightness),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, size: 30, color: colors.primary),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                title,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w700,
-                  color: colors.onSurface,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: colors.onSurfaceVariant, height: 1.5),
-              ),
-              if (showAddButton) ...[
-                const SizedBox(height: AppSpacing.xl),
-                FilledButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const AddAssetScreen()),
-                    );
-                  },
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('Add First Asset'),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Future<void> _deleteAsset(
     BuildContext context,
     AssetProvider provider,
     AssetModel asset, {
-    required bool isPrivileged,
+    required bool canDelete,
   }) async {
-    if (isPrivileged) {
+    if (canDelete) {
       await _confirmDirectDelete(context, provider, asset);
       return;
     }
@@ -1353,11 +1329,16 @@ class _AssetsScreenState extends State<AssetsScreen> {
       barrierDismissible: false,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Row(
+          title: Row(
             children: [
-              Icon(Icons.delete_outline_rounded, color: AppColors.error),
-              SizedBox(width: 10),
-              Expanded(child: Text('Delete Asset')),
+              // The scheme's error red, not the brand constant: the constant
+              // is tuned for light surfaces and goes muddy in dark mode.
+              Icon(
+                Icons.delete_outline_rounded,
+                color: Theme.of(dialogContext).colorScheme.error,
+              ),
+              const SizedBox(width: AppSpacing.sm + 2),
+              const Expanded(child: Text('Delete Asset')),
             ],
           ),
           content: Text(
@@ -1490,7 +1471,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
         ..hideCurrentSnackBar()
         ..showSnackBar(
           const SnackBar(
-            content: Text('Delete request submitted for Super Admin approval.'),
+            content: Text('Delete request submitted for approval.'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -1926,11 +1907,16 @@ class _DeleteAssetRequestDialogState extends State<_DeleteAssetRequestDialog> {
         : widget.asset.name;
 
     return AlertDialog(
-      title: const Row(
+      title: Row(
         children: [
-          Icon(Icons.delete_outline_rounded, color: AppColors.error),
-          SizedBox(width: 10),
-          Expanded(child: Text('Request Asset Deletion')),
+          // The scheme's error red, not the brand constant, so the icon stays
+          // readable on the dark dialog surface too.
+          Icon(
+            Icons.delete_outline_rounded,
+            color: theme.colorScheme.error,
+          ),
+          const SizedBox(width: AppSpacing.sm + 2),
+          const Expanded(child: Text('Request Asset Deletion')),
         ],
       ),
       content: SingleChildScrollView(

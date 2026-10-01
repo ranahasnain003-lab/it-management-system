@@ -20,15 +20,23 @@ class AssetService {
   // ALL ASSETS
   // ---------------------------------------------------------------------------
 
+  /// Every asset, newest first.
+  ///
+  /// Sorted in the app rather than by Firestore: an orderBy('createdAt') drops
+  /// every document that has no createdAt, so an imported or hand-written
+  /// asset would be missing from the list, the dashboard totals and the AI
+  /// Assistant without anything reporting an error. [_sortAssets] orders the
+  /// same way and keeps those documents.
   Stream<List<AssetModel>> getAssets() {
-    return _collection
-        .orderBy('createdAt', descending: true)
-        .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
-              .map((doc) => AssetModel.fromMap(doc.data(), doc.id))
-              .toList(),
-        );
+    return _collection.snapshots().map((snapshot) {
+      final assets = snapshot.docs
+          .map((doc) => AssetModel.fromMap(doc.data(), doc.id))
+          .toList();
+
+      _sortAssets(assets);
+
+      return assets;
+    });
   }
 
   /// All inventory visible to Super Admin / Admin.
@@ -191,6 +199,11 @@ class AssetService {
     final data = asset.toMap();
 
     final quantity = _readQuantity(data['quantity']);
+
+    // The create rule recognises a User's own new asset by createdBy, so the
+    // field has to be part of the written document. It is written once here
+    // and never again: it is not one of the editableFields.
+    data['createdBy'] = asset.createdBy.trim();
 
     data['quantity'] = quantity;
     data['headOfficeQuantity'] = quantity;
@@ -498,13 +511,15 @@ class AssetService {
   Future<List<AssetModel>> searchAssets(String query) async {
     final cleanQuery = query.trim().toLowerCase();
 
-    final snapshot = await _collection
-        .orderBy('createdAt', descending: true)
-        .get();
+    // Unordered for the same reason as [getAssets]: an orderBy would make an
+    // asset without createdAt unsearchable instead of simply unsorted.
+    final snapshot = await _collection.get();
 
     final assets = snapshot.docs
         .map((doc) => AssetModel.fromMap(doc.data(), doc.id))
         .toList();
+
+    _sortAssets(assets);
 
     if (cleanQuery.isEmpty) {
       return assets;

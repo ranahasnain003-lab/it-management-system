@@ -1,6 +1,7 @@
 import '../../models/asset_model.dart';
 import '../../models/user_model.dart';
 import '../assets/screens/add_asset_screen.dart' show AddAssetScreen;
+import '../routes/route_guard.dart' show RouteGuard;
 import '../services/deployment_service.dart' show DeploymentService;
 import 'assistant_actions.dart';
 import 'inventory_assistant.dart';
@@ -507,7 +508,7 @@ class ActionPlanner {
 
     switch (verb) {
       case _Verb.openScreen:
-        return _planOpenScreen(q);
+        return _planOpenScreen(q, permissions);
       case _Verb.createBazaar:
         return _planCreateBazaar(message, q, data, permissions);
       case _Verb.disableBazaar:
@@ -1008,9 +1009,22 @@ class ActionPlanner {
 
   // ------------------------------------------------------------- navigation
 
-  ActionPlan? _planOpenScreen(String q) {
+  ActionPlan? _planOpenScreen(String q, AssistantPermissions permissions) {
     final route = screenRoute(q);
     if (route == null) return null;
+
+    // Navigation is the one action that happens without a confirmation, so a
+    // screen the router would bounce has to be refused here: otherwise the
+    // assistant closes itself, the redirect lands the user on the dashboard,
+    // and nothing explains why. The same set the router uses, so the two can
+    // never disagree about which screens are a manager's.
+    if (RouteGuard.managerRoutes.contains(route) &&
+        !(permissions.isSuperAdmin || permissions.isAdmin)) {
+      return const ActionPlan.refuse(
+        'That screen is only for an Admin or Super Admin, so I cannot open it '
+        'for your account.',
+      );
+    }
 
     return ActionPlan.propose(AssistantAction(
       kind: AssistantActionKind.openScreen,
@@ -1399,8 +1413,21 @@ class ActionPlanner {
   ) {
     if (!permissions.canAddAsset) {
       return const ActionPlan.refuse(
-        'Only an Admin or Super Admin can create an asset, so I cannot do that '
-        'for your account. You can raise a request from the Requests screen.',
+        'Your account is not allowed to add an asset, so I cannot do that. If '
+        'it is still waiting to be activated, an Admin has to activate it '
+        'first.',
+      );
+    }
+
+    // Worked out before anything is proposed: an asset filed under the wrong
+    // account is invisible to the people who need it, and the create rule
+    // refuses it outright. Better to say so now than behind Confirm.
+    final ownerUid = resolveAssetOwnerUid(permissions);
+
+    if (ownerUid.isEmpty) {
+      return const ActionPlan.refuse(
+        'I could not tell whose inventory that asset would belong to, so I '
+        'will not create it. Sign out and back in, then try again.',
       );
     }
 
@@ -1461,13 +1488,27 @@ class ActionPlanner {
       );
     }
 
-    // --- the fixed vocabularies, taken from the Add Asset form itself ------
-    final category = _oneOf(fields['category']!, AddAssetScreen.categories);
+    // --- the vocabularies, taken from the app's own options ----------------
+    // Categories are records rather than a constant, so they are checked
+    // against what this account can actually see: the catalogue plus every
+    // category already in use on an asset. With neither to check against the
+    // typed value stands, because refusing it would leave the assistant unable
+    // to create an asset at all.
+    final known = data.knownCategories;
+    final category = known.isEmpty
+        ? fields['category']!.trim()
+        : _oneOf(fields['category']!, known);
 
     if (category == null) {
+      // An unknown category is a mistake to correct, not a new category to
+      // create: the importer treats it the same way, so a typo cannot become a
+      // second spelling of "Laptop" in the inventory. The assistant adds no
+      // categories of its own, so it says where one is added instead of
+      // leaving the user guessing.
       return ActionPlan.ask(
-        'I do not recognise that category. Pick one of: '
-        '${AddAssetScreen.categories.join(', ')}.',
+        'I do not recognise that category. Pick one of: ${known.join(', ')}. '
+        'To use a new one, add it on the Add Asset screen first - I do not '
+        'create categories.',
       );
     }
 
@@ -1664,10 +1705,14 @@ class ActionPlanner {
     InventorySnapshot data,
     AssistantPermissions permissions,
   ) {
-    if (!permissions.canManageBazaars) {
+    // Adding to the Bazaar list takes nothing away from anyone, so every
+    // active account may do it. Changing a Bazaar that already exists is the
+    // part that stays with an Admin - see [_planDisableBazaar].
+    if (!permissions.canAddBazaar) {
       return const ActionPlan.refuse(
-        'Only an account that manages locations can add a Bazaar, so I cannot '
-        'do that for your account.',
+        'Your account is not allowed to add a Bazaar, so I cannot do that. If '
+        'it is still waiting to be activated, an Admin has to activate it '
+        'first.',
       );
     }
 
@@ -1703,8 +1748,8 @@ class ActionPlanner {
   ) {
     if (!permissions.canManageBazaars) {
       return const ActionPlan.refuse(
-        'Only an account that manages locations can disable a Bazaar, so I '
-        'cannot do that for your account.',
+        'Only an Admin or Super Admin can disable a Bazaar, so I cannot do '
+        'that for your account. You can still add a new one.',
       );
     }
 

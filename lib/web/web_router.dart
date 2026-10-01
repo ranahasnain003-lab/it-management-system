@@ -2,6 +2,8 @@ import 'package:firebase_auth/firebase_auth.dart' hide AuthProvider;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/ai/local/screens/local_ai_screen.dart';
+import '../core/ai/local/screens/local_ai_settings_screen.dart';
 import '../core/assets/screens/import_assets_screen.dart';
 import '../core/authentication/screens/forgot_password_screen.dart';
 import '../core/authentication/screens/signup_screen.dart' as signup;
@@ -31,8 +33,33 @@ class WebRouter {
     required UserProvider userProvider,
     required AuthProvider authProvider,
   }) {
-    NoTransitionPage<void> page(GoRouterState state, Widget child) =>
-        NoTransitionPage<void>(key: state.pageKey, child: child);
+    /// One transition for every web page: a short cross-fade, no movement.
+    ///
+    /// These pages used to arrive with no transition at all, which on the web
+    /// reads as the content snapping rather than settling - the sidebar stays
+    /// put while the whole working area replaces itself in a single frame.
+    /// A fade is the right motion here, and only a fade: the navigation
+    /// shell does not move, so sliding the content would suggest travel that
+    /// is not happening. It is deliberately shorter than the Android
+    /// transition (see AppRouter), because a desktop app is expected to feel
+    /// immediate and a mouse click carries none of the momentum a swipe does.
+    ///
+    /// [state.pageKey] keeps go_router's page identity, so returning to a
+    /// path animates instead of rebuilding the page from scratch.
+    CustomTransitionPage<void> page(GoRouterState state, Widget child) {
+      return CustomTransitionPage<void>(
+        key: state.pageKey,
+        transitionDuration: const Duration(milliseconds: 140),
+        reverseTransitionDuration: const Duration(milliseconds: 110),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+            child: child,
+          );
+        },
+        child: child,
+      );
+    }
 
     return GoRouter(
       initialLocation: '/dashboard',
@@ -119,6 +146,11 @@ class WebRouter {
             GoRoute(path: '/activity-logs', pageBuilder: (c, s) => page(s, const WebActivityLogsPage())),
             GoRoute(path: '/notifications', pageBuilder: (c, s) => page(s, const WebNotificationsPage())),
             GoRoute(path: '/settings', pageBuilder: (c, s) => page(s, const WebSettingsPage())),
+
+            // Local AI Assistant: every signed-in role may ask; the settings
+            // page is read-only unless the account is Admin / Super Admin.
+            GoRoute(path: '/ai-assistant', pageBuilder: (c, s) => page(s, const LocalAiScreen())),
+            GoRoute(path: '/ai-assistant/settings', pageBuilder: (c, s) => page(s, const LocalAiSettingsScreen())),
           ],
         ),
       ],

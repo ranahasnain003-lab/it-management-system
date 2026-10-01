@@ -12,6 +12,7 @@ class AssetModel {
     // Inventory ownership.
     this.adminId,
     this.adminName,
+    this.createdBy = '',
 
     this.assignedTo,
     this.serialNumber = '',
@@ -58,6 +59,16 @@ class AssetModel {
   ///
   /// This is informational only. Permission checks must use adminId.
   final String? adminName;
+
+  /// Firebase UID of the account that created this asset.
+  ///
+  /// A User may add inventory but never touch it afterwards, so the create
+  /// rule recognises their own new record by this field being their own UID.
+  /// Without it a User's add is refused.
+  ///
+  /// Never part of an edit (it is not in AssetService.editableFields), and
+  /// assets registered before the field existed store ''.
+  final String createdBy;
 
   final String? assignedTo;
 
@@ -255,6 +266,7 @@ class AssetModel {
     bool clearAdminId = false,
     String? adminName,
     bool clearAdminName = false,
+    String? createdBy,
 
     String? assignedTo,
     bool clearAssignedTo = false,
@@ -289,6 +301,7 @@ class AssetModel {
 
       adminId: clearAdminId ? null : adminId ?? this.adminId,
       adminName: clearAdminName ? null : adminName ?? this.adminName,
+      createdBy: createdBy ?? this.createdBy,
 
       assignedTo: clearAssignedTo ? null : assignedTo ?? this.assignedTo,
 
@@ -350,6 +363,8 @@ class AssetModel {
 
       adminName: _nullableStringValue(map['adminName'] ?? map['ownerName']),
 
+      createdBy: _stringValue(map['createdBy']),
+
       assignedTo: _nullableStringValue(map['assignedTo']),
 
       serialNumber: _stringValue(map['serialNumber']),
@@ -410,6 +425,7 @@ class AssetModel {
       // Inventory ownership.
       'adminId': adminId,
       'adminName': adminName,
+      'createdBy': createdBy,
 
       'assignedTo': assignedTo,
 
