@@ -7,6 +7,7 @@
 library;
 
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:it_management_system/core/ota/app_release.dart';
@@ -447,6 +448,65 @@ void main() {
       expect(find.text('the app'), findsOneWidget);
       expect(find.text('Update Available'), findsNothing);
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  // The updater exists only for the sideloaded Android build. Apple does not
+  // permit installing an application from outside the App Store, so an update
+  // prompt on an iPhone would offer something the device must refuse. These
+  // tests pin that down against the REAL platform gate - no `enabled` override
+  // - because an iOS build is now shipped from this same source tree.
+  group('the platform gate itself', () {
+    Widget realGate(FakeReleaseSource source) => MaterialApp(
+      home: OtaUpdateGate(
+        source: source,
+        installedVersion: () async => 1,
+        child: const Scaffold(body: Text('the app')),
+      ),
+    );
+
+    /// Pumps the gate with its REAL platform check under [platform].
+    ///
+    /// The override is cleared before returning, inside a finally: the test
+    /// framework asserts that foundation debug variables are back to normal
+    /// as soon as the test body ends, which is before any tearDown runs.
+    Future<FakeReleaseSource> pumpOn(
+      WidgetTester tester,
+      TargetPlatform platform,
+    ) async {
+      debugDefaultTargetPlatformOverride = platform;
+      final source = FakeReleaseSource(release(versionCode: 99));
+      try {
+        await tester.pumpWidget(realGate(source));
+        await tester.pumpAndSettle();
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+      return source;
+    }
+
+    testWidgets('never looks for an update on iOS', (tester) async {
+      final source = await pumpOn(tester, TargetPlatform.iOS);
+
+      expect(source.fetches, 0, reason: 'must not even read the release');
+      expect(find.text('Update Available'), findsNothing);
+      expect(find.text('the app'), findsOneWidget);
+    });
+
+    testWidgets('never looks for an update on macOS either', (tester) async {
+      final source = await pumpOn(tester, TargetPlatform.macOS);
+
+      expect(source.fetches, 0);
+      expect(find.text('Update Available'), findsNothing);
+    });
+
+    testWidgets('does run on Android, so the gate is not simply off', (
+      tester,
+    ) async {
+      final source = await pumpOn(tester, TargetPlatform.android);
+
+      expect(source.fetches, 1);
+      expect(find.text('Update Available'), findsOneWidget);
     });
   });
 }

@@ -64,6 +64,48 @@ workflows:
     artifacts:
       - build/ios/iphoneos/*.app
 
+  # ===========================================================================
+  # Unsigned RELEASE .ipa for sideloading - also needs NO Apple Developer
+  # account, no certificate and no provisioning profile.
+  #
+  # It must be a release build: a debug build carries a JIT Dart VM and will
+  # not launch on a device unless Xcode is attached, which is no use on
+  # Windows. What --no-codesign produces is an unsigned Runner.app, so it is
+  # wrapped in the Payload/ layout an .ipa expects and published as-is. The
+  # signing is then done on the Windows side with Sideloadly and a free
+  # Apple ID, which is why nothing here touches signing at all.
+  # ===========================================================================
+  ios-unsigned-ipa:
+    name: iOS unsigned release IPA (sideload)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+
+      - name: Build the unsigned release app
+        script: flutter build ios --release --no-codesign
+
+      - name: Wrap the .app into an unsigned .ipa
+        # set -e so a failure anywhere in this chain fails the step rather
+        # than publishing a half-built archive.
+        script: |
+          set -e
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -qr Runner-unsigned.ipa Payload
+          ls -lh Runner-unsigned.ipa
+
+    artifacts:
+      - build/ios/iphoneos/Runner-unsigned.ipa
+
 # =============================================================================
 # Signed TestFlight workflow - KEPT AS A TEMPLATE, NOT ACTIVE
 # =============================================================================
