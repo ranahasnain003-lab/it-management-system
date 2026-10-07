@@ -28,6 +28,7 @@ import 'package:it_management_system/core/ai/local/local_ai_discovery.dart';
 import 'package:it_management_system/core/ai/local/local_ai_http.dart';
 import 'package:it_management_system/core/ai/local/local_ai_models.dart';
 import 'package:it_management_system/core/ai/local/local_ai_provider.dart';
+import 'package:it_management_system/core/ai/local/local_ai_remote_setup.dart';
 import 'package:it_management_system/core/ai/local/widgets/local_ai_composer.dart';
 import 'package:it_management_system/core/ai/local/widgets/local_ai_message_bubble.dart';
 
@@ -299,6 +300,29 @@ String _modelBody({int maxMessageTokens = 4096, int? maxAppContextTokens = 2867}
     });
 
 /// A settings store that answers from memory.
+/// Stands in for the Firestore document an administrator publishes.
+class _FakeRemoteSetup implements LocalAiRemoteSetup {
+  _FakeRemoteSetup(this.settings, {this.throws = false});
+
+  final LocalAiRemoteSettings? settings;
+
+  /// A read that fails: not signed in, no permission, or offline.
+  final bool throws;
+
+  /// False while the document cannot be read yet (nobody signed in).
+  bool available = true;
+
+  int calls = 0;
+
+  @override
+  Future<LocalAiRemoteSettings?> fetch() async {
+    calls++;
+    if (throws) throw StateError('permission denied');
+    if (!available) return null;
+    return settings;
+  }
+}
+
 class _FakeSettings implements LocalAiSettingsStore {
   _FakeSettings(this.current, {this.buildDefaults = LocalAiConfig.empty});
 
@@ -441,6 +465,7 @@ LocalAiProvider _provider(
   _FakeSettings? settings,
   LocalAiContextService? context,
   LocalAiDiscovery? discovery,
+  LocalAiRemoteSetup? remoteSetup,
   Duration stopGrace = const Duration(milliseconds: 60),
   Duration contextTimeout = const Duration(seconds: 2),
   Duration monitorInterval = const Duration(seconds: 30),
@@ -450,6 +475,7 @@ LocalAiProvider _provider(
     settings: settings ?? _FakeSettings(config),
     contextService: context,
     discovery: discovery ?? _FakeDiscovery(const [], supported: false),
+    remoteSetup: remoteSetup,
     stopGrace: stopGrace,
     contextTimeout: contextTimeout,
     monitorInterval: monitorInterval,
@@ -1929,6 +1955,83 @@ void main() {
       expect(discovery.calls, 0);
       expect(provider.status, LocalAiStatus.unreachable);
     });
+
+    // A reachable-from-anywhere address (a tunnel's public hostname) must never be
+    // traded for a LAN one: discovery only ever hears from this network, so a reply
+    // to it says nothing about where the public address should point. Following one
+    // would pin the device to the LAN certificate and leave it unable to reach the
+    // server from outside until somebody retyped the address.
+    group('a public address is never replaced by a LAN one', () {
+      const remoteConfig = LocalAiConfig(
+        baseUrl: 'https://desktop-test.tailnet-1234.ts.net',
+        apiKey: 'lai_abcd1234_secretsecretsecret',
+        certificateFingerprint: '',
+        source: LocalAiConfigSource.device,
+      );
+
+      test('the search is not even started, and the saved settings are left alone', () async {
+        final discovery = _FakeDiscovery([moved(scheme: 'https', cert: _fingerprintA)]);
+        final settings = _FakeSettings(remoteConfig);
+        final server = _FakeServer({
+          'GET https://desktop-test.tailnet-1234.ts.net/api/v1/health': const _Reply(throws: SocketishException()),
+        });
+        final provider = _provider(server, settings: settings, discovery: discovery);
+        await provider.loadConfig();
+
+        expect(await provider.testConnection(), isFalse);
+        expect(discovery.calls, 0, reason: 'a public address must not trigger a LAN search at all');
+        expect(settings.current.baseUrl, remoteConfig.baseUrl);
+        expect(settings.current.certificateFingerprint, isEmpty, reason: 'the LAN certificate must not be adopted');
+        expect(provider.config.baseUrl, remoteConfig.baseUrl);
+        expect(provider.status, LocalAiStatus.unreachable);
+      });
+
+      test('a question that fails reports the server unreachable instead of moving', () async {
+        final discovery = _FakeDiscovery([moved(scheme: 'https', cert: _fingerprintA)]);
+        final settings = _FakeSettings(remoteConfig);
+        final server = _FakeServer({
+          'POST https://desktop-test.tailnet-1234.ts.net/api/v1/ai/chat': const _Reply(throws: SocketishException()),
+        });
+        final provider = _provider(server, settings: settings, discovery: discovery);
+        await provider.loadConfig();
+        provider.bindUser('uid-a');
+
+        await provider.send('q');
+
+        expect(discovery.calls, 0);
+        expect(settings.current.baseUrl, remoteConfig.baseUrl);
+        expect(provider.messages.last.status, 'error');
+      });
+
+      test('a LAN address is still moved, so nothing about the existing setup changes', () async {
+        final discovery = _FakeDiscovery([moved()]);
+        final settings = _FakeSettings(oldConfig);
+        final server = _FakeServer({
+          'GET http://10.0.0.5:3001/api/v1/health': const _Reply(throws: SocketishException()),
+          'GET http://10.0.0.9:3001/api/v1/health': _Reply(body: _healthBody()),
+        });
+        final provider = _provider(server, settings: settings, discovery: discovery);
+        await provider.loadConfig();
+
+        expect(await provider.testConnection(), isTrue);
+        expect(discovery.calls, 1);
+        expect(settings.current.baseUrl, 'http://10.0.0.9:3001');
+      });
+
+      test('a reply offering a public address is ignored even from a LAN setup', () async {
+        final discovery = _FakeDiscovery([moved(addresses: const ['ai.example.com'])]);
+        final settings = _FakeSettings(oldConfig);
+        final server = _FakeServer({
+          'GET http://10.0.0.5:3001/api/v1/health': const _Reply(throws: SocketishException()),
+          'GET http://ai.example.com:3001/api/v1/health': _Reply(body: _healthBody()),
+        });
+        final provider = _provider(server, settings: settings, discovery: discovery);
+        await provider.loadConfig();
+
+        expect(await provider.testConnection(), isFalse);
+        expect(settings.current.baseUrl, oldConfig.baseUrl);
+      });
+    });
   });
 
   // ===========================================================================
@@ -1980,7 +2083,224 @@ void main() {
   // CONFIGURATION
   // ===========================================================================
 
+  // ===========================================================================
+  // SETTINGS PUBLISHED FOR EVERY DEVICE
+  // ===========================================================================
+
+  group('settings published by an administrator', () {
+    const published = LocalAiRemoteSettings(
+      baseUrl: 'https://desktop-test.tailnet-1234.ts.net',
+      apiKey: 'lai_remote01_publishedsecret',
+      certificateFingerprint: '',
+    );
+
+    test('a device with nothing set up connects without anyone typing anything', () async {
+      final settings = _FakeSettings(LocalAiConfig.empty);
+      final server = _FakeServer({
+        'GET https://desktop-test.tailnet-1234.ts.net/api/v1/health': _Reply(body: _healthBody()),
+      });
+      final provider = _provider(server, settings: settings, remoteSetup: _FakeRemoteSetup(published));
+
+      await provider.loadConfig();
+
+      expect(provider.config.baseUrl, published.baseUrl);
+      expect(provider.config.apiKey, published.apiKey);
+      expect(provider.status, isNot(LocalAiStatus.notConfigured));
+      // Saved, so the next start needs no fetch at all.
+      expect(settings.current.baseUrl, published.baseUrl);
+      expect(await provider.testConnection(), isTrue);
+    });
+
+    test('what an administrator typed on this device is never overwritten', () async {
+      const typed = LocalAiConfig(
+        baseUrl: 'https://172.16.20.246:3001',
+        apiKey: 'lai_typed001_chosenbyhand',
+        certificateFingerprint: _fingerprintA,
+        source: LocalAiConfigSource.device,
+      );
+      final settings = _FakeSettings(typed);
+      final remote = _FakeRemoteSetup(published);
+      final provider = _provider(_FakeServer(const {}), settings: settings, remoteSetup: remote);
+
+      await provider.loadConfig();
+
+      expect(provider.config.baseUrl, typed.baseUrl);
+      expect(provider.config.apiKey, typed.apiKey);
+      expect(provider.config.certificateFingerprint, _fingerprintA);
+      expect(remote.calls, 0, reason: 'a device that is already set up has no reason to ask');
+    });
+
+    test('only the missing half is filled in', () async {
+      // An address compiled into the build, but no key anywhere: take the key.
+      const addressOnly = LocalAiConfig(
+        baseUrl: 'https://compiled-in.tailnet-1234.ts.net',
+        apiKey: '',
+        certificateFingerprint: '',
+        source: LocalAiConfigSource.build,
+      );
+      final settings = _FakeSettings(addressOnly);
+      final provider = _provider(_FakeServer(const {}), settings: settings, remoteSetup: _FakeRemoteSetup(published));
+
+      await provider.loadConfig();
+
+      expect(provider.config.baseUrl, addressOnly.baseUrl, reason: 'the build chose this address');
+      expect(provider.config.apiKey, published.apiKey);
+    });
+
+    test('a published fingerprint is not attached to an address chosen elsewhere', () async {
+      const addressOnly = LocalAiConfig(
+        baseUrl: 'https://compiled-in.tailnet-1234.ts.net',
+        apiKey: '',
+        certificateFingerprint: '',
+        source: LocalAiConfigSource.build,
+      );
+      final settings = _FakeSettings(addressOnly);
+      final provider = _provider(
+        _FakeServer(const {}),
+        settings: settings,
+        remoteSetup: _FakeRemoteSetup(const LocalAiRemoteSettings(
+          baseUrl: 'https://somewhere-else.tailnet-1234.ts.net',
+          apiKey: 'lai_remote01_publishedsecret',
+          certificateFingerprint: _fingerprintB,
+        )),
+      );
+
+      await provider.loadConfig();
+
+      expect(provider.config.certificateFingerprint, isEmpty);
+    });
+
+    test('nothing published, or a half-filled document, leaves the device as it was', () async {
+      for (final source in [
+        _FakeRemoteSetup(null),
+        _FakeRemoteSetup(const LocalAiRemoteSettings(baseUrl: 'https://x.ts.net', apiKey: '', certificateFingerprint: '')),
+        _FakeRemoteSetup(const LocalAiRemoteSettings(baseUrl: '', apiKey: 'lai_remote01_secret', certificateFingerprint: '')),
+      ]) {
+        final provider = _provider(_FakeServer(const {}), settings: _FakeSettings(LocalAiConfig.empty), remoteSetup: source);
+        await provider.loadConfig();
+        expect(provider.config.isConfigured, isFalse);
+        expect(provider.status, LocalAiStatus.notConfigured);
+      }
+    });
+
+    test('a rubbish address in the document is refused rather than saved', () async {
+      final settings = _FakeSettings(LocalAiConfig.empty);
+      final provider = _provider(
+        _FakeServer(const {}),
+        settings: settings,
+        remoteSetup: _FakeRemoteSetup(const LocalAiRemoteSettings(
+          baseUrl: 'not-a-url/with a path',
+          apiKey: 'lai_remote01_secret',
+          certificateFingerprint: '',
+        )),
+      );
+
+      await provider.loadConfig();
+
+      expect(provider.config.isConfigured, isFalse);
+      expect(settings.current.baseUrl, isEmpty);
+    });
+
+    test('a failure to read is silent: the screen behaves as if nothing were published', () async {
+      final provider = _provider(
+        _FakeServer(const {}),
+        settings: _FakeSettings(LocalAiConfig.empty),
+        remoteSetup: _FakeRemoteSetup(null, throws: true),
+      );
+
+      await provider.loadConfig();
+
+      expect(provider.config.isConfigured, isFalse);
+      expect(provider.status, LocalAiStatus.notConfigured);
+    });
+
+    test('signing in is a fresh chance to fetch, so the first screen is already connected', () async {
+      final settings = _FakeSettings(LocalAiConfig.empty);
+      final remote = _FakeRemoteSetup(published);
+      final provider = _provider(_FakeServer(const {}), settings: settings, remoteSetup: remote);
+
+      // Before anyone has signed in, Firestore refuses the read.
+      remote.available = false;
+      await provider.loadConfig();
+      expect(provider.config.isConfigured, isFalse);
+
+      // Signing in makes it readable, and the provider asks again by itself.
+      remote.available = true;
+      provider.bindUser('uid-a');
+      await pumpEventQueue();
+
+      expect(provider.config.baseUrl, published.baseUrl);
+      expect(provider.config.apiKey, published.apiKey);
+    });
+
+    test('it is asked at most once per sign-in, not once per screen', () async {
+      final remote = _FakeRemoteSetup(published);
+      final provider = _provider(_FakeServer(const {}), settings: _FakeSettings(LocalAiConfig.empty), remoteSetup: remote);
+
+      await provider.loadConfig();
+      await provider.loadConfig();
+      await provider.loadConfig();
+
+      expect(remote.calls, 1);
+    });
+
+    test('a build that publishes nothing behaves exactly as before', () async {
+      final provider = _provider(_FakeServer(const {}), settings: _FakeSettings(LocalAiConfig.empty));
+
+      await provider.loadConfig();
+
+      expect(provider.config.isConfigured, isFalse);
+      expect(provider.status, LocalAiStatus.notConfigured);
+    });
+  });
+
   group('configuration', () {
+    test('a LAN address is told apart from a public one', () {
+      // What decides whether a UDP discovery reply may replace the saved address.
+      for (final host in [
+        '10.0.0.5',
+        '172.16.20.246',
+        '172.31.255.254',
+        '192.168.1.50',
+        '127.0.0.1',
+        '169.254.1.1',
+        '10.0.2.2', // the Android emulator's alias for the host machine
+        'localhost',
+        'DESKTOP-KS31F63',
+        'DESKTOP-KS31F63.local',
+        '::1',
+        'fe80::1',
+        'fd00::1',
+      ]) {
+        expect(LocalAiConfig.hostIsPrivate(host), isTrue, reason: '$host is reachable only on this network');
+      }
+
+      for (final host in [
+        'desktop-test.tailnet-1234.ts.net',
+        'ai.example.com',
+        '8.8.8.8',
+        '172.15.0.1', // just below the private 172.16/12 block
+        '172.32.0.1', // just above it
+        '192.167.1.1',
+        '11.0.0.1',
+        '2001:db8::1',
+        '',
+      ]) {
+        expect(LocalAiConfig.hostIsPrivate(host), isFalse, reason: '$host is not a LAN address');
+      }
+    });
+
+    test('a configuration knows whether its own address is a LAN one', () {
+      const remote = LocalAiConfig(
+        baseUrl: 'https://desktop-test.tailnet-1234.ts.net',
+        apiKey: 'lai_abcd1234_secretsecretsecret',
+        certificateFingerprint: '',
+        source: LocalAiConfigSource.device,
+      );
+      expect(remote.isPrivateHost, isFalse);
+      expect(_config.isPrivateHost, isTrue);
+    });
+
     test('the API key is never shown in full', () {
       expect(_config.redactedApiKey, 'lai_abcd1234_••••••••');
       expect(_config.redactedApiKey, isNot(contains('secretsecretsecret')));

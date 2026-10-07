@@ -20,9 +20,6 @@ enum AuthAction {
   other,
 }
 
-/// Result of [AuthProvider.resendVerificationFor].
-enum VerificationEmailResult { sent, alreadyVerified }
-
 class AuthProvider extends ChangeNotifier {
   AuthProvider({AuthService? authService, UserService? userService})
     : _authService = authService ?? AuthService(),
@@ -35,20 +32,6 @@ class AuthProvider extends ChangeNotifier {
   // ERROR CODES (used by the auth screens)
   // ============================================================
 
-  /// The status every self-registered account is created with.
-  ///
-  /// Awaiting approval, never active: anyone on the internet can reach public
-  /// signup with any e-mail address, and an ACTIVE User may add assets,
-  /// Bazaars and categories that the whole organization then sees. A Super
-  /// Admin - or the Admin who manages the account - activates it from the
-  /// Users screen. Verifying the e-mail address and being approved are two
-  /// separate requirements: login checks both.
-  ///
-  /// firestore.rules enforces the same value in its public signup rule, so
-  /// calling the API directly cannot create an active account either.
-  static const String selfSignupStatus = 'pending';
-
-  static const String emailNotVerifiedCode = 'email-not-verified';
   static const String accountInactiveCode = 'account-inactive';
   static const String busyCode = 'busy';
   static const String cooldownCode = 'cooldown';
@@ -67,9 +50,7 @@ class AuthProvider extends ChangeNotifier {
   String? _errorCode;
 
   // Email of the last sign-in / signup that still needs verification.
-  String? _pendingVerificationEmail;
 
-  final Map<String, DateTime> _verificationCooldowns = {};
   final Map<String, DateTime> _resetCooldowns = {};
 
   // One-shot explanation shown on the login screen after the session was
@@ -113,11 +94,7 @@ class AuthProvider extends ChangeNotifier {
 
   String? get errorCode => _errorCode;
 
-  String? get pendingVerificationEmail => _pendingVerificationEmail;
-
   bool get isAuthenticated => _user != null;
-
-  bool get isEmailVerified => _user?.emailVerified ?? false;
 
   String? get userId => _user?.uid;
 
@@ -134,12 +111,6 @@ class AuthProvider extends ChangeNotifier {
   bool get hasSessionMessage => _sessionMessage != null;
 
   Stream<User?> get authStateChanges => _authService.authStateChanges;
-
-  /// Time left before another verification email may be requested for
-  /// [email] from this device.
-  Duration verificationCooldownFor(String email) {
-    return _remaining(_verificationCooldowns, email);
-  }
 
   /// Time left before another password reset email may be requested for
   /// [email] from this device.
@@ -367,7 +338,8 @@ class AuthProvider extends ChangeNotifier {
       // ----------------------------------------------------------
       // RELOAD FIREBASE USER
       //
-      // This makes emailVerified reflect the latest Firebase state.
+      // Picks up anything Firebase changed about the account since the token
+      // was issued - a disabled account, a changed display name.
       // ----------------------------------------------------------
 
       await firebaseUser.reload();
@@ -402,31 +374,12 @@ class AuthProvider extends ChangeNotifier {
       }
 
       // ----------------------------------------------------------
-      // EMAIL VERIFICATION
-      //
-      // No email is sent automatically here (repeated sign-in attempts
-      // would hit Firebase rate limits). The login screens offer
-      // "Resend verification email" through resendVerificationFor().
-      // ----------------------------------------------------------
-
-      if (!firebaseUser.emailVerified) {
-        _loginInProgressUid = null;
-
-        await _authService.logout();
-
-        _clearAuthenticatedState();
-
-        _pendingVerificationEmail = cleanEmail;
-
-        throw AuthException(
-          'Your email address is not verified yet. Open the verification '
-          'link sent to $cleanEmail, then sign in again.',
-          code: emailNotVerifiedCode,
-        );
-      }
-
-      // ----------------------------------------------------------
       // FIRESTORE USER PROFILE
+      //
+      // An e-mail address is not verified in this app. Whether an account may
+      // be used is decided below, from the `status` and `role` on its profile:
+      // a self-registered account is 'pending' and can do nothing until a
+      // Super Admin, or the Admin who manages it, sets it active.
       // ----------------------------------------------------------
 
       final profile = await _userService.getUserById(uid);
@@ -555,7 +508,6 @@ class AuthProvider extends ChangeNotifier {
       _lastProcessedUid = uid;
       _errorMessage = null;
       _errorCode = null;
-      _pendingVerificationEmail = null;
       _sessionMessage = null;
 
       _safeNotify();
@@ -586,11 +538,38 @@ class AuthProvider extends ChangeNotifier {
   // SIGN UP
   // ============================================================
 
-  /// Creates the account and its profile, then signs out.
+  // ============================================================
+  // CREATE FIREBASE ACCOUNT
+  // ============================================================
+
+  // ============================================================
+  // SELF-REGISTRATION
+  // ============================================================
+
+  /// The status a self-registered account is created with.
   ///
-  /// Returns whether the verification email was sent. The account is created
-  /// even when sending fails; the user can resend it from the sign-in page.
-  Future<bool> signup({
+  /// Active: there is no verification step and no approval step, so the person
+  /// can use the app the moment the form is submitted. An administrator can
+  /// block the account afterwards.
+  static const String selfSignupStatus = 'active';
+
+  /// The role a self-registered account is created with. Always the normal
+  /// User role - an Admin or Super Admin account can only be created by an
+  /// existing administrator, which firestore.rules enforces as well.
+  static const String selfSignupRole = 'user';
+
+  /// Creates the account and its profile, and leaves the person signed in.
+  ///
+  /// Nothing is sent and nobody is asked: the profile is written with status
+  /// [selfSignupStatus] and role [selfSignupRole], and the app is usable at
+  /// once. `createdBy` is deliberately empty - a self-registered account
+  /// belongs to no particular Admin, and a User reads the whole inventory
+  /// regardless.
+  ///
+  /// If the profile cannot be written, the Firebase Auth account is removed
+  /// again, so a half-made account cannot sit there blocking its own e-mail
+  /// address from being used a second time.
+  Future<void> signup({
     required String name,
     required String email,
     required String password,
@@ -599,7 +578,7 @@ class AuthProvider extends ChangeNotifier {
     String employeeId = '',
   }) async {
     if (_disposed) {
-      return false;
+      return;
     }
 
     if (_isLoading) {
@@ -609,216 +588,67 @@ class AuthProvider extends ChangeNotifier {
       );
     }
 
-    _setLoading(true, AuthAction.signup);
-    _clearError();
+    final cleanEmail = email.trim().toLowerCase();
+    final cleanName = name.trim();
 
-    User? createdAccount;
-    var profileCreated = false;
+    _clearError();
+    _setLoading(true, AuthAction.signup);
+    _safeNotify();
+
+    User? created;
 
     try {
-      final cleanName = name.trim();
-      final cleanEmail = email.trim().toLowerCase();
-
-      if (cleanName.isEmpty) {
-        throw const AuthException(
-          'Please enter your full name.',
-          code: 'missing-name',
-        );
-      }
-
-      if (cleanName.length < 2) {
-        throw const AuthException('Name is too short.', code: 'invalid-name');
-      }
-
-      if (cleanEmail.isEmpty || !emailPattern.hasMatch(cleanEmail)) {
-        throw const AuthException(
-          'Please enter a valid email address.',
-          code: 'invalid-email',
-        );
-      }
-
-      final passwordError = AuthException.validateNewPassword(password);
-
-      if (passwordError != null) {
-        throw AuthException(passwordError, code: 'weak-password');
-      }
-
-      _credentialCheckInProgress = true;
-
-      // ----------------------------------------------------------
-      // CREATE FIREBASE ACCOUNT
-      // ----------------------------------------------------------
-
-      final credential = await _createFirebaseAccount(
+      final credential = await _authService.signup(
+        name: cleanName,
         email: cleanEmail,
         password: password,
       );
 
-      if (_disposed) {
-        return false;
+      created = credential.user;
+
+      if (created == null) {
+        throw const AuthException('Unable to create your account.');
       }
 
-      final firebaseUser = credential.user;
-
-      if (firebaseUser == null) {
-        throw const AuthException(
-          'Unable to create your account. Please try again.',
-        );
-      }
-
-      createdAccount = firebaseUser;
-
-      // ----------------------------------------------------------
-      // PUBLIC SIGNUP SECURITY
-      //
-      // Public signup NEVER accepts a role: every public signup
-      // account is role = user. Admin/Super Admin promotion happens
-      // only through authorized Super Admin functionality.
-      //
-      // The account is created awaiting approval - see
-      // [selfSignupStatus]. Accounts created BY a Super Admin or an
-      // Admin are active at once, as before; only self-registration
-      // waits.
-      // ----------------------------------------------------------
-
-      const signupRole = 'user';
-      const signupStatus = selfSignupStatus;
-
-      final userProfile = UserModel(
-        uid: firebaseUser.uid,
-        name: cleanName,
-        email: cleanEmail,
-        role: signupRole,
-        status: signupStatus,
-        employeeId: employeeId.trim(),
-        department: department.trim(),
-        designation: designation.trim(),
-        createdAt: DateTime.now(),
-        createdBy: '',
-        createdByEmail: '',
+      await _userService.createUserProfile(
+        UserModel(
+          uid: created.uid,
+          name: cleanName,
+          email: cleanEmail,
+          role: selfSignupRole,
+          status: selfSignupStatus,
+          roles: const [selfSignupRole],
+          employeeId: employeeId.trim(),
+          department: department.trim(),
+          designation: designation.trim(),
+          createdAt: DateTime.now(),
+        ),
       );
 
-      await _userService.createUserProfile(userProfile);
-
-      profileCreated = true;
-
-      if (_disposed) {
-        return false;
-      }
-
-      // Display name is a convenience only; never fail signup over it.
-      try {
-        await firebaseUser.updateDisplayName(cleanName);
-      } catch (_) {}
-
-      // ----------------------------------------------------------
-      // SEND EMAIL VERIFICATION
-      //
-      // The account and profile already exist at this point, so a
-      // failure here must not be reported as a failed signup.
-      // ----------------------------------------------------------
-
-      var verificationSent = false;
-
-      try {
-        await _authService.sendEmailVerification();
-        verificationSent = true;
-        _startCooldown(_verificationCooldowns, cleanEmail);
-      } catch (e) {
-        if (_codeOf(e) == 'too-many-requests') {
-          _startCooldown(_verificationCooldowns, cleanEmail);
+      // Signed in already, and the profile says active, so the app is usable.
+      _safeNotify();
+    } catch (e) {
+      // Without a profile the Auth account can do nothing, and leaving it
+      // would stop this address being used again.
+      if (created != null) {
+        try {
+          await created.delete();
+        } catch (_) {
+          // Already gone, or the session is too old to delete it. The account
+          // has no profile either way, so it cannot reach anything.
         }
       }
 
-      // ----------------------------------------------------------
-      // SIGN OUT AFTER SIGNUP
-      //
-      // The user must verify their email before login.
-      // ----------------------------------------------------------
-
-      try {
-        await _authService.logout();
-      } catch (_) {
-        // The account is created; app.dart signs out unverified sessions.
+      if (!_disposed) {
+        _setError(e);
+        _safeNotify();
       }
 
-      _clearAuthenticatedState();
-
-      _pendingVerificationEmail = cleanEmail;
-
-      _safeNotify();
-
-      return verificationSent;
-    } catch (e) {
-      _credentialCheckInProgress = false;
-
-      await _cleanupFailedSignup(createdAccount, profileCreated);
-
-      if (_disposed) {
-        rethrow;
-      }
-
-      _setError(e);
-      _safeNotify();
       rethrow;
     } finally {
-      _credentialCheckInProgress = false;
-
       if (!_disposed) {
         _setLoading(false);
       }
-    }
-  }
-
-  /// A signup that failed after the Auth account was created must not leave
-  /// that account signed in (it would reach the dashboard on next launch).
-  /// Without a profile, the Auth account itself is removed so the email can
-  /// be used again.
-  Future<void> _cleanupFailedSignup(User? account, bool profileCreated) async {
-    if (account == null) {
-      return;
-    }
-
-    if (!profileCreated) {
-      try {
-        await account.delete();
-      } catch (_) {
-        // Fall through to sign-out.
-      }
-    }
-
-    try {
-      if (_authService.currentUser != null) {
-        await _authService.logout();
-      }
-    } catch (_) {
-      // The original signup error is what the user needs to see.
-    }
-
-    if (!_disposed) {
-      _clearAuthenticatedState();
-    }
-  }
-
-  // ============================================================
-  // CREATE FIREBASE ACCOUNT
-  // ============================================================
-
-  Future<UserCredential> _createFirebaseAccount({
-    required String email,
-    required String password,
-  }) async {
-    try {
-      return await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-    } on FirebaseAuthException catch (e) {
-      throw AuthException.fromFirebase(e);
-    } catch (_) {
-      throw const AuthException(
-        'Unable to create your account. Please try again.',
-      );
     }
   }
 
@@ -888,8 +718,6 @@ class AuthProvider extends ChangeNotifier {
     _lastProcessedUid = null;
     _errorMessage = null;
     _errorCode = null;
-    _pendingVerificationEmail = null;
-    _verificationCooldowns.clear();
     _resetCooldowns.clear();
   }
 
@@ -976,229 +804,13 @@ class AuthProvider extends ChangeNotifier {
   // RESEND VERIFICATION (SIGNED OUT)
   // ============================================================
 
-  /// Resends the verification email for an unverified account from the
-  /// sign-in page.
-  ///
-  /// Firebase only sends verification emails to a signed-in user, so the
-  /// account is signed in briefly (never published to the app) and signed
-  /// out again. Requests are limited by [emailCooldown].
-  Future<VerificationEmailResult> resendVerificationFor({
-    required String email,
-    required String password,
-  }) async {
-    if (_disposed) {
-      throw const AuthException('Please try again.');
-    }
-
-    if (_isLoading) {
-      throw const AuthException(
-        'Please wait for the current request to finish.',
-        code: busyCode,
-      );
-    }
-
-    final cleanEmail = email.trim().toLowerCase();
-
-    _clearError();
-
-    try {
-      if (cleanEmail.isEmpty || !emailPattern.hasMatch(cleanEmail)) {
-        throw const AuthException(
-          'Please enter a valid email address.',
-          code: 'invalid-email',
-        );
-      }
-
-      if (password.isEmpty) {
-        throw const AuthException(
-          'Enter your password to resend the verification email.',
-          code: 'missing-password',
-        );
-      }
-
-      final remaining = verificationCooldownFor(cleanEmail);
-
-      if (remaining > Duration.zero) {
-        throw AuthException(
-          'Please wait ${_formatWait(remaining)} before requesting another '
-          'verification email.',
-          code: cooldownCode,
-        );
-      }
-    } catch (e) {
-      _setError(e);
-      _safeNotify();
-      rethrow;
-    }
-
-    _setLoading(true, AuthAction.resendVerification);
-    _credentialCheckInProgress = true;
-    _authGeneration++;
-
-    try {
-      final credential = await _authService.login(
-        email: cleanEmail,
-        password: password,
-      );
-
-      final signedIn = credential.user;
-
-      if (signedIn == null) {
-        throw const AuthException(
-          'Unable to send the verification email. Please try again.',
-        );
-      }
-
-      await signedIn.reload();
-
-      final refreshed = _authService.currentUser;
-
-      if (refreshed == null || refreshed.uid != signedIn.uid) {
-        throw const AuthException(
-          'Unable to send the verification email. Please try again.',
-        );
-      }
-
-      if (refreshed.emailVerified) {
-        _pendingVerificationEmail = null;
-        return VerificationEmailResult.alreadyVerified;
-      }
-
-      await _authService.sendEmailVerification();
-
-      _startCooldown(_verificationCooldowns, cleanEmail);
-      _pendingVerificationEmail = cleanEmail;
-
-      return VerificationEmailResult.sent;
-    } catch (e) {
-      if (_disposed) {
-        rethrow;
-      }
-
-      if (_codeOf(e) == 'too-many-requests') {
-        _startCooldown(_verificationCooldowns, cleanEmail);
-
-        const limited = AuthException(
-          'Too many verification emails were requested. Please wait a few '
-          'minutes, check your spam folder, then try again.',
-          code: 'too-many-requests',
-        );
-
-        _setError(limited);
-        _safeNotify();
-        throw limited;
-      }
-
-      _setError(e);
-      _safeNotify();
-      rethrow;
-    } finally {
-      try {
-        if (_authService.currentUser != null) {
-          await _authService.logout();
-        }
-      } catch (_) {
-        // Nothing was published; app.dart signs out unverified sessions.
-      }
-
-      _credentialCheckInProgress = false;
-      _user = null;
-      _lastProcessedUid = null;
-      _loginInProgressUid = null;
-
-      if (!_disposed) {
-        _setLoading(false);
-      }
-    }
-  }
-
   // ============================================================
   // SEND VERIFICATION EMAIL (SIGNED IN)
   // ============================================================
 
-  Future<void> sendVerificationEmail() async {
-    if (_disposed) {
-      return;
-    }
-
-    _setLoading(true, AuthAction.resendVerification);
-    _clearError();
-
-    try {
-      await _authService.sendVerificationEmail();
-    } catch (e) {
-      if (_disposed) {
-        rethrow;
-      }
-
-      _setError(e);
-      _safeNotify();
-      rethrow;
-    } finally {
-      if (!_disposed) {
-        _setLoading(false);
-      }
-    }
-  }
-
-  Future<void> resendVerificationEmail() => sendVerificationEmail();
-
   // ============================================================
   // CHECK EMAIL VERIFICATION
   // ============================================================
-
-  Future<bool> checkEmailVerification() async {
-    if (_disposed) {
-      return false;
-    }
-
-    _setLoading(true, AuthAction.other);
-    _clearError();
-
-    final generation = _authGeneration;
-    final uid = _authService.currentUser?.uid;
-
-    try {
-      if (uid == null) {
-        return false;
-      }
-
-      final verified = await _authService.reloadUser();
-
-      if (_disposed) {
-        return false;
-      }
-
-      if (generation != _authGeneration) {
-        return false;
-      }
-
-      final refreshedUser = _authService.currentUser;
-
-      if (refreshedUser == null || refreshedUser.uid != uid) {
-        return false;
-      }
-
-      _user = refreshedUser;
-      _lastProcessedUid = uid;
-
-      _safeNotify();
-
-      return verified;
-    } catch (e) {
-      if (_disposed) {
-        rethrow;
-      }
-
-      _setError(e);
-      _safeNotify();
-      rethrow;
-    } finally {
-      if (!_disposed) {
-        _setLoading(false);
-      }
-    }
-  }
 
   // ============================================================
   // REFRESH CURRENT USER
@@ -1323,16 +935,6 @@ class AuthProvider extends ChangeNotifier {
     _safeNotify();
   }
 
-  /// Forgets the unverified email remembered from the last sign-in/signup.
-  void clearPendingVerification() {
-    if (_pendingVerificationEmail == null || _disposed) {
-      return;
-    }
-
-    _pendingVerificationEmail = null;
-    _safeNotify();
-  }
-
   void setSessionMessage(String message) {
     _sessionMessage = message.trim().isEmpty ? null : message.trim();
   }
@@ -1402,14 +1004,15 @@ class AuthProvider extends ChangeNotifier {
         return 'This account has been deleted. '
             'Please contact your administrator.';
 
+      // No account is created in these states any more - there is no approval
+      // step. They are still recognised so a profile left behind by an older
+      // version says something useful rather than falling through to the
+      // generic message.
       case 'pending':
       case 'pending_approval':
       case 'pending-approval':
-        return 'Your account is pending approval. '
-            'Please contact your administrator.';
-
       case 'rejected':
-        return 'Your account request was not approved. '
+        return 'This account cannot be used. '
             'Please contact your administrator.';
 
       default:

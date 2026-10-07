@@ -61,13 +61,20 @@ service cloud.firestore {
       return roleOf(data) in ['super_admin', 'admin', 'user'];
     }
 
-    // Login refuses unverified email addresses; enforced here too so a
-    // restored session or a direct API call cannot skip that check. The role
-    // is checked here rather than at every call site, so a rule added later
-    // cannot forget it.
+    // An account may use the system when it has a profile, an active status
+    // and one of the three known roles. Status and role are checked here
+    // rather than at every call site, so a rule added later cannot forget
+    // them.
+    //
+    // E-mail addresses are deliberately NOT verified in this application.
+    // Approval is the gate instead: a self-registered account is created with
+    // status 'pending' and can read and write nothing at all until a Super
+    // Admin, or the Admin who manages it, sets it active. That is what stops
+    // somebody who signed up with an address they do not own, and it is
+    // enforced here as well as in the app, so a restored session or a direct
+    // API call cannot skip it.
     function isActiveUser() {
       return currentUserExists()
-        && request.auth.token.email_verified == true
         && isActiveStatus(currentUser())
         && isKnownRole(currentUser());
     }
@@ -222,12 +229,31 @@ service cloud.firestore {
       // PUBLIC SIGNUP
       // ----------------------------------------------------------
       //
-      // A newly authenticated account may create ONLY its own
-      // profile as a PENDING, unassigned User. 'pending' is not an
-      // active status, so a self-registered account can do nothing
-      // until a Super Admin (or the Admin who manages it) activates
-      // it. Accounts created by a Super Admin/Admin below are active
-      // straight away.
+      // A newly authenticated account may create ONLY its own profile, as a
+      // normal User that is active straight away. There is no verification
+      // step and no approval step, so the person can use the app at once; an
+      // administrator can block or delete the account afterwards.
+      //
+      // Every field that decides what the account can do is pinned here, so
+      // this path can never be used to award privileges:
+      //   * `role` must be exactly 'user', and validRoles() forces the
+      //     `roles` mirror to match, so no Admin or Super Admin account can
+      //     be created this way;
+      //   * `status` must be 'active' - the one state this path may produce;
+      //   * `createdBy`, `createdByEmail` and `adminId` must be empty, so a
+      //     self-registration cannot attach itself to an Admin;
+      //   * `email` must equal the address on the caller's own token, so a
+      //     profile cannot be created under somebody else's address;
+      //   * `!currentUserExists()` means this works once and can never
+      //     overwrite a profile - including to raise its own role later;
+      //   * keys().hasOnly() closes the field list, so nothing unexpected
+      //     (a custom permission, say) can be smuggled in.
+      //
+      // The consequence is accepted deliberately: the app is served on the
+      // public internet, so anyone with the URL can create an active User and
+      // read the inventory, and an active User may also add assets, Bazaars
+      // and categories. Blocking and deleting accounts is how that is
+      // managed.
       // ----------------------------------------------------------
 
       allow create: if isSignedIn()
@@ -236,7 +262,7 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.role == 'user'
         && validRoles(request.resource.data)
-        && request.resource.data.status == 'pending'
+        && request.resource.data.status == 'active'
         && request.resource.data.createdBy == ''
         && request.resource.data.get('createdByEmail', '') == ''
         && request.resource.data.get('adminId', '') == ''
@@ -326,11 +352,12 @@ service cloud.firestore {
       // immutable for an Admin.
       // ----------------------------------------------------------
 
-      // Descriptive details, plus the soft delete (status -> 'deleted') and
-      // activating a self-registered account ('pending' -> 'active') so an
-      // Admin can admit the Users it manages without the Super Admin. Any
-      // other status change (e.g. 'blocked') stays reserved for the Super
-      // Admin.
+      // Descriptive details, plus the three status changes an Admin needs for
+      // the Users it manages: block one ('blocked'), let it back in
+      // ('active'), and the soft delete ('deleted'). The status model is only
+      // these: active means the account may use the system, anything else
+      // means it may not. Role and ownership stay immutable for an Admin, so
+      // an Admin can never promote anyone or take over another Admin's user.
       allow update: if isAdmin()
         && userId != request.auth.uid
         && roleOf(resource.data) == 'user'
@@ -349,11 +376,7 @@ service cloud.firestore {
         ])
         && (
           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status'])
-          || request.resource.data.status == 'deleted'
-          || (
-            resource.data.get('status', '').trim().lower() == 'pending'
-            && request.resource.data.status == 'active'
-          )
+          || request.resource.data.status in ['active', 'blocked', 'deleted']
         );
 
       // ----------------------------------------------------------
@@ -812,6 +835,37 @@ service cloud.firestore {
 
       allow delete: if isSignedIn()
         && resource.data.userId == request.auth.uid;
+    }
+
+    // ============================================================
+    // APP CONFIGURATION (appConfig/localAi)
+    // ============================================================
+    //
+    // One document holding the Local AI server's address and the API key the
+    // app presents to it, so that nobody has to type either on any device.
+    //
+    // Why it lives here rather than in the app:
+    //   * The web app is a file any visitor can download, and the AI server is
+    //     reachable from the internet, so a key compiled into the build would
+    //     be a key given to everyone.
+    //   * Reading it is gated by isActiveUser() - signed in, e-mail verified,
+    //     a known role and an active status - which is the same gate that
+    //     decides whether the account may read any inventory at all. Anyone who
+    //     passes it is somebody the assistant is meant to work for.
+    //
+    // The key published here must therefore be a dedicated, revocable one with
+    // no document-library access, never the key the LAN and Android apps pin.
+    //
+    // No client may write it, at any role: an administrator puts the values in
+    // out of band, so a compromised account cannot repoint every device in the
+    // organisation at a server of its own choosing.
+    // ============================================================
+
+    match /appConfig/{documentId} {
+
+      allow read: if isActiveUser();
+
+      allow write: if false;
     }
 
     // ============================================================

@@ -486,22 +486,26 @@ class _PrivacyCard extends StatelessWidget {
               line(
                 Icons.travel_explore,
                 'A web browser cannot search the network for the laptop, so '
-                'the address is typed here. On a computer, prefer the '
-                'laptop\'s NAME over its number - for example '
-                'https://DESKTOP-NAME.local:3001 - because the name keeps '
-                'working when the laptop\'s address changes. A phone\'s '
-                'browser cannot look up .local names, so a phone needs the '
-                'number, which is why the laptop should have a reserved '
-                'address. "npm run lan -- -Action Status" on the laptop shows '
-                'both.',
+                'the address is typed here, once per browser. If the laptop '
+                'publishes a public address - a Tailscale Funnel name ending '
+                '.ts.net - use that: it works from any phone or computer, on '
+                'any network, and needs nothing installed. Otherwise use an '
+                'address on this network: on a computer the laptop\'s NAME, '
+                'for example https://DESKTOP-NAME.local:3001, because the name '
+                'keeps working when its address changes; a phone\'s browser '
+                'cannot look up .local names, so on this network a phone needs '
+                'the number. "npm run lan -- -Action Status" on the laptop '
+                'shows both.',
               ),
               line(
                 Icons.https_outlined,
                 'A browser decides for itself which certificates to trust and '
-                'cannot pin one the way this app does on a phone. So the '
-                'laptop\'s certificate authority (ca.crt) has to be installed '
-                'on each computer or phone that uses the web app - once, not '
-                'per certificate.',
+                'cannot pin one the way this app does on a phone. A public '
+                '.ts.net address already has a certificate every browser '
+                'trusts, so there is nothing to install. The addresses on this '
+                'network use the laptop\'s own certificate authority, and that '
+                '(ca.crt) has to be installed on each computer or phone that '
+                'uses them - once, not per certificate.',
               ),
             ] else
               line(
@@ -592,14 +596,18 @@ class _Editor extends StatelessWidget {
               autocorrect: false,
               autovalidateMode: AutovalidateMode.onUserInteraction,
               validator: (value) => LocalAiSettingsStore.addressProblem(value ?? ''),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Address',
-                hintText: 'https://192.168.1.50:3001',
-                helperText:
-                    'The laptop running the AI server. From an Android '
-                    'emulator on the laptop: http://10.0.2.2:3000',
+                // On the web the public name is the one that works from any
+                // network, so it is the example offered there.
+                hintText: kIsWeb ? 'https://laptop-name.tailnet.ts.net' : 'https://192.168.1.50:3001',
+                helperText: kIsWeb
+                    ? 'The laptop running the AI server: its public .ts.net '
+                          'name, or its address on this network.'
+                    : 'The laptop running the AI server. From an Android '
+                          'emulator on the laptop: http://10.0.2.2:3000',
                 helperMaxLines: 2,
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
               ),
             ),
             const SizedBox(height: 14),

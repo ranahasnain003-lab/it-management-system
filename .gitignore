@@ -46,3 +46,6 @@ app.*.map.json
 
 # Firebase Hosting deploy cache (build artifact, never source)
 /.firebase/
+
+# OTA release payloads: a 60 MB APK is a build artifact, never source.
+/ota_release/

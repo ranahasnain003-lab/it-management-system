@@ -526,15 +526,6 @@ class _UsersScreenState extends State<UsersScreen> {
         AppColors.quantity,
       ),
 
-      // Only while there is something to act on: a self-registered account
-      // can do nothing until somebody admits it.
-      if (provider.pendingUsers > 0)
-        (
-          'Pending',
-          provider.pendingUsers.toString(),
-          Icons.hourglass_top_rounded,
-          AppColors.warning,
-        ),
     ];
 
     return LayoutBuilder(
@@ -732,14 +723,13 @@ class _UsersScreenState extends State<UsersScreen> {
                         icon: Icons.admin_panel_settings_outlined,
                       ),
                       _statusChip(context, user.status, statusColor),
-                      // A self-registered account can do nothing until it is
-                      // admitted, so it says so instead of looking like any
-                      // other inactive row.
-                      if (user.isPending)
+                      // A blocked account cannot use the system at all, so the
+                      // row says so rather than leaving the status to be read.
+                      if (user.isBlocked)
                         _infoChip(
                           context,
-                          Icons.hourglass_top_rounded,
-                          'Awaiting activation',
+                          Icons.block_rounded,
+                          'Blocked',
                           AppColors.warning,
                         ),
                       if (isSuperAdmin)
@@ -1052,16 +1042,14 @@ class _UsersScreenState extends State<UsersScreen> {
         }
 
         if (canManageStatus) {
-          if (!user.isPending) {
+          {
             items.add(
               PopupMenuItem<String>(
                 value: isActive ? 'deactivate' : 'activate',
                 child: _menuRow(
                   menuContext,
-                  isActive
-                      ? Icons.pause_circle_outline
-                      : Icons.check_circle_outline,
-                  isActive ? 'Deactivate User' : 'Activate User',
+                  isActive ? Icons.block_rounded : Icons.check_circle_outline,
+                  isActive ? 'Block User' : 'Unblock User',
                 ),
               ),
             );
@@ -2340,18 +2328,13 @@ class _EditUserProfileDialog extends StatefulWidget {
 
 class _EditUserProfileDialogState extends State<_EditUserProfileDialog> {
   static const List<_ProfileChoice> _statusChoices = [
-    _ProfileChoice('active', 'Active'),
-    _ProfileChoice('inactive', 'Inactive'),
-    _ProfileChoice('blocked', 'Blocked'),
+    _ProfileChoice('active', 'Active - can use the system'),
+    _ProfileChoice('blocked', 'Blocked - cannot use the system'),
   ];
 
-  /// 'Pending' is offered only while the account really is pending, so the
-  /// field shows what is stored instead of leaving nothing selected.
-  List<_ProfileChoice> get _statusChoicesForUser => [
-    ..._statusChoices,
-    if (widget.user.isPending)
-      const _ProfileChoice('pending', 'Pending activation'),
-  ];
+  /// The statuses an account can be set to. There are only two states that
+  /// mean anything - it may use the system, or it may not.
+  List<_ProfileChoice> get _statusChoicesForUser => _statusChoices;
 
   static const List<_ProfileChoice> _roleChoices = [
     _ProfileChoice('user', 'User'),

@@ -67,11 +67,6 @@ class UserProvider extends ChangeNotifier {
     }).length;
   }
 
-  /// Self-registered accounts still waiting to be admitted.
-  int get pendingUsers => _users.where((user) => user.isPending).length;
-
-  List<UserModel> get pendingAccounts =>
-      _users.where((user) => user.isPending).toList();
 
   int get adminUsers {
     return _users.where((user) => user.effectiveRole == 'admin').length;
@@ -117,10 +112,6 @@ class UserProvider extends ChangeNotifier {
   /// listeners, no actions - the same answer Firestore gives.
   bool get _isCurrentUserActive => _currentUserProfile?.isActive ?? false;
 
-  /// The signed-in account registered itself and is waiting for a Super Admin
-  /// (or its Admin) to activate it.
-  bool get isCurrentUserPending => _currentUserProfile?.isPending ?? false;
-
   bool get isSuperAdmin => currentUserRole == 'super_admin';
 
   bool get isAdmin => currentUserRole == 'admin';
@@ -145,8 +136,9 @@ class UserProvider extends ChangeNotifier {
 
   bool get canDeleteUsers => isSuperAdmin || isAdmin;
 
-  /// Admitting a self-registered account. A Super Admin may admit anyone; an
-  /// Admin only the Users it manages, which [canActivateUser] checks per row.
+  /// Blocking an account and letting it back in. A Super Admin may do it to
+  /// anyone; an Admin only to the Users it manages, which [canActivateUser]
+  /// and [canBlockUser] check per row.
   bool get canActivateUsers => isSuperAdmin || isAdmin;
 
   bool get canManageRequests => isSuperAdmin;
@@ -157,23 +149,37 @@ class UserProvider extends ChangeNotifier {
 
   bool get canAccessSuperAdminControls => isSuperAdmin;
 
-  /// Whether this account may set [user] from 'pending' to 'active'.
+  /// Whether this account may let a blocked [user] back in.
   ///
-  /// Mirrors the ADMIN UPDATE rule: an Admin may admit a User whose
-  /// `createdBy` is its own uid or still empty (a self-signup carries no
-  /// owner). A Super Admin may admit any pending account.
+  /// Mirrors the ADMIN UPDATE rule: an Admin may change the status of a User
+  /// whose `createdBy` is its own uid or still empty; a Super Admin may do it
+  /// to any account but its own.
   bool canActivateUser(UserModel user) {
-    if (!user.isPending || user.uid == currentUserUid) {
-      return false;
-    }
+    if (user.isActive) return false;
 
-    if (isSuperAdmin) {
-      return true;
-    }
+    return _canChangeStatusOf(user);
+  }
 
-    if (!isAdmin || user.effectiveRole != 'user') {
-      return false;
-    }
+  /// Whether this account may shut [user] out. The same ownership test as
+  /// [canActivateUser], applied to an account that is currently active.
+  bool canBlockUser(UserModel user) {
+    if (!user.isActive) return false;
+
+    return _canChangeStatusOf(user);
+  }
+
+  bool _canChangeStatusOf(UserModel user) {
+    // Nobody changes their own status, so an administrator cannot lock
+    // themselves out of the system.
+    if (user.uid == currentUserUid) return false;
+
+    // A Super Admin's own account is never blocked from here, so the system
+    // always keeps at least one account that can put things right.
+    if (user.effectiveRole == 'super_admin') return false;
+
+    if (isSuperAdmin) return true;
+
+    if (!isAdmin || user.effectiveRole != 'user') return false;
 
     final owner = user.createdBy.trim();
 
@@ -1301,8 +1307,11 @@ class UserProvider extends ChangeNotifier {
         throw Exception('Super Admin account status cannot be changed.');
       }
 
-      if (!isSuperAdmin) {
-        throw Exception('Only the Super Admin can change user account status.');
+      // A Super Admin may block or unblock anyone; an Admin only the Users it
+      // manages. The same test the ADMIN UPDATE rule makes, so the app never
+      // offers an action Firestore would then refuse.
+      if (!_canChangeStatusOf(target)) {
+        throw Exception('You can only change accounts assigned to you.');
       }
 
       await _userService.changeUserStatus(cleanUid, cleanStatus);
@@ -1339,23 +1348,22 @@ class UserProvider extends ChangeNotifier {
       }
 
       if (!canActivateUsers) {
-        throw Exception('You are not allowed to activate accounts.');
+        throw Exception('You are not allowed to change account status.');
       }
 
-      // Re-read the profile: the row on screen may be a moment old, and the
-      // rules only accept the change while the account is still pending.
+      // Re-read the profile: the row on screen may be a moment old.
       final target = await _userService.getUserById(cleanUid);
 
       if (target == null) {
         throw Exception('That account no longer exists.');
       }
 
-      if (!target.isPending) {
-        throw Exception('This account is not waiting for activation.');
+      if (target.isActive) {
+        throw Exception('This account can already use the system.');
       }
 
       if (!canActivateUser(target)) {
-        throw Exception('You can only activate accounts assigned to you.');
+        throw Exception('You can only change accounts assigned to you.');
       }
 
       await _userService.activateUser(cleanUid);

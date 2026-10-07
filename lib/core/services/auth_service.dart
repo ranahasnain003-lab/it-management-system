@@ -19,9 +19,6 @@ class AuthService {
   bool get isLoggedIn => currentUser != null;
 
   bool get isSignedIn => isLoggedIn;
-
-  bool get isEmailVerified => currentUser?.emailVerified ?? false;
-
   // ============================================================
   // AUTH STATE
   // ============================================================
@@ -118,11 +115,9 @@ class AuthService {
         await user.updateDisplayName(cleanName);
       }
 
-      // Deliberately does NOT send the verification e-mail. AuthProvider.signup
-      // owns that single send, together with creating the Firestore profile and
-      // starting the resend cooldown. Sending here as well is how an account
-      // ends up receiving the same message twice, which confuses the person and
-      // counts against delivery.
+      // No verification e-mail: addresses are not verified in this app.
+      // AuthProvider.signup creates the Firestore profile next, which is what
+      // decides the account's role and status.
 
       return credential;
     } on FirebaseAuthException catch (e) {
@@ -137,113 +132,29 @@ class AuthService {
   }
 
   // ============================================================
-  // EMAIL VERIFICATION
+  // RELOAD USER
   // ============================================================
 
-  /// Where the verification link sends the person once Firebase has accepted
-  /// it: this project's own hosted sign-in page.
+  /// Re-reads the signed-in account from Firebase, so a change made elsewhere
+  /// (a new display name, a disabled account) is seen here.
   ///
-  /// Two reasons to set it rather than leave Firebase's bare "e-mail
-  /// verified" page. The person lands back in the app and can sign in
-  /// immediately instead of being left on a dead end; and the link in the
-  /// message points at a domain that belongs to this project, which is one
-  /// of the few delivery signals the app itself can control. It is NOT a
-  /// cure for the message landing in Spam - that is decided by the sending
-  /// domain's DNS records, which live outside the app (see the handover
-  /// notes on SPF/DKIM/DMARC and the custom SMTP sender).
-  ///
-  /// The domain must be listed under Authentication > Settings > Authorized
-  /// domains. Firebase Hosting domains of the project are there by default,
-  /// but if it is ever removed Firebase refuses the whole send - so
-  /// [sendEmailVerification] falls back to a plain send rather than leaving
-  /// a new account with no verification e-mail at all.
-  static final ActionCodeSettings verificationLinkSettings =
-      ActionCodeSettings(
-        url: 'https://it-inventory-8e690.web.app/login?verified=1',
-        handleCodeInApp: false,
-      );
-
-  /// Sends the ONE verification e-mail for the signed-in account.
-  ///
-  /// Callers own the question of when: every automatic send happens exactly
-  /// once, at signup, and anything else is the person pressing "Resend"
-  /// behind a cooldown. Sending the same message twice is both confusing and
-  /// a spam signal, so nothing here sends on its own.
-  Future<void> sendEmailVerification() async {
+  /// Nothing about an e-mail address is checked: addresses are not verified in
+  /// this app, and whether an account may be used is decided by the `status`
+  /// and `role` on its Firestore profile.
+  Future<void> reloadUser() async {
     final User? user = _firebaseAuth.currentUser;
 
     if (user == null) {
-      throw const AuthException(
-        'Please sign in again to request a verification email.',
-        code: 'no-current-user',
-      );
-    }
-
-    if (user.emailVerified) {
       return;
     }
 
     try {
-      try {
-        await user.sendEmailVerification(verificationLinkSettings);
-      } on FirebaseAuthException catch (e) {
-        // The continue URL is configuration, not something the person did
-        // wrong. If it is rejected, the verification e-mail still has to go.
-        if (e.code == 'invalid-continue-uri' ||
-            e.code == 'unauthorized-continue-uri' ||
-            e.code == 'missing-continue-uri' ||
-            e.code == 'invalid-dynamic-link-domain') {
-          await user.sendEmailVerification();
-        } else {
-          rethrow;
-        }
-      }
-    } on FirebaseAuthException catch (e) {
-      throw AuthException.fromFirebase(e);
-    } catch (_) {
-      throw const AuthException(
-        'Unable to send the verification email. Please try again.',
-      );
-    }
-  }
-
-  // Compatibility method.
-  Future<void> sendVerificationEmail() async {
-    await sendEmailVerification();
-  }
-
-  // Compatibility method.
-  Future<void> resendVerificationEmail() async {
-    await sendEmailVerification();
-  }
-
-  // ============================================================
-  // RELOAD USER / CHECK VERIFICATION
-  // ============================================================
-
-  Future<bool> reloadUser() async {
-    final User? user = _firebaseAuth.currentUser;
-
-    if (user == null) {
-      return false;
-    }
-
-    try {
       await user.reload();
-
-      return _firebaseAuth.currentUser?.emailVerified ?? false;
     } on FirebaseAuthException catch (e) {
       throw AuthException.fromFirebase(e);
     } catch (_) {
-      throw const AuthException(
-        'Unable to check your email verification status.',
-      );
+      throw const AuthException('Unable to refresh your account.');
     }
-  }
-
-  // Compatibility method.
-  Future<bool> isEmailVerifiedNow() async {
-    return reloadUser();
   }
 
   // ============================================================

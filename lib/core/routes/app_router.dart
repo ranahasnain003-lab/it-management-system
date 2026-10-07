@@ -8,10 +8,11 @@ import '../providers/auth_provider.dart';
 import '../providers/user_provider.dart';
 import 'route_guard.dart';
 import '../ai/ai_assistant_panel.dart';
+import '../ota/ota_update_gate.dart';
 import '../features/splash/screens/splash_screen.dart';
 import '../authentication/screens/forgot_password_screen.dart';
-import '../authentication/screens/login_screen.dart';
 import '../authentication/screens/signup_screen.dart' as signup;
+import '../authentication/screens/login_screen.dart';
 import '../dashboard/screens/dashboard_screen.dart';
 import '../assets/screens/assets_screen.dart';
 import '../assets/screens/currently_at_bazaars_screen.dart';
@@ -177,7 +178,13 @@ class AppRouter {
         // of behind its button. Screens, guards and paths are unchanged.
         ShellRoute(
           observers: [assistantModalObserver],
-          builder: (context, state, child) => AiAssistantOverlay(child: child),
+          // OtaUpdateGate adds nothing to the layout and no behaviour of its
+          // own: it returns this child untouched, and once per app session
+          // asks whether a newer Android build has been published. On the web
+          // this shell is never reached (WebRouter.create is used instead),
+          // and the gate disables itself off Android in any case.
+          builder: (context, state, child) =>
+              AiAssistantOverlay(child: OtaUpdateGate(child: child)),
           routes: [
             // ============================================================
             // DASHBOARD

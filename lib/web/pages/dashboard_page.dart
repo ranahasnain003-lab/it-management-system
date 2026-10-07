@@ -26,15 +26,13 @@ class WebDashboardPage extends StatelessWidget {
     final requests = context.watch<RequestProvider>();
     final users = context.watch<UserProvider>();
 
+
     final profile = users.currentUserProfile;
-    final isUnassignedUser =
-        users.isNormalUser && (profile?.createdBy.trim().isEmpty ?? true);
 
     // Nothing has arrived yet, so the figures below would all read zero. The
     // tiles are drawn as placeholders of the same shape instead: the page
     // keeps its layout and the wait reads as the numbers landing.
-    final isFirstLoad =
-        assets.isLoading && assets.assets.isEmpty && !isUnassignedUser;
+    final isFirstLoad = assets.isLoading && assets.assets.isEmpty;
 
     return WebPage(
       title: 'Dashboard',
@@ -45,7 +43,7 @@ class WebDashboardPage extends StatelessWidget {
               : (profile?.email ?? ''),
           role: PermissionService.roleLabel(users.currentUserRole),
           description: users.isNormalUser
-              ? 'Real-time inventory of your assigned Admin'
+              ? 'Real-time inventory of the organisation'
               : 'Real-time organization-wide inventory overview',
           icon: users.isSuperAdmin
               ? Icons.admin_panel_settings_rounded
@@ -55,14 +53,7 @@ class WebDashboardPage extends StatelessWidget {
         ),
         const SizedBox(height: AppSpacing.xl),
 
-        if (isUnassignedUser)
-          const _DashboardNotice(
-            icon: Icons.info_outline_rounded,
-            title: 'Your account is not assigned to an Admin yet',
-            message:
-                'No inventory is visible until an Admin assigns your account.',
-          )
-        else if (assets.errorMessage != null)
+        if (assets.errorMessage != null)
           _DashboardNotice(
             icon: Icons.error_outline_rounded,
             title: 'Unable to load inventory',

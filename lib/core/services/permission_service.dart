@@ -137,19 +137,26 @@ class PermissionService {
     return (status ?? '').trim().toLowerCase();
   }
 
-  /// The only two statuses the Firestore rules let into the system.
-  /// 'pending' (a self-registered account awaiting activation), 'inactive',
-  /// 'blocked', 'disabled' and 'deleted' all mean no access.
+  /// Whether an account may use the system.
+  ///
+  /// The status model has exactly two meanings: 'active' may use the system,
+  /// and everything else may not. 'blocked' is the value the app writes when
+  /// an administrator shuts an account out, and 'deleted' is the soft delete;
+  /// 'approved', 'inactive' and 'disabled' are only recognised so that a
+  /// profile written by an older version, or edited by hand in the Firebase
+  /// console, still resolves to the right side of the line.
+  ///
+  /// Compared trimmed and without regard to case, so a profile saved as
+  /// 'Active' or ' active ' is read the same way here and in the rules.
   static bool isActiveStatus(String? status) {
     final value = normalizeStatus(status);
 
     return value == 'active' || value == 'approved';
   }
 
-  /// A self-registered account that nobody has admitted yet.
-  static bool isPendingStatus(String? status) {
-    return normalizeStatus(status) == 'pending';
-  }
+  /// Whether an account is shut out. The complement of [isActiveStatus]: an
+  /// account with no status at all is blocked rather than admitted.
+  static bool isBlockedStatus(String? status) => !isActiveStatus(status);
 
   static String normalizePermission(String? permission) {
     return (permission ?? '')

@@ -1,4 +1,22 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Over-the-air updates: this app is installed as an APK rather than from
+         Play, so it offers new builds itself. Needed to open a downloaded APK
+         in Android's package installer. It does not install anything silently
+         - the system still shows its own confirmation, and the person must
+         have allowed this app to install unknown apps. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+
+    <!-- The library used to hand the APK to the installer (open_filex) also
+         asks for read access to the photo, video and audio libraries, because
+         it is built to open any kind of file. This app only ever opens one
+         file it wrote itself, in its own cache directory, through a
+         FileProvider it owns - none of which needs access to anybody's media.
+         Removed here so the OTA feature does not widen what the app asks the
+         person for. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" tools:node="remove"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" tools:node="remove"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" tools:node="remove"/>
     <application
         android:label="PSBA IT Inventory"
         android:name="${applicationName}"

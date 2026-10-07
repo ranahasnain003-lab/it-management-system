@@ -88,8 +88,7 @@ class _WebUsersPageState extends State<WebUsersPage> {
     final rows = provider.users.where((u) {
       if (_role != 'all' && u.effectiveRole != _role) return false;
       if (_status == 'active' && !u.isActive) return false;
-      if (_status == 'pending' && !u.isPending) return false;
-      if (_status == 'inactive' && (u.isActive || u.isPending)) return false;
+      if (_status == 'blocked' && u.isActive) return false;
       if (q.isEmpty) return true;
       return [u.name, u.email, u.employeeId, u.department, u.designation, u.role]
           .any((v) => v.toLowerCase().contains(q));
@@ -146,10 +145,7 @@ class _WebUsersPageState extends State<WebUsersPage> {
               items: const {
                 'all': 'All',
                 'active': 'Active',
-                // Self-registrations waiting to be admitted: they have no
-                // access at all until somebody activates them.
-                'pending': 'Pending activation',
-                'inactive': 'Inactive / Blocked',
+                'blocked': 'Blocked',
               },
               onChanged: (v) => setState(() => _status = v),
             ),
@@ -331,7 +327,6 @@ class _UserActions extends StatelessWidget {
               if (context.mounted) showWebToast(context, 'Handover complete. Your account is now Admin.');
             }
           case 'active':
-          case 'inactive':
           case 'blocked':
             if (await confirmWebAction(
               context,
@@ -368,12 +363,10 @@ class _UserActions extends StatelessWidget {
             _menuItem(context, 'handover', Icons.swap_horiz_rounded, 'Hand over Super Admin & step down'),
           ],
           const PopupMenuDivider(),
-          // 'Activate' above covers a pending account; this toggle is for an
-          // account that was deliberately switched off.
-          if (!user.isActive && !user.isPending)
-            _menuItem(context, 'active', Icons.check_circle_outline_rounded, 'Activate'),
-          if (user.isActive) _menuItem(context, 'inactive', Icons.pause_circle_outline_rounded, 'Deactivate'),
-          if (PermissionService.normalizeStatus(user.status) != 'blocked')
+          // Two states, so one action either way.
+          if (!user.isActive)
+            _menuItem(context, 'active', Icons.check_circle_outline_rounded, 'Unblock'),
+          if (user.isActive)
             _menuItem(context, 'blocked', Icons.block_rounded, 'Block'),
         ],
         if (provider.isSuperAdmin || canEdit) ...[
@@ -704,12 +697,7 @@ class _EditUserDialogState extends State<_EditUserDialog> {
                     value: _status,
                     items: {
                       'active': 'Active',
-                      'inactive': 'Inactive',
-                      'blocked': 'Blocked',
-                      // Listed only while the account really is pending, so
-                      // the field shows what is stored instead of silently
-                      // falling back to another value.
-                      if (widget.user.isPending) 'pending': 'Pending activation',
+                      'blocked': 'Blocked - cannot use the system',
                     },
                     onChanged: _canChangeAccess ? (v) => setState(() => _status = v) : null,
                   ),
@@ -775,14 +763,11 @@ class _EditUserDialogState extends State<_EditUserDialog> {
 String _statusValue(UserModel user) {
   final value = PermissionService.normalizeStatus(user.status);
 
-  if (value == 'active' ||
-      value == 'inactive' ||
-      value == 'blocked' ||
-      value == 'pending') {
+  if (value == 'active' || value == 'blocked') {
     return value;
   }
 
-  return user.isActive ? 'active' : 'inactive';
+  return user.isActive ? 'active' : 'blocked';
 }
 
 /// Single-select shaped like the form fields around it. A null [onChanged]

@@ -24,6 +24,7 @@ import 'local_ai_config.dart';
 import 'local_ai_context_service.dart';
 import 'local_ai_discovery.dart';
 import 'local_ai_models.dart';
+import 'local_ai_remote_setup.dart';
 
 /// The opaque per-user value sent as `X-Conversation-Scope`.
 ///
@@ -90,6 +91,7 @@ class LocalAiProvider extends ChangeNotifier {
     LocalAiSettingsStore? settings,
     this._contextService,
     LocalAiDiscovery? discovery,
+    this.remoteSetup,
     this._stopGrace = LocalAiStream.defaultStopGrace,
     this._contextTimeout = const Duration(seconds: 15),
     this._monitorInterval = const Duration(seconds: 30),
@@ -101,6 +103,15 @@ class LocalAiProvider extends ChangeNotifier {
   final LocalAiSettingsStore _settings;
   final LocalAiContextService? _contextService;
   final LocalAiDiscovery _discovery;
+
+  /// Where the connection settings come from when nobody has typed them in on
+  /// this device (see local_ai_remote_setup.dart). Null in a build that does
+  /// not publish them, which behaves exactly as before.
+  final LocalAiRemoteSetup? remoteSetup;
+
+  /// So the published settings are asked for once per sign-in, not once per
+  /// screen: loadConfig runs on every visit to the assistant.
+  bool remoteSetupTried = false;
   final Duration _stopGrace;
   final Duration _contextTimeout;
   final Duration _monitorInterval;
@@ -232,8 +243,17 @@ class LocalAiProvider extends ChangeNotifier {
   /// the current conversation away: the server would no longer let this
   /// device continue it, and it must not be continued under another key.
   Future<void> loadConfig() async {
-    final loaded = await _settings.load();
+    var loaded = await _settings.load();
     if (_disposed) return;
+
+    // Nothing usable on this device yet: take what an administrator published
+    // for everyone, so no one has to type an address or a key. Only ever fills
+    // gaps - see _applyRemoteSetup.
+    if (!_isUsable(loaded)) {
+      final filled = await _applyRemoteSetup(loaded);
+      if (_disposed) return;
+      loaded = filled ?? loaded;
+    }
 
     if (loaded.apiKey != _config.apiKey) {
       // What the old key was allowed says nothing about the new one.
@@ -251,6 +271,62 @@ class LocalAiProvider extends ChangeNotifier {
 
     _refreshScope();
     notifyListeners();
+  }
+
+  /// Enough to connect without anyone being asked for anything.
+  static bool _isUsable(LocalAiConfig config) => config.isConfigured && config.apiKey.isNotEmpty;
+
+  /// Fills in whatever this device is missing from the settings an
+  /// administrator published, and saves them so the next start needs no fetch.
+  /// Returns the configuration to use, or null when nothing was published.
+  ///
+  /// Only ever fills GAPS. An address or key typed into Settings on this device
+  /// is somebody's deliberate choice - a technician pointing one tablet at a
+  /// second server, say - and silently replacing it would make that setting
+  /// impossible to keep. A fingerprint is only taken when it was published
+  /// alongside an address this device had not got; a published fingerprint is
+  /// never attached to an address somebody else chose.
+  Future<LocalAiConfig?> _applyRemoteSetup(LocalAiConfig current) async {
+    final source = remoteSetup;
+    if (source == null || remoteSetupTried) return null;
+    remoteSetupTried = true;
+
+    // fetch() is documented not to throw, but a source that broke that promise
+    // must not take the assistant down: nothing published is a normal state.
+    LocalAiRemoteSettings? published;
+    try {
+      published = await source.fetch();
+    } catch (error) {
+      debugPrint('Local AI: the published connection settings could not be read ($error)');
+      return null;
+    }
+    if (_disposed || published == null || !published.isUsable) return null;
+
+    final address = current.isConfigured ? current.baseUrl : published.baseUrl;
+    final key = current.apiKey.isNotEmpty ? current.apiKey : published.apiKey;
+    final fingerprint = current.isConfigured
+        ? current.certificateFingerprint
+        : published.certificateFingerprint;
+
+    if (LocalAiSettingsStore.addressProblem(address) != null ||
+        LocalAiSettingsStore.fingerprintProblem(fingerprint) != null) {
+      debugPrint('Local AI: the published connection settings are not valid; ignoring them.');
+      return null;
+    }
+
+    try {
+      await _settings.save(baseUrl: address, apiKey: key, certificateFingerprint: fingerprint);
+    } catch (error) {
+      // An unwritable keystore must not stop the assistant working this session.
+      debugPrint('Local AI: could not save the published settings ($error)');
+      return LocalAiConfig(
+        baseUrl: address,
+        apiKey: key,
+        certificateFingerprint: fingerprint,
+        source: LocalAiConfigSource.device,
+      );
+    }
+    return _settings.load();
   }
 
   /// Follows the signed-in account for the life of the app.
@@ -277,6 +353,16 @@ class LocalAiProvider extends ChangeNotifier {
     _uid = next;
     _refreshScope(accountChanged: true);
     notifyListeners();
+
+    // The published settings can only be read by a signed-in account, and
+    // loadConfig may well have run before anyone was. A new account is
+    // therefore a fresh chance to fetch them, and the only one that matters:
+    // without this, the first screen after signing in would still say the
+    // server is not set up.
+    remoteSetupTried = false;
+    if (next != null && remoteSetup != null && !_isUsable(_config)) {
+      loadConfig().ignore();
+    }
   }
 
   /// Clears everything held in memory for the signed-out account.
@@ -640,11 +726,29 @@ class LocalAiProvider extends ChangeNotifier {
   /// HTTP announce "with the pinned fingerprint" proves nothing about the
   /// certificate, and following it would send the key itself unencrypted.
   /// Moving to HTTP is an administrator's decision, made in Settings.
+  ///
+  /// And never away from a PUBLIC address. Discovery is a UDP broadcast on the
+  /// network this device happens to be on, so everything it can find is a LAN
+  /// address. When the saved address is a public one - a tunnel's
+  /// `https://<name>.ts.net`, say - a reply to that broadcast says nothing
+  /// about where the public address should point, and following it would
+  /// quietly rewrite a setting that works from anywhere into one that only
+  /// works on this Wi-Fi, pin it to the LAN certificate, and leave the phone
+  /// unable to reach the server again from outside until somebody retypes the
+  /// address by hand. A public address is therefore only ever changed in
+  /// Settings.
   Future<bool> _findMovedServer() async {
     final config = _config;
     if (!_discovery.isSupported ||
         !config.isConfigured ||
         config.keyId == null) {
+      return false;
+    }
+    if (!config.isPrivateHost) {
+      debugPrint(
+        'Local AI: the saved address is a public one; a discovery reply on '
+        'this network cannot replace it.',
+      );
       return false;
     }
 
@@ -672,6 +776,11 @@ class LocalAiProvider extends ChangeNotifier {
 
       for (final url in server.baseUrls) {
         if (url == config.baseUrl) continue;
+        // A reply to a broadcast on this network can only legitimately offer a
+        // LAN address. Anything else in it is ignored rather than adopted.
+        if (!LocalAiConfig.hostIsPrivate(Uri.tryParse(url)?.host ?? '')) {
+          continue;
+        }
         if (!await _answers(url, config.apiKey, pin)) continue;
 
         // An administrator saved something else meanwhile: theirs wins.

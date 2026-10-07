@@ -65,6 +65,57 @@ class LocalAiConfig {
   /// The `/api/v1` root every request is built from.
   String get apiRoot => '$baseUrl/api/v1';
 
+  /// True when [baseUrl] names a host that can only be reached from this
+  /// network: a private or loopback IPv4 address, an IPv6 loopback or
+  /// link-local address, a bare hostname, or an mDNS `.local` name.
+  ///
+  /// This is what tells a LAN address apart from a public one such as a
+  /// tunnel's `https://something.ts.net`. It matters because the UDP discovery
+  /// announcements on this network may only ever be allowed to replace a LAN
+  /// address: a server found by a broadcast on the office Wi-Fi is not
+  /// evidence about where a public address should point, and adopting it would
+  /// take a phone that works from anywhere and tie it back to this one
+  /// network. See LocalAiProvider._findMovedServer.
+  bool get isPrivateHost => hostIsPrivate(Uri.tryParse(baseUrl)?.host ?? '');
+
+  /// See [isPrivateHost]. Public by name so the provider and its tests can ask
+  /// about a host that is not the configured one.
+  static bool hostIsPrivate(String host) {
+    final name = host.trim().toLowerCase();
+    if (name.isEmpty) return false;
+
+    // IPv6 arrives from Uri.host without its brackets.
+    if (name.contains(':')) {
+      if (name == '::1') return true;
+      // fe80::/10 (link-local) and fc00::/7 (unique local).
+      return name.startsWith('fe8') ||
+          name.startsWith('fe9') ||
+          name.startsWith('fea') ||
+          name.startsWith('feb') ||
+          name.startsWith('fc') ||
+          name.startsWith('fd');
+    }
+
+    final octets = name.split('.');
+    final numbers = [for (final o in octets) int.tryParse(o)];
+    final isIpv4 = octets.length == 4 && !numbers.contains(null);
+    if (isIpv4) {
+      final [a, b, _, _] = [for (final n in numbers) n!];
+      if (a == 127 || a == 10) return true;
+      if (a == 192 && b == 168) return true;
+      if (a == 172 && b >= 16 && b <= 31) return true;
+      // 169.254.0.0/16 link-local, and the Android emulator's host alias.
+      if (a == 169 && b == 254) return true;
+      return false;
+    }
+
+    // Names: localhost, an mDNS name, or a single-label host that only a local
+    // resolver can answer. Anything with a public suffix is treated as public.
+    if (name == 'localhost') return true;
+    if (name.endsWith('.local') || name.endsWith('.localhost')) return true;
+    return !name.contains('.');
+  }
+
   /// The public id of the key (the `<id>` of `lai_<id>_<secret>`), or null
   /// for a key of any other shape. Discovery sends it, so the server can tell
   /// which key the proof was made with without the key crossing the network.

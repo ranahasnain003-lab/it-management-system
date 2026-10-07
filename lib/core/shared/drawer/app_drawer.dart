@@ -51,11 +51,7 @@ class AppDrawer extends StatelessWidget {
         ? profile!.email.trim()
         : (user?.email ?? '');
 
-    // A pending self-registration has no role yet, so it is named as such
-    // instead of being shown as a plain System User that can do things.
-    final role = userProvider.isCurrentUserPending
-        ? 'Pending activation'
-        : userProvider.isSuperAdmin
+    final role = userProvider.isSuperAdmin
         ? 'Super Administrator'
         : userProvider.isAdmin
         ? 'Administrator'

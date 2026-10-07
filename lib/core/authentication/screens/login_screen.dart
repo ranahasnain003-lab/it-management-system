@@ -61,8 +61,6 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
   String? _successMessage;
 
   // Set when sign-in was refused because the email is not verified.
-  String? _unverifiedEmail;
-  String? _resendError;
 
   bool _sessionMessageCheckScheduled = false;
 
@@ -113,8 +111,6 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
       _sessionMessage = null;
       _errorMessage = null;
       _successMessage = null;
-      _unverifiedEmail = null;
-      _resendError = null;
     });
 
     if (!_formKey.currentState!.validate()) return;
@@ -135,65 +131,7 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
 
       if (code == AuthProvider.busyCode) return;
 
-      setState(() {
-        _errorMessage = AuthProvider.describeError(e);
-        _unverifiedEmail = code == AuthProvider.emailNotVerifiedCode
-            ? email
-            : null;
-      });
-    }
-  }
-
-  // ============================================================
-  // RESEND VERIFICATION
-  // ============================================================
-
-  Future<void> _resendVerification() async {
-    final auth = context.read<AuthProvider>();
-    final email = _unverifiedEmail;
-
-    if (email == null || auth.isLoading) return;
-
-    if (_passwordController.text.isEmpty) {
-      setState(() {
-        _resendError = 'Enter your password above, then tap resend.';
-      });
-      return;
-    }
-
-    setState(() {
-      _resendError = null;
-      _successMessage = null;
-    });
-
-    try {
-      final result = await auth.resendVerificationFor(
-        email: email,
-        password: _passwordController.text,
-      );
-
-      if (!mounted) return;
-
-      setState(() {
-        if (result == VerificationEmailResult.alreadyVerified) {
-          _unverifiedEmail = null;
-          _errorMessage = null;
-          _successMessage =
-              'Your email address is already verified. You can sign in now.';
-        } else {
-          _successMessage =
-              'A new verification link was sent to $email. Check your inbox '
-              'and spam folder, then sign in.';
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-
-      final code = e is AuthException ? e.code : null;
-
-      if (code == AuthProvider.busyCode) return;
-
-      setState(() => _resendError = AuthProvider.describeError(e));
+      setState(() => _errorMessage = AuthProvider.describeError(e));
     }
   }
 
@@ -256,41 +194,12 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
               const SizedBox(height: 16),
             ],
 
-            if (_errorMessage != null && _unverifiedEmail != null) ...[
-              AuthNotice(
-                title: 'Verify your email',
-                message: _errorMessage!,
-                type: AuthNoticeType.warning,
-                action: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    ResendEmailButton(
-                      label: 'Resend verification email',
-                      foreground: colors.onTertiaryContainer,
-                      loading:
-                          auth.activeAction == AuthAction.resendVerification,
-                      remaining: () =>
-                          auth.verificationCooldownFor(_unverifiedEmail!),
-                      onPressed: busy ? null : _resendVerification,
-                    ),
-                    if (_resendError != null)
-                      Padding(
-                        padding: const EdgeInsets.only(left: 8, top: 2),
-                        child: Text(
-                          _resendError!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colors.error,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-            ] else if (_errorMessage != null) ...[
+            // Why the sign-in was refused: a wrong password, or an account
+            // that nobody has approved yet.
+            if (_errorMessage != null) ...[
               AuthNotice(
                 message: _errorMessage!,
+                type: AuthNoticeType.error,
                 onDismiss: () => setState(() => _errorMessage = null),
               ),
               const SizedBox(height: 16),

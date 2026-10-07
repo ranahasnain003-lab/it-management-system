@@ -571,16 +571,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     String? message;
     IconData icon = Icons.info_outline_rounded;
 
+    // A User is no longer scoped to one Admin's inventory, so not being
+    // "assigned" to anybody is not a state worth mentioning; every active
+    // account reads the whole inventory.
     if (!userProvider.hasLoadedCurrentUser &&
         userProvider.currentUserError != null) {
       message = userProvider.currentUserError;
       icon = Icons.error_outline_rounded;
-    } else if (userProvider.hasLoadedCurrentUser &&
-        userProvider.isNormalUser &&
-        (userProvider.currentUserProfile?.createdBy.trim().isEmpty ?? true)) {
-      message =
-          'Your account is not assigned to an Admin yet, so no inventory is '
-          'visible. Please contact your Admin.';
     }
 
     if (message == null) {

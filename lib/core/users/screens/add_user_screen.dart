@@ -6,7 +6,6 @@ import 'package:provider/provider.dart';
 import '../../../models/user_model.dart';
 import '../../constants/app_constants.dart';
 import '../../providers/user_provider.dart';
-import '../../services/auth_service.dart';
 import '../../services/permission_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
@@ -933,26 +932,10 @@ class _AddUserScreenState extends State<AddUserScreen> {
       await userProvider.createUser(userModel);
 
       /*
-       * Login requires a verified email address. Without this email an
-       * account created here could never sign in.
+       * No verification email is sent: e-mail addresses are not verified in
+       * this app. An account created here is active straight away, because a
+       * manager creating it IS the approval.
        */
-      var verificationSent = true;
-
-      try {
-        // One send, with the same continue link as a self-registration, so
-        // the person lands back on the sign-in page.
-        await newUser.sendEmailVerification(
-          AuthService.verificationLinkSettings,
-        );
-      } catch (_) {
-        try {
-          // The continue URL is configuration. If it is refused, the account
-          // still needs its verification email.
-          await newUser.sendEmailVerification();
-        } catch (_) {
-          verificationSent = false;
-        }
-      }
 
       /*
        * Sign out only the secondary authentication session.
@@ -966,18 +949,10 @@ class _AddUserScreenState extends State<AddUserScreen> {
           ? 'Admin'
           : 'User';
 
-      if (verificationSent) {
-        _showSuccess(
-          '$accountLabel account created. A verification email was sent to '
-          '$email; the account can sign in after verifying it.',
-        );
-      } else {
-        _showError(
-          '$accountLabel account created, but the verification email could '
-          'not be sent now. A new verification email is sent automatically '
-          'when the account first tries to sign in.',
-        );
-      }
+      _showSuccess(
+        '$accountLabel account created for $email. It can sign in straight '
+        'away with the password you set.',
+      );
 
       await Future<void>.delayed(const Duration(milliseconds: 500));
 

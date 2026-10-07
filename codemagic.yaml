@@ -1,0 +1,139 @@
+# Codemagic CI configuration for the iOS build of PSBA IT Inventory.
+#
+# Why this file exists: Apple's compiler and code-signing tools only run on
+# macOS, and this project is developed entirely on Windows. Codemagic supplies
+# the Mac. Nothing here affects the Android, Web or Firebase builds, which
+# continue to be built exactly as before.
+#
+# There are two workflows, and they are meant to be used in this order:
+#
+#   1. ios-unsigned-verify - needs NO Apple Developer account, no certificate
+#      and no provisioning profile. It proves the project compiles on macOS.
+#      Run this one first; it is free of Apple paperwork entirely.
+#
+#   2. ios-testflight - produces a signed, installable build. This one cannot
+#      run until the Apple Developer Program membership and the App Store
+#      Connect integration exist. The places needing your details are marked
+#      TODO; nothing has been invented or guessed.
+#
+# IMPORTANT: Codemagic builds from the Git repository, not from the Windows
+# working directory. Anything not committed and pushed is simply absent from
+# the build.
+
+workflows:
+  # ===========================================================================
+  # 1. Compile check on macOS - no Apple credentials required
+  # ===========================================================================
+  ios-unsigned-verify:
+    name: iOS compile check (unsigned)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+
+    scripts:
+      - name: Flutter version in use
+        script: flutter --version
+
+      - name: Get packages
+        script: flutter pub get
+
+      - name: Analyzer
+        script: flutter analyze
+
+      - name: Tests
+        script: flutter test
+
+      - name: Report whether the Firebase iOS plist is present
+        script: |
+          # Not fatal. This app calls Firebase.initializeApp(options: ...) with
+          # values compiled in from lib/firebase_options.dart, so it runs on
+          # iOS without GoogleService-Info.plist. The plist is only needed if
+          # Analytics, Crashlytics or App Check on iOS are turned on later.
+          if [ -f ios/Runner/GoogleService-Info.plist ]; then
+            echo "GoogleService-Info.plist: present"
+          else
+            echo "GoogleService-Info.plist: absent - fine for this build."
+          fi
+
+      - name: Build unsigned iOS app
+        # --no-codesign is what makes this runnable with no Apple account.
+        # It also generates ios/Podfile and runs pod install on the way.
+        script: flutter build ios --release --no-codesign
+
+    artifacts:
+      - build/ios/iphoneos/*.app
+      - flutter_drive.log
+
+  # ===========================================================================
+  # 2. Signed build for TestFlight - requires your Apple details
+  # ===========================================================================
+  ios-testflight:
+    name: iOS signed build (TestFlight)
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+
+    integrations:
+      # TODO: create an App Store Connect API key in Codemagic
+      # (Teams -> Integrations -> Developer Portal) and put its name here.
+      # The name below is a placeholder, not a real integration.
+      app_store_connect: APP_STORE_CONNECT_KEY_NAME
+
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+
+      ios_signing:
+        distribution_type: app_store
+        # Must match the App ID registered in your Apple Developer account AND
+        # the bundle identifier currently set in the Xcode project.
+        # Both are the placeholder below until you confirm the final one.
+        bundle_identifier: com.psba.itinventory
+
+    scripts:
+      - name: Get packages
+        script: flutter pub get
+
+      # Optional: if you decide iOS needs GoogleService-Info.plist, store its
+      # base64 as a secure environment variable named GOOGLE_SERVICE_INFO_PLIST
+      # in Codemagic and uncomment this. Keeping it out of Git is why it is
+      # injected rather than committed.
+      # - name: Restore the Firebase iOS plist
+      #   script: |
+      #     echo "$GOOGLE_SERVICE_INFO_PLIST" | base64 --decode > ios/Runner/GoogleService-Info.plist
+
+      - name: Apply the fetched provisioning profiles to the Xcode project
+        script: xcode-project use-profiles
+
+      - name: Install pods
+        script: find . -name "Podfile" -execdir pod install \;
+
+      - name: Set the build number from the Codemagic build counter
+        # App Store Connect refuses a build number it has already seen, so it
+        # is taken from the CI counter rather than from pubspec.
+        script: |
+          flutter build ipa --release \
+            --build-number=$(($PROJECT_BUILD_NUMBER)) \
+            --export-options-plist=/Users/builder/export_options.plist
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      # TODO: uncomment once the integration above is real. Until then the
+      # signed .ipa is simply downloadable from the Codemagic build page.
+      # app_store_connect:
+      #   auth: integration
+      #   submit_to_testflight: true
+      email:
+        recipients:
+          # TODO: replace with the address that should receive build results.
+          - hussnainatif.psba@gmail.com
+        notify:
+          success: true
+          failure: true

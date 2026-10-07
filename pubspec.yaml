@@ -51,6 +51,19 @@ dependencies:
   # rather than a Cloud Function (Cloud Functions need the Blaze plan).
   http: ^1.2.0
 
+  # Over-the-air updates. The app is installed as an APK rather than from
+  # Play, so it has to notice new builds itself:
+  #   package_info_plus - the versionCode of the build that is running, which
+  #                       is what a published release is compared against.
+  #   path_provider     - the app's own cache directory to download into, so
+  #                       no storage permission is needed.
+  #   open_filex        - hands the downloaded APK to Android's package
+  #                       installer, which asks the person to confirm. The app
+  #                       never installs anything itself.
+  package_info_plus: ^8.1.1
+  path_provider: ^2.1.4
+  open_filex: ^4.5.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

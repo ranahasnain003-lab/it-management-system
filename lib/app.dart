@@ -107,20 +107,10 @@ class _AppState extends State<App> {
 
     final uid = firebaseUser.uid;
 
-    // Login and signup perform their own profile/status/verification checks
-    // and create the profile a moment after the Auth account. Do not
-    // interfere while they are running.
+    // Login and signup perform their own profile and status checks and create
+    // the profile a moment after the Auth account. Do not interfere while
+    // they are running.
     if (_authProvider.isLoading) {
-      return;
-    }
-
-    // Verification is checked at login, but a restored session (app restart,
-    // browser refresh) never passes through login again.
-    if (!firebaseUser.emailVerified) {
-      _signOut(
-        uid,
-        'Please verify your email address before logging in.',
-      );
       return;
     }
 

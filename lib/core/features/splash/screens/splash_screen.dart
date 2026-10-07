@@ -45,14 +45,8 @@ class _SplashScreenState extends State<SplashScreen> {
         return;
       }
 
-      if (!refreshedUser.emailVerified) {
-        await FirebaseAuth.instance.signOut();
-
-        if (!mounted) return;
-        context.go('/login');
-        return;
-      }
-
+      // No e-mail check here: whether this account may be used is decided by
+      // its profile's status and role, which the app's own guards read.
       if (!mounted) return;
       context.go('/dashboard');
     } catch (e) {

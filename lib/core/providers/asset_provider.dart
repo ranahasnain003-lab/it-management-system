@@ -294,7 +294,9 @@ class AssetProvider extends ChangeNotifier {
       _invalidateStats();
       _isLoading = false;
 
-      _setError('Your account is not assigned to an Admin inventory.');
+      // Reached only by a legacy caller that asks for one Admin's inventory
+      // without naming one; AssetScope sends a User to the whole inventory.
+      _setError('No inventory could be loaded. Please try again.');
 
       return;
     }

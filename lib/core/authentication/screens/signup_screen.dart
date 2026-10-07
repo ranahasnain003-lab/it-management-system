@@ -8,8 +8,10 @@ import '../widgets/auth_widgets.dart';
 
 /// Public account registration (Android and web).
 ///
-/// Creates a normal User account, sends a verification email and shows a
-/// "check your inbox" confirmation.
+/// Creates a normal User account that is active straight away: no e-mail to
+/// confirm and nobody to approve it. The role is always the normal User one -
+/// an Admin or Super Admin account can only be made by an existing
+/// administrator, which firestore.rules enforces as well as this screen.
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
 
@@ -30,11 +32,6 @@ class _SignupScreenState extends State<SignupScreen> {
 
   String? _errorMessage;
 
-  // Set once the account has been created.
-  String? _registeredEmail;
-  bool _verificationSent = false;
-  String? _resendMessage;
-  bool _resendIsError = false;
 
   @override
   void dispose() {
@@ -70,7 +67,7 @@ class _SignupScreenState extends State<SignupScreen> {
     final email = _emailController.text.trim().toLowerCase();
 
     try {
-      final sent = await auth.signup(
+      await auth.signup(
         name: _nameController.text.trim(),
         email: email,
         password: _passwordController.text,
@@ -83,52 +80,15 @@ class _SignupScreenState extends State<SignupScreen> {
 
       TextInput.finishAutofillContext();
 
-      setState(() {
-        _registeredEmail = email;
-        _verificationSent = sent;
-        _resendMessage = null;
-      });
+      // The account is active and already signed in, so there is nothing to
+      // confirm and nobody to wait for: straight into the app.
+      context.go('/dashboard');
     } catch (e) {
       if (!mounted) return;
 
       if (e is AuthException && e.code == AuthProvider.busyCode) return;
 
       setState(() => _errorMessage = AuthProvider.describeError(e));
-    }
-  }
-
-  Future<void> _resendVerification() async {
-    final auth = context.read<AuthProvider>();
-    final email = _registeredEmail;
-
-    if (email == null || auth.isLoading) return;
-
-    setState(() => _resendMessage = null);
-
-    try {
-      final result = await auth.resendVerificationFor(
-        email: email,
-        password: _passwordController.text,
-      );
-
-      if (!mounted) return;
-
-      setState(() {
-        _resendIsError = false;
-        _resendMessage = result == VerificationEmailResult.alreadyVerified
-            ? 'Your email address is already verified. You can sign in now.'
-            : 'A new verification link was sent to $email.';
-        if (result == VerificationEmailResult.sent) _verificationSent = true;
-      });
-    } catch (e) {
-      if (!mounted) return;
-
-      if (e is AuthException && e.code == AuthProvider.busyCode) return;
-
-      setState(() {
-        _resendIsError = true;
-        _resendMessage = AuthProvider.describeError(e);
-      });
     }
   }
 
@@ -157,12 +117,7 @@ class _SignupScreenState extends State<SignupScreen> {
         child: AuthScrollBody(
           maxWidth: 480,
           child: AuthPanel(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 250),
-              child: _registeredEmail == null
-                  ? _buildForm(context)
-                  : _buildConfirmation(context),
-            ),
+            child: _buildForm(context),
           ),
         ),
       ),
@@ -318,81 +273,6 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
-  Widget _buildConfirmation(BuildContext context) {
-    final auth = context.watch<AuthProvider>();
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final email = _registeredEmail!;
-
-    return Column(
-      key: const ValueKey('signup-confirmation'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        AuthHeader(
-          icon: Icons.mark_email_read_outlined,
-          title: 'Verify your email',
-          subtitle: _verificationSent
-              ? 'Your account has been created. We sent a verification link '
-                    'to:'
-              : 'Your account has been created, but we could not send the '
-                    'verification email to:',
-        ),
-        const SizedBox(height: 10),
-        SelectableText(
-          email,
-          textAlign: TextAlign.center,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.w700,
-            color: colors.onSurface,
-          ),
-        ),
-        const SizedBox(height: 20),
-        AuthNotice(
-          type: _verificationSent
-              ? AuthNoticeType.info
-              : AuthNoticeType.warning,
-          message: _verificationSent
-              ? 'Open the link in that email to confirm your address. If you '
-                    'do not see it within a few minutes, check your spam or '
-                    'junk folder.'
-              : 'Use "Resend verification email" below, or sign in later to '
-                    'request a new link.',
-        ),
-        // A self-registered account is created awaiting approval, so the
-        // person is told now rather than discovering it as a refused login.
-        const SizedBox(height: 12),
-        const AuthNotice(
-          type: AuthNoticeType.info,
-          message: 'An administrator then has to approve your account before '
-              'you can sign in.',
-        ),
-        if (_resendMessage != null) ...[
-          const SizedBox(height: 12),
-          AuthNotice(
-            type: _resendIsError
-                ? AuthNoticeType.error
-                : AuthNoticeType.success,
-            message: _resendMessage!,
-          ),
-        ],
-        const SizedBox(height: 24),
-        AuthSubmitButton(
-          label: 'Continue to sign in',
-          icon: Icons.login_rounded,
-          onPressed: auth.isLoading ? null : _goToSignIn,
-        ),
-        const SizedBox(height: 8),
-        Center(
-          child: ResendEmailButton(
-            label: 'Resend verification email',
-            loading: auth.activeAction == AuthAction.resendVerification,
-            remaining: () => auth.verificationCooldownFor(email),
-            onPressed: auth.isLoading ? null : _resendVerification,
-          ),
-        ),
-      ],
-    );
-  }
 }
 
 /// Live checklist of the signup password rules.

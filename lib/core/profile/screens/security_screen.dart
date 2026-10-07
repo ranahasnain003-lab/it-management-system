@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
-import '../../services/auth_service.dart';
 import '../../theme/colors.dart';
 
 class SecurityScreen extends StatefulWidget {
@@ -22,7 +21,6 @@ class _SecurityScreenState extends State<SecurityScreen> {
     final colors = Theme.of(context).colorScheme;
     final user = FirebaseAuth.instance.currentUser;
 
-    final emailVerified = user?.emailVerified ?? false;
     final hasEmail = user?.email?.trim().isNotEmpty ?? false;
 
     return Scaffold(
@@ -68,7 +66,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildSecurityHeader(context, emailVerified),
+                    _buildSecurityHeader(context),
                     const SizedBox(height: AppSpacing.xl),
                     _buildSectionTitle(
                       context,
@@ -76,11 +74,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       'Review the security status of your account',
                     ),
                     const SizedBox(height: AppSpacing.sm + 2),
-                    _buildSecurityStatusCard(
-                      context,
-                      emailVerified: emailVerified,
-                      hasEmail: hasEmail,
-                    ),
+                    _buildSecurityStatusCard(context, hasEmail: hasEmail),
                     const SizedBox(height: AppSpacing.xl),
                     _buildSectionTitle(
                       context,
@@ -96,38 +90,6 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       onTap: () {
                         context.push('/change-password');
                       },
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                    _buildActionCard(
-                      context,
-                      icon: Icons.mark_email_read_outlined,
-                      title: 'Email Verification',
-                      subtitle: emailVerified
-                          ? 'Your email address has been verified'
-                          : 'Verify your email address',
-                      trailing: emailVerified
-                          ? _buildStatusBadge(
-                              context,
-                              'Verified',
-                              AppColors.success,
-                            )
-                          : FilledButton.tonal(
-                              style: FilledButton.styleFrom(
-                                minimumSize: const Size(0, 40),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                ),
-                              ),
-                              onPressed: hasEmail
-                                  ? _sendVerificationEmail
-                                  : null,
-                              child: const Text('Verify'),
-                            ),
-                      onTap: emailVerified
-                          ? null
-                          : hasEmail
-                          ? _sendVerificationEmail
-                          : null,
                     ),
                     const SizedBox(height: AppSpacing.sm),
                     _buildActionCard(
@@ -181,9 +143,9 @@ class _SecurityScreenState extends State<SecurityScreen> {
     );
   }
 
-  Widget _buildSecurityHeader(BuildContext context, bool emailVerified) {
+  Widget _buildSecurityHeader(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final tone = emailVerified ? AppColors.success : AppColors.warning;
+    const tone = AppColors.success;
 
     return Card(
       child: Padding(
@@ -198,9 +160,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                 borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
               ),
               child: Icon(
-                emailVerified
-                    ? Icons.verified_user_rounded
-                    : Icons.security_rounded,
+                Icons.verified_user_rounded,
                 size: 26,
                 color: AppColors.onTint(tone, colors.brightness),
               ),
@@ -221,9 +181,8 @@ class _SecurityScreenState extends State<SecurityScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    emailVerified
-                        ? 'Your account security is in good standing.'
-                        : 'Review your account security and verification.',
+                    'Review how this account signs in, and keep its password '
+                        'strong.',
                     style: TextStyle(
                       color: colors.onSurfaceVariant,
                       fontSize: 13,
@@ -272,7 +231,6 @@ class _SecurityScreenState extends State<SecurityScreen> {
 
   Widget _buildSecurityStatusCard(
     BuildContext context, {
-    required bool emailVerified,
     required bool hasEmail,
   }) {
     final checks = [
@@ -283,14 +241,14 @@ class _SecurityScreenState extends State<SecurityScreen> {
         healthy: true,
       ),
       _SecurityCheck(
+        // Addresses are not verified in this app: approval by an
+        // administrator is what admits an account.
         title: 'Email Address',
-        subtitle: !hasEmail
-            ? 'No email address is associated with this account'
-            : emailVerified
-            ? 'Email address is verified'
-            : 'Email address requires verification',
+        subtitle: hasEmail
+            ? 'An email address is set for this account'
+            : 'No email address is associated with this account',
         icon: Icons.email_outlined,
-        healthy: emailVerified,
+        healthy: hasEmail,
       ),
       _SecurityCheck(
         title: 'Account Access',
@@ -437,26 +395,6 @@ class _SecurityScreenState extends State<SecurityScreen> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusBadge(BuildContext context, String text, Color color) {
-    final brightness = Theme.of(context).colorScheme.brightness;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: AppColors.tint(color, brightness),
-        borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: AppColors.onTint(color, brightness),
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -622,61 +560,6 @@ class _SecurityScreenState extends State<SecurityScreen> {
         ],
       ),
     );
-  }
-
-  Future<void> _sendVerificationEmail() async {
-    final user = FirebaseAuth.instance.currentUser;
-
-    if (user == null) {
-      _showMessage('No signed-in account was found.');
-      return;
-    }
-
-    if (user.emailVerified) {
-      _showMessage('Your email address is already verified.');
-      return;
-    }
-
-    final email = user.email;
-
-    if (email == null || email.trim().isEmpty) {
-      _showMessage('No email address is associated with this account.');
-      return;
-    }
-
-    try {
-      try {
-        // Same continue link as signup, so the person comes back to the app.
-        await user.sendEmailVerification(AuthService.verificationLinkSettings);
-      } on FirebaseAuthException catch (e) {
-        if (e.code == 'invalid-continue-uri' ||
-            e.code == 'unauthorized-continue-uri' ||
-            e.code == 'missing-continue-uri' ||
-            e.code == 'invalid-dynamic-link-domain') {
-          await user.sendEmailVerification();
-        } else {
-          rethrow;
-        }
-      }
-
-      if (!mounted) {
-        return;
-      }
-
-      _showMessage('Verification email sent to ${email.trim()}.');
-    } on FirebaseAuthException catch (e) {
-      if (!mounted) {
-        return;
-      }
-
-      _showMessage(e.message ?? 'Unable to send verification email.');
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-
-      _showMessage('Unable to send verification email. Please try again.');
-    }
   }
 
   Future<void> _refreshSecurityStatus() async {

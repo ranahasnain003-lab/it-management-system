@@ -25,6 +25,7 @@ import 'core/providers/bazaar_provider.dart';
 import 'core/providers/category_provider.dart';
 import 'core/ai/local/local_ai_provider.dart';
 import 'core/ai/local/local_ai_provider_context_service.dart';
+import 'core/ai/local/local_ai_remote_setup.dart';
 
 /// Development/testing only: host of the Firebase Local Emulator Suite
 /// (e.g. `--dart-define=FIREBASE_EMULATOR_HOST=localhost`). Empty by default,
@@ -37,9 +38,10 @@ const String _emulatorHost = String.fromEnvironment('FIREBASE_EMULATOR_HOST');
 /// relying on Firebase Auth and firestore.rules exactly as before, so a
 /// failure here is logged and ignored rather than allowed to stop start-up.
 ///
-/// Release builds attest through Play Integrity. Debug and profile builds use
-/// the debug provider, whose token is printed once to the console and must be
-/// registered under App Check in the Firebase console for that device.
+/// Release builds attest through Play Integrity on Android and DeviceCheck on
+/// iOS. Debug and profile builds use the debug provider on both, whose token
+/// is printed once to the console and must be registered under App Check in
+/// the Firebase console for that device.
 Future<void> _activateAppCheck() async {
   // The assistant is an Android feature, and the Local Emulator Suite issues
   // no App Check tokens, so neither build needs a provider.
@@ -52,6 +54,15 @@ Future<void> _activateAppCheck() async {
       androidProvider: kReleaseMode
           ? AndroidProvider.playIntegrity
           : AndroidProvider.debug,
+      // Stated rather than left to the default, which is deviceCheck in every
+      // build mode. A debug or profile build on iOS cannot attest through
+      // DeviceCheck - on the Simulator there is no device to check - so iOS
+      // follows the same release/debug split as Android above. The native SDK
+      // reads only the provider for the platform it is running on, so this
+      // leaves Android and Web untouched.
+      appleProvider: kReleaseMode
+          ? AppleProvider.deviceCheck
+          : AppleProvider.debug,
     );
   } catch (e) {
     debugPrint('App Check activation failed: $e');
@@ -197,6 +208,9 @@ Future<void> main() async {
                   users: context.read<UserProvider>(),
                   requests: context.read<RequestProvider>(),
                 ),
+                // So a signed-in account finds the assistant already connected,
+                // on any device, without an address or key being typed in.
+                remoteSetup: FirestoreLocalAiRemoteSetup(),
               )..attachUserStream(
                 FirebaseAuth.instance.authStateChanges().map(
                   (user) => user?.uid,

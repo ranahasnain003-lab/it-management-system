@@ -53,14 +53,14 @@ class UserModel {
 
   String get fullName => name;
 
-  /// Exactly the statuses the Firestore Security Rules accept. Anything
-  /// else (pending, blocked, disabled, inactive, deleted, missing) has no
-  /// access, so the app never shows a UI whose data the rules would then deny.
+  /// Whether this account may use the system. The same test the Firestore
+  /// rules make, so the app never shows a screen whose data would then be
+  /// denied.
   bool get isActive => PermissionService.isActiveStatus(status);
 
-  /// A self-registered account nobody has admitted yet. It can do nothing
-  /// until a Super Admin (or the Admin who manages it) sets status 'active'.
-  bool get isPending => PermissionService.isPendingStatus(status);
+  /// Shut out by an administrator (or carrying any status that is not
+  /// active). Such an account can do nothing until it is unblocked.
+  bool get isBlocked => PermissionService.isBlockedStatus(status);
 
   bool get isCreatedBySuperAdmin => createdBy.trim().isNotEmpty;
 

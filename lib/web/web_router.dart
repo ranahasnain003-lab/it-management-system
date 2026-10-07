@@ -5,8 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../core/ai/local/screens/local_ai_screen.dart';
 import '../core/ai/local/screens/local_ai_settings_screen.dart';
 import '../core/assets/screens/import_assets_screen.dart';
-import '../core/authentication/screens/forgot_password_screen.dart';
 import '../core/authentication/screens/signup_screen.dart' as signup;
+import '../core/authentication/screens/forgot_password_screen.dart';
 import '../core/providers/auth_provider.dart';
 import '../core/providers/user_provider.dart';
 import '../core/routes/route_guard.dart';
@@ -96,6 +96,7 @@ class WebRouter {
             WebLoginPage(redirectTo: state.uri.queryParameters['from']),
           ),
         ),
+
         GoRoute(
           path: '/signup',
           pageBuilder: (context, state) => page(
