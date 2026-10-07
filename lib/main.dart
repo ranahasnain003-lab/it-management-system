@@ -51,18 +51,20 @@ Future<void> _activateAppCheck() async {
 
   try {
     await FirebaseAppCheck.instance.activate(
-      androidProvider: kReleaseMode
-          ? AndroidProvider.playIntegrity
-          : AndroidProvider.debug,
-      // Stated rather than left to the default, which is deviceCheck in every
+      // firebase_app_check 0.4 replaced the androidProvider/appleProvider
+      // enums with provider objects. Same behaviour, new spelling.
+      providerAndroid: kReleaseMode
+          ? const AndroidPlayIntegrityProvider()
+          : const AndroidDebugProvider(),
+      // Stated rather than left to the default, which is DeviceCheck in every
       // build mode. A debug or profile build on iOS cannot attest through
       // DeviceCheck - on the Simulator there is no device to check - so iOS
       // follows the same release/debug split as Android above. The native SDK
       // reads only the provider for the platform it is running on, so this
       // leaves Android and Web untouched.
-      appleProvider: kReleaseMode
-          ? AppleProvider.deviceCheck
-          : AppleProvider.debug,
+      providerApple: kReleaseMode
+          ? const AppleDeviceCheckProvider()
+          : const AppleDebugProvider(),
     );
   } catch (e) {
     debugPrint('App Check activation failed: $e');

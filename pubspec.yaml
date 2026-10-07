@@ -13,12 +13,12 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
-  firebase_core: ^2.30.0
-  firebase_auth: ^4.17.0
-  cloud_firestore: ^4.15.0
+  firebase_core: ^4.15.0
+  firebase_auth: ^6.7.0
+  cloud_firestore: ^6.10.0
   # Proves calls to the AI Assistant backend come from a real install of this
   # app, so a stolen ID token alone cannot spend the Gemini allowance.
-  firebase_app_check: ^0.2.2
+  firebase_app_check: ^0.4.8
 
   provider: ^6.1.2
   fl_chart: ^1.2.0
@@ -44,8 +44,8 @@ dependencies:
   # Web build: path-based URLs and browser file downloads.
   flutter_web_plugins:
     sdk: flutter
-  web: ^0.5.1
-  cloud_functions: ^4.7.6
+  web: ^1.1.1
+  cloud_functions: ^6.5.0
 
   # Plain HTTPS for the assistant backend, which is a Cloudflare Worker
   # rather than a Cloud Function (Cloud Functions need the Blaze plan).
@@ -72,13 +72,13 @@ dev_dependencies:
 
   # Tests: in-memory Firestore for service/inventory unit tests, and
   # on-device integration tests against the Firebase Local Emulator Suite.
-  fake_cloud_firestore: 2.5.0
+  fake_cloud_firestore: ^4.3.0
   mock_exceptions: 0.8.2
   # Lets the import test serve a prepared file in place of the OS file dialog.
   plugin_platform_interface: 2.1.8
   integration_test:
     sdk: flutter
-  firebase_auth_mocks: ^0.13.0
+  firebase_auth_mocks: ^0.15.2
 
 dependency_overrides:
   flutter_plugin_android_lifecycle: 2.0.20
