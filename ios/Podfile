@@ -23,6 +23,11 @@ def flutter_root
   raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
 end
 
+# Per-file compiler flags that must be removed from BoringSSL-GRPC. Listed by
+# exact spelling, never by prefix: the pod's other flags (-DOPENSSL_NO_ASM, -w
+# and -DBORINGSSL_PREFIX=GRPC) are all required and must survive.
+BORINGSSL_INVALID_FLAGS = ['-GCC_WARN_INHIBIT_ALL_WARNINGS'].freeze
+
 # Source patches applied to installed pods after CocoaPods has fetched them.
 #
 # gRPC-Core 1.62.x, which Firebase/Firestore 10.25.0 pins, contains:
@@ -41,43 +46,71 @@ end
 # corrected here. The same file also uses the keyword correctly on the line
 # above, as "Traits::template CheckResultAndRunNext<Wrapped>(...)", which is
 # left alone: only the form with no argument list is replaced.
+# gRPC-Core and gRPC-C++ each vendor their own copy of the same upstream
+# source tree, so this identical file is installed twice, once under each pod.
+# Both copies are compiled, so both have to be corrected - fixing only
+# gRPC-Core leaves the gRPC-C++ copy to fail the build at the same line.
 POD_SOURCE_PATCHES = [
   {
-    'pod' => 'gRPC-Core',
-    'path' => 'gRPC-Core/src/core/lib/promise/detail/basic_seq.h',
+    'name' => 'gRPC template keyword',
+    'pods' => ['gRPC-Core', 'gRPC-C++'],
+    'file' => 'src/core/lib/promise/detail/basic_seq.h',
     'broken' => 'Traits::template CallSeqFactory(',
     'fixed' => 'Traits::CallSeqFactory(',
   },
 ].freeze
 
-# Rewrites the files listed above inside the Pods sandbox.
+# Corrects one installed file. Returns true only if it was actually rewritten.
 #
 # Deliberately an exact string replacement rather than a regular expression,
-# so it cannot touch anything it was not aimed at. It is safe to run twice,
-# and it never fails the build: if the broken text is absent the pod has
-# either already been patched or has been fixed upstream, and both are fine.
+# so it cannot touch anything it was not aimed at: "::template" is never
+# removed in general, only the single spelling that carries no argument list.
+# Safe to run twice, and it never fails the build - if the broken text is
+# absent, the copy has either already been corrected or has been fixed
+# upstream, and both of those are fine.
+def patch_pod_file(file, label, patch)
+  unless File.exist?(file)
+    Pod::UI.puts "[patch] #{label}: not installed, nothing to do"
+    return false
+  end
+
+  contents = File.read(file)
+
+  unless contents.include?(patch['broken'])
+    state = contents.include?(patch['fixed']) ? 'already correct' : 'pattern not present, assuming fixed upstream'
+    Pod::UI.puts "[patch] #{label}: #{state}"
+    return false
+  end
+
+  occurrences = contents.scan(patch['broken']).length
+  File.write(file, contents.gsub(patch['broken'], patch['fixed']))
+  Pod::UI.puts "[patch] #{label}: corrected #{occurrences} template-keyword use(s) in #{File.basename(file)}"
+  true
+end
+
+# Applies every patch above to each pod that is expected to carry it, then
+# sweeps the rest of the sandbox for the same relative file.
+#
+# That sweep is why this is written as a search rather than a fixed list of
+# paths: gRPC-C++ turned out to ship the same file as gRPC-Core and failed the
+# build only after gRPC-Core was fixed. A further pod vendoring the same
+# source is now corrected and named in the build log instead of surfacing as
+# another compiler error.
 def apply_pod_source_patches(installer)
-  pods_root = installer.sandbox.root.to_s
+  pods_root = installer.sandbox.root
 
   POD_SOURCE_PATCHES.each do |patch|
-    file = File.join(pods_root, patch['path'])
-
-    unless File.exist?(file)
-      Pod::UI.puts "[patch] #{patch['pod']}: #{patch['path']} is not installed, nothing to do"
-      next
+    patch['pods'].each do |pod|
+      patch_pod_file(File.join(pods_root.to_s, pod, patch['file']), "#{patch['name']} / #{pod}", patch)
     end
 
-    contents = File.read(file)
+    Dir.glob(File.join(pods_root.to_s, '*', patch['file'])).each do |file|
+      pod = Pathname.new(file).relative_path_from(pods_root).each_filename.first
+      next if patch['pods'].include?(pod)
 
-    unless contents.include?(patch['broken'])
-      state = contents.include?(patch['fixed']) ? 'already patched' : 'pattern not present, assuming fixed upstream'
-      Pod::UI.puts "[patch] #{patch['pod']}: #{state}"
-      next
+      Pod::UI.puts "[patch] #{patch['name']}: the same file is also present in unlisted pod #{pod}"
+      patch_pod_file(file, "#{patch['name']} / #{pod}", patch)
     end
-
-    occurrences = contents.scan(patch['broken']).length
-    File.write(file, contents.gsub(patch['broken'], patch['fixed']))
-    Pod::UI.puts "[patch] #{patch['pod']}: corrected #{occurrences} template-keyword use(s) in #{File.basename(file)}"
   end
 end
 
@@ -99,25 +132,42 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
 
     # Workaround for BoringSSL-GRPC, which Firebase/Firestore pulls in through
-    # gRPC. Its podspec attaches "-GCC_WARN_INHIBIT_ALL_WARNINGS" to every
-    # source file as a per-file compiler flag. Older toolchains ignored it;
-    # clang in current Xcode reads it as the option "-G" and stops with
+    # gRPC. Its podspec attaches these per-file compiler flags:
+    #
+    #   -DOPENSSL_NO_ASM  -GCC_WARN_INHIBIT_ALL_WARNINGS  -w  -DBORINGSSL_PREFIX=GRPC
+    #
+    # Only the second one is invalid. It was meant to be an Xcode build
+    # setting, not a clang flag; older toolchains ignored it, and clang in
+    # current Xcode reads it as the option "-G" and stops with
     #
     #   unsupported option '-G' for target 'arm64-apple-ios...'
     #
-    # Nothing in this project sets that flag, and all it ever did was silence
-    # warnings, so it is removed from that one pod's files. Every other pod,
-    # and every Flutter build setting applied above, is left untouched.
+    # All it ever did was silence warnings, so removing it costs nothing. It
+    # is matched by exact spelling rather than by a "-G" prefix so that
+    # -DBORINGSSL_PREFIX=GRPC and -DOPENSSL_NO_ASM, which the pod genuinely
+    # needs and whose removal would break the build, can never be caught by
+    # accident. Every other pod, and every Flutter build setting applied
+    # above, is left untouched.
     next unless target.name == 'BoringSSL-GRPC'
+
+    removed = 0
 
     target.source_build_phase.files.each do |file|
       next if file.settings.nil?
       flags = file.settings['COMPILER_FLAGS']
       next if flags.nil?
 
-      kept = flags.split.reject { |flag| flag.start_with?('-G') }
+      present = flags.split
+      kept = present.reject { |flag| BORINGSSL_INVALID_FLAGS.include?(flag) }
+      next if kept.length == present.length
+
       file.settings['COMPILER_FLAGS'] = kept.join(' ')
+      removed += present.length - kept.length
     end
+
+    Pod::UI.puts(removed.zero? ?
+      '[patch] BoringSSL-GRPC: no invalid compiler flags found, nothing to remove' :
+      "[patch] BoringSSL-GRPC: removed #{removed} invalid compiler flag(s)")
   end
 
   apply_pod_source_patches(installer)
