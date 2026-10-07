@@ -1,28 +1,25 @@
 # Codemagic CI configuration for the iOS build of PSBA IT Inventory.
 #
-# Why this file exists: Apple's compiler and code-signing tools only run on
-# macOS, and this project is developed entirely on Windows. Codemagic supplies
-# the Mac. Nothing here affects the Android, Web or Firebase builds, which
-# continue to be built exactly as before.
+# Apple's compiler and code-signing tools only run on macOS, and this project
+# is developed entirely on Windows. Codemagic supplies the Mac. Nothing here
+# affects the Android, Web or Firebase builds.
 #
-# There are two workflows, and they are meant to be used in this order:
+# This file deliberately defines exactly ONE workflow. Codemagic validates the
+# whole file when it loads it, and a workflow referring to something the
+# account does not have - an App Store Connect integration, a signing
+# certificate, a provisioning profile - makes the entire configuration
+# invalid. When that happens NO workflow is offered, not just the broken one.
+# So the signed TestFlight workflow stays commented out until the Apple
+# credentials actually exist. Uncommenting it before then will stop
+# ios-unsigned-verify appearing in Codemagic.
 #
-#   1. ios-unsigned-verify - needs NO Apple Developer account, no certificate
-#      and no provisioning profile. It proves the project compiles on macOS.
-#      Run this one first; it is free of Apple paperwork entirely.
-#
-#   2. ios-testflight - produces a signed, installable build. This one cannot
-#      run until the Apple Developer Program membership and the App Store
-#      Connect integration exist. The places needing your details are marked
-#      TODO; nothing has been invented or guessed.
-#
-# IMPORTANT: Codemagic builds from the Git repository, not from the Windows
-# working directory. Anything not committed and pushed is simply absent from
-# the build.
+# Codemagic builds from the Git repository, not from the Windows working
+# directory. Anything not committed and pushed is absent from the build.
 
 workflows:
   # ===========================================================================
-  # 1. Compile check on macOS - no Apple credentials required
+  # Compile check on macOS - requires NO Apple Developer account, no
+  # certificate and no provisioning profile. This is the one to run first.
   # ===========================================================================
   ios-unsigned-verify:
     name: iOS compile check (unsigned)
@@ -61,79 +58,66 @@ workflows:
 
       - name: Build unsigned iOS app
         # --no-codesign is what makes this runnable with no Apple account.
-        # It also generates ios/Podfile and runs pod install on the way.
+        # It also runs pod install on the way.
         script: flutter build ios --release --no-codesign
 
     artifacts:
       - build/ios/iphoneos/*.app
-      - flutter_drive.log
 
-  # ===========================================================================
-  # 2. Signed build for TestFlight - requires your Apple details
-  # ===========================================================================
-  ios-testflight:
-    name: iOS signed build (TestFlight)
-    instance_type: mac_mini_m2
-    max_build_duration: 90
-
-    integrations:
-      # TODO: create an App Store Connect API key in Codemagic
-      # (Teams -> Integrations -> Developer Portal) and put its name here.
-      # The name below is a placeholder, not a real integration.
-      app_store_connect: APP_STORE_CONNECT_KEY_NAME
-
-    environment:
-      flutter: stable
-      xcode: latest
-      cocoapods: default
-
-      ios_signing:
-        distribution_type: app_store
-        # Must match the App ID registered in your Apple Developer account AND
-        # the bundle identifier currently set in the Xcode project.
-        # Both are the placeholder below until you confirm the final one.
-        bundle_identifier: com.psba.itinventory
-
-    scripts:
-      - name: Get packages
-        script: flutter pub get
-
-      # Optional: if you decide iOS needs GoogleService-Info.plist, store its
-      # base64 as a secure environment variable named GOOGLE_SERVICE_INFO_PLIST
-      # in Codemagic and uncomment this. Keeping it out of Git is why it is
-      # injected rather than committed.
-      # - name: Restore the Firebase iOS plist
-      #   script: |
-      #     echo "$GOOGLE_SERVICE_INFO_PLIST" | base64 --decode > ios/Runner/GoogleService-Info.plist
-
-      - name: Apply the fetched provisioning profiles to the Xcode project
-        script: xcode-project use-profiles
-
-      - name: Install pods
-        script: find . -name "Podfile" -execdir pod install \;
-
-      - name: Set the build number from the Codemagic build counter
-        # App Store Connect refuses a build number it has already seen, so it
-        # is taken from the CI counter rather than from pubspec.
-        script: |
-          flutter build ipa --release \
-            --build-number=$(($PROJECT_BUILD_NUMBER)) \
-            --export-options-plist=/Users/builder/export_options.plist
-
-    artifacts:
-      - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
-
-    publishing:
-      # TODO: uncomment once the integration above is real. Until then the
-      # signed .ipa is simply downloadable from the Codemagic build page.
-      # app_store_connect:
-      #   auth: integration
-      #   submit_to_testflight: true
-      email:
-        recipients:
-          # TODO: replace with the address that should receive build results.
-          - hussnainatif.psba@gmail.com
-        notify:
-          success: true
-          failure: true
+# =============================================================================
+# Signed TestFlight workflow - KEPT AS A TEMPLATE, NOT ACTIVE
+# =============================================================================
+#
+# Do not uncomment any of this until ALL of the following exist in Codemagic:
+#
+#   1. An Apple Developer Program membership.
+#   2. An App Store Connect API key added under
+#      Teams -> Integrations -> Developer Portal, and its name substituted for
+#      <YOUR_APP_STORE_CONNECT_KEY_NAME> below.
+#   3. An App ID registered for the bundle identifier com.psba.itinventory.
+#
+# Uncommenting it earlier makes the whole configuration invalid and hides
+# ios-unsigned-verify as well.
+#
+#  ios-testflight:
+#    name: iOS signed build (TestFlight)
+#    instance_type: mac_mini_m2
+#    max_build_duration: 90
+#
+#    integrations:
+#      app_store_connect: <YOUR_APP_STORE_CONNECT_KEY_NAME>
+#
+#    environment:
+#      flutter: stable
+#      xcode: latest
+#      cocoapods: default
+#      ios_signing:
+#        distribution_type: app_store
+#        bundle_identifier: com.psba.itinventory
+#
+#    scripts:
+#      - name: Get packages
+#        script: flutter pub get
+#      - name: Apply the fetched provisioning profiles to the Xcode project
+#        script: xcode-project use-profiles
+#      - name: Install pods
+#        script: find . -name "Podfile" -execdir pod install \;
+#      - name: Build the signed archive
+#        script: |
+#          flutter build ipa --release \
+#            --build-number=$(($PROJECT_BUILD_NUMBER)) \
+#            --export-options-plist=/Users/builder/export_options.plist
+#
+#    artifacts:
+#      - build/ios/ipa/*.ipa
+#
+#    publishing:
+#      app_store_connect:
+#        auth: integration
+#        submit_to_testflight: true
+#      email:
+#        recipients:
+#          - <YOUR_EMAIL_ADDRESS>
+#        notify:
+#          success: true
+#          failure: true
