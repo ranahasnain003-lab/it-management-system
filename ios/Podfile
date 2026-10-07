@@ -23,6 +23,64 @@ def flutter_root
   raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
 end
 
+# Source patches applied to installed pods after CocoaPods has fetched them.
+#
+# gRPC-Core 1.62.x, which Firebase/Firestore 10.25.0 pins, contains:
+#
+#   Traits::template CallSeqFactory(f_, *cur_, std::move(arg))
+#
+# The "template" keyword may only precede a name that carries a template
+# argument list. It does not here, so the code has always been ill-formed;
+# older toolchains accepted it, and clang in current Xcode refuses with
+#
+#   A template argument list is expected after a name prefixed by the
+#   template keyword
+#
+# Upstream gRPC dropped the keyword in a later release. Until the Firebase
+# SDK pin moves to a gRPC that contains that fix, the installed copy is
+# corrected here. The same file also uses the keyword correctly on the line
+# above, as "Traits::template CheckResultAndRunNext<Wrapped>(...)", which is
+# left alone: only the form with no argument list is replaced.
+POD_SOURCE_PATCHES = [
+  {
+    'pod' => 'gRPC-Core',
+    'path' => 'gRPC-Core/src/core/lib/promise/detail/basic_seq.h',
+    'broken' => 'Traits::template CallSeqFactory(',
+    'fixed' => 'Traits::CallSeqFactory(',
+  },
+].freeze
+
+# Rewrites the files listed above inside the Pods sandbox.
+#
+# Deliberately an exact string replacement rather than a regular expression,
+# so it cannot touch anything it was not aimed at. It is safe to run twice,
+# and it never fails the build: if the broken text is absent the pod has
+# either already been patched or has been fixed upstream, and both are fine.
+def apply_pod_source_patches(installer)
+  pods_root = installer.sandbox.root.to_s
+
+  POD_SOURCE_PATCHES.each do |patch|
+    file = File.join(pods_root, patch['path'])
+
+    unless File.exist?(file)
+      Pod::UI.puts "[patch] #{patch['pod']}: #{patch['path']} is not installed, nothing to do"
+      next
+    end
+
+    contents = File.read(file)
+
+    unless contents.include?(patch['broken'])
+      state = contents.include?(patch['fixed']) ? 'already patched' : 'pattern not present, assuming fixed upstream'
+      Pod::UI.puts "[patch] #{patch['pod']}: #{state}"
+      next
+    end
+
+    occurrences = contents.scan(patch['broken']).length
+    File.write(file, contents.gsub(patch['broken'], patch['fixed']))
+    Pod::UI.puts "[patch] #{patch['pod']}: corrected #{occurrences} template-keyword use(s) in #{File.basename(file)}"
+  end
+end
+
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
 
 flutter_ios_podfile_setup
@@ -61,4 +119,6 @@ post_install do |installer|
       file.settings['COMPILER_FLAGS'] = kept.join(' ')
     end
   end
+
+  apply_pod_source_patches(installer)
 end
