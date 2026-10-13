@@ -17,7 +17,9 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../theme/app_motion.dart';
 import '../../theme/colors.dart';
+import '../../widgets/motion/gentle_float.dart';
 
 // =============================================================================
 // SKELETON
@@ -327,16 +329,25 @@ class AppEmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              padding: EdgeInsets.all(compact ? AppSpacing.md : AppSpacing.lg),
-              decoration: BoxDecoration(
-                color: colors.surfaceContainerHighest.withValues(alpha: 0.6),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                icon,
-                size: compact ? 26 : 34,
-                color: colors.onSurfaceVariant,
+            // Only the icon drifts, and only by 3px. The title, message and
+            // action stay put: text that moves is text that is harder to
+            // read, and this is often the first thing someone sees on a
+            // screen they expected to have content.
+            GentleFloat(
+              animate: AppMotion.enabled(context),
+              child: Container(
+                padding: EdgeInsets.all(
+                  compact ? AppSpacing.md : AppSpacing.lg,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHighest.withValues(alpha: 0.6),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  icon,
+                  size: compact ? 26 : 34,
+                  color: colors.onSurfaceVariant,
+                ),
               ),
             ),
             SizedBox(height: compact ? AppSpacing.md : AppSpacing.lg),
