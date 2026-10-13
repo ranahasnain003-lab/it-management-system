@@ -69,13 +69,13 @@ void main() {
     for (var i = 0; i < 16; i++) {
       await tester.pump(const Duration(milliseconds: 80));
       for (final value in _opacities(tester)) {
-        expect(value, greaterThanOrEqualTo(AppMotion.dotMin - 0.01));
-        expect(value, lessThanOrEqualTo(AppMotion.dotMax + 0.01));
+        expect(value, greaterThanOrEqualTo(AppMotion.subtle.dotMin - 0.01));
+        expect(value, lessThanOrEqualTo(AppMotion.subtle.dotMax + 0.01));
       }
     }
   });
 
   testWidgets('the cycle is the 1.2s the design asks for', (tester) async {
-    expect(AppMotion.dots.inMilliseconds, 1200);
+    expect(AppMotion.subtle.dots.inMilliseconds, 1200);
   });
 }

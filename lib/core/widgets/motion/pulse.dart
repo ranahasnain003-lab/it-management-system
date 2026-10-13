@@ -1,12 +1,12 @@
-/// A gentle opacity pulse: something is happening, nothing is wrong.
+/// A gentle breath: opacity, and at the rich level a slight scale.
 ///
 /// Used on the logo while the account, profile, roles and permissions load.
 /// It replaces a spinner because a spinner implies a measurable wait, and this
 /// one is usually over in a moment; a slow breath says "working" without
 /// drawing attention to itself.
 ///
-/// It only ever changes opacity. No rotation, no scaling, no bounce - a
-/// turning or throbbing logo is exactly the cheap look this app avoids.
+/// It never rotates. A turning logo is exactly the cheap look this app avoids,
+/// at every level.
 library;
 
 import 'dart:math' as math;
@@ -31,26 +31,30 @@ class _PulseFadeState extends State<PulseFade>
     with SingleTickerProviderStateMixin {
   AnimationController? _controller;
 
+  /// Started here rather than in initState because its duration comes from the
+  /// animation level, which is inherited and cannot be read any earlier.
   @override
-  void initState() {
-    super.initState();
-    if (widget.animate) _start();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
   }
 
   @override
   void didUpdateWidget(PulseFade oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _sync();
+  }
+
+  void _sync() {
     if (widget.animate && _controller == null) {
-      _start();
+      _controller = AnimationController(
+        vsync: this,
+        duration: AppMotion.of(context).pulse,
+      )..repeat();
     } else if (!widget.animate && _controller != null) {
       _controller!.dispose();
       _controller = null;
     }
-  }
-
-  void _start() {
-    _controller = AnimationController(vsync: this, duration: AppMotion.pulse)
-      ..repeat();
   }
 
   @override
@@ -64,18 +68,31 @@ class _PulseFadeState extends State<PulseFade>
     final controller = _controller;
     if (controller == null) return widget.child;
 
+    final motion = AppMotion.of(context);
+
     return AnimatedBuilder(
       animation: controller,
       child: widget.child,
       builder: (context, child) {
-        // A cosine wave between pulseMin and 1. Seamless by construction: the
-        // value and its slope match at both ends of the loop, so the breath
-        // never stutters at the restart.
+        // A cosine wave. Seamless by construction: the value and its slope
+        // match at both ends of the loop, so the breath never stutters at the
+        // restart.
         final wave = (1 - math.cos(controller.value * 2 * math.pi)) / 2;
-        final opacity =
-            AppMotion.pulseMin + (1 - AppMotion.pulseMin) * (1 - wave);
+        final eased = 1 - wave;
 
-        return Opacity(opacity: opacity, child: child);
+        final opacity = motion.pulseMin + (1 - motion.pulseMin) * eased;
+
+        Widget result = Opacity(opacity: opacity, child: child);
+
+        // 1.0 at the subtle level, so nothing scales there at all.
+        if (motion.pulseScale != 1.0) {
+          result = Transform.scale(
+            scale: 1 + (motion.pulseScale - 1) * eased,
+            child: result,
+          );
+        }
+
+        return result;
       },
     );
   }

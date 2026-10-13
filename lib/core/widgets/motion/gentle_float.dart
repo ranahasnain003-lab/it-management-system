@@ -1,10 +1,8 @@
-/// A very small rise and fall, for an empty state's icon.
+/// A small rise and fall, for an empty state's icon.
 ///
-/// Three pixels over three seconds. At that size it is barely a movement at
-/// all - it stops an empty screen looking frozen or broken, without becoming
-/// something to watch. Anything larger or faster would turn "there is nothing
-/// here yet" into a decoration, which is not what an empty inventory screen
-/// should be doing.
+/// Three pixels at the subtle level, six at the rich one, over three seconds.
+/// It stops an empty screen looking frozen without becoming something to
+/// watch: "there is nothing here yet" should not turn into a decoration.
 library;
 
 import 'dart:math' as math;
@@ -18,7 +16,7 @@ class GentleFloat extends StatefulWidget {
     super.key,
     required this.child,
     required this.animate,
-    this.distance = AppMotion.floatDistance,
+    this.distance,
   });
 
   final Widget child;
@@ -26,7 +24,8 @@ class GentleFloat extends StatefulWidget {
   /// False renders the child at rest, with no controller.
   final bool animate;
 
-  final double distance;
+  /// Defaults to the level's [AppMotion.floatDistance].
+  final double? distance;
 
   @override
   State<GentleFloat> createState() => _GentleFloatState();
@@ -36,26 +35,30 @@ class _GentleFloatState extends State<GentleFloat>
     with SingleTickerProviderStateMixin {
   AnimationController? _controller;
 
+  /// Started here rather than in initState because its duration comes from the
+  /// animation level, which is inherited and cannot be read any earlier.
   @override
-  void initState() {
-    super.initState();
-    if (widget.animate) _start();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
   }
 
   @override
   void didUpdateWidget(GentleFloat oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _sync();
+  }
+
+  void _sync() {
     if (widget.animate && _controller == null) {
-      _start();
+      _controller = AnimationController(
+        vsync: this,
+        duration: AppMotion.of(context).float,
+      )..repeat();
     } else if (!widget.animate && _controller != null) {
       _controller!.dispose();
       _controller = null;
     }
-  }
-
-  void _start() {
-    _controller = AnimationController(vsync: this, duration: AppMotion.float)
-      ..repeat();
   }
 
   @override
@@ -69,14 +72,15 @@ class _GentleFloatState extends State<GentleFloat>
     final controller = _controller;
     if (controller == null) return widget.child;
 
+    final distance = widget.distance ?? AppMotion.of(context).floatDistance;
+
     return AnimatedBuilder(
       animation: controller,
       child: widget.child,
       builder: (context, child) {
         // A full sine over the loop: up, back through centre, down, and
         // exactly back to the start, so the repeat has no seam.
-        final offset =
-            math.sin(controller.value * 2 * math.pi) * widget.distance;
+        final offset = math.sin(controller.value * 2 * math.pi) * distance;
 
         return Transform.translate(offset: Offset(0, offset), child: child);
       },

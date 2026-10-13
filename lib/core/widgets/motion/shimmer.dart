@@ -29,26 +29,30 @@ class Shimmer extends StatefulWidget {
 class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
   AnimationController? _controller;
 
+  /// Started here rather than in initState because its duration comes from the
+  /// animation level, which is inherited and cannot be read any earlier.
   @override
-  void initState() {
-    super.initState();
-    if (widget.animate) _start();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
   }
 
   @override
   void didUpdateWidget(Shimmer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _sync();
+  }
+
+  void _sync() {
     if (widget.animate && _controller == null) {
-      _start();
+      _controller = AnimationController(
+        vsync: this,
+        duration: AppMotion.of(context).shimmer,
+      )..repeat();
     } else if (!widget.animate && _controller != null) {
       _controller!.dispose();
       _controller = null;
     }
-  }
-
-  void _start() {
-    _controller = AnimationController(vsync: this, duration: AppMotion.shimmer)
-      ..repeat();
   }
 
   @override
@@ -62,9 +66,10 @@ class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
     final controller = _controller;
     if (controller == null) return widget.child;
 
+    final motion = AppMotion.of(context);
     final highlight = Theme.of(
       context,
-    ).colorScheme.surface.withValues(alpha: AppMotion.shimmerOpacity);
+    ).colorScheme.surface.withValues(alpha: motion.shimmerOpacity);
 
     return AnimatedBuilder(
       animation: controller,

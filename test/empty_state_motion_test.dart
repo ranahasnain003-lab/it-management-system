@@ -10,7 +10,7 @@ import 'package:it_management_system/core/widgets/motion/gentle_float.dart';
 
 Widget _app(Widget child, {bool animations = true}) {
   return MotionScope(
-    enabled: animations,
+    level: animations ? AnimationLevel.rich : AnimationLevel.off,
     child: MaterialApp(home: Scaffold(body: child)),
   );
 }
@@ -18,7 +18,10 @@ Widget _app(Widget child, {bool animations = true}) {
 double _offset(WidgetTester tester) {
   final transform = tester.widget<Transform>(
     find
-        .descendant(of: find.byType(GentleFloat), matching: find.byType(Transform))
+        .descendant(
+          of: find.byType(GentleFloat),
+          matching: find.byType(Transform),
+        )
         .first,
   );
   return transform.transform.getTranslation().y;
@@ -29,9 +32,7 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      _app(
-        const GentleFloat(animate: false, child: Icon(Icons.inbox)),
-      ),
+      _app(const GentleFloat(animate: false, child: Icon(Icons.inbox))),
     );
 
     await tester.pumpAndSettle();
@@ -44,20 +45,43 @@ void main() {
     );
   });
 
-  testWidgets('never drifts further than 3px', (tester) async {
-    // The whole point is that it is barely noticeable. A larger drift would
-    // turn an empty inventory screen into a decoration.
-    await tester.pumpWidget(
-      _app(const GentleFloat(animate: true, child: Icon(Icons.inbox))),
-    );
+  testWidgets('never drifts further than its level allows', (tester) async {
+    // 3px at subtle, 6px at rich. Either way it stays small: a larger drift
+    // would turn an empty inventory screen into a decoration.
+    for (final level in [AnimationLevel.subtle, AnimationLevel.rich]) {
+      final allowed = level == AnimationLevel.subtle
+          ? AppMotion.subtle.floatDistance
+          : AppMotion.rich.floatDistance;
 
-    for (var i = 0; i < 20; i++) {
-      await tester.pump(const Duration(milliseconds: 150));
-      expect(
-        _offset(tester).abs(),
-        lessThanOrEqualTo(AppMotion.floatDistance + 0.01),
+      await tester.pumpWidget(
+        MotionScope(
+          level: level,
+          child: const MaterialApp(
+            home: Scaffold(
+              body: GentleFloat(animate: true, child: Icon(Icons.inbox)),
+            ),
+          ),
+        ),
       );
+
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 150));
+        expect(
+          _offset(tester).abs(),
+          lessThanOrEqualTo(allowed + 0.01),
+          reason: 'at $level',
+        );
+      }
     }
+  });
+
+  testWidgets('rich drifts visibly further than subtle', (tester) async {
+    // The point of the two levels: rich has to be noticeably more alive, or
+    // choosing it changes nothing.
+    expect(
+      AppMotion.rich.floatDistance,
+      greaterThan(AppMotion.subtle.floatDistance),
+    );
   });
 
   testWidgets('actually moves', (tester) async {
@@ -115,7 +139,10 @@ void main() {
           AppEmptyState(
             icon: Icons.inventory_2_outlined,
             title: 'No assets yet',
-            action: FilledButton(onPressed: () {}, child: const Text('Add asset')),
+            action: FilledButton(
+              onPressed: () {},
+              child: const Text('Add asset'),
+            ),
           ),
         ),
       );

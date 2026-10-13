@@ -88,16 +88,19 @@ class _SuccessOverlayState extends State<_SuccessOverlay>
   late final AnimationController _draw;
   late final AnimationController _fade;
 
-  @override
-  void initState() {
-    super.initState();
+  bool _started = false;
 
-    _draw = AnimationController(vsync: this, duration: AppMotion.success);
-    _fade = AnimationController(
-      vsync: this,
-      duration: AppMotion.short,
-      value: 1,
-    );
+  /// Started here rather than in initState because the durations come from
+  /// the inherited animation level.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+
+    final motion = AppMotion.of(context);
+    _draw = AnimationController(vsync: this, duration: motion.success);
+    _fade = AnimationController(vsync: this, duration: motion.short, value: 1);
 
     _run();
   }
@@ -114,7 +117,7 @@ class _SuccessOverlayState extends State<_SuccessOverlay>
     await _draw.forward();
     if (!mounted) return;
 
-    _hold = Timer(AppMotion.successHold, () async {
+    _hold = Timer(AppMotion.of(context).successHold, () async {
       if (!mounted) return;
       await _fade.reverse();
       if (!mounted) return;
@@ -155,7 +158,11 @@ class _SuccessOverlayState extends State<_SuccessOverlay>
                 ],
               ),
               child: CustomPaint(
-                painter: _CheckPainter(progress: _draw, color: colors.primary),
+                painter: _CheckPainter(
+                  progress: _draw,
+                  color: colors.primary,
+                  curve: AppMotion.of(context).enter,
+                ),
               ),
             ),
           ),
@@ -167,11 +174,18 @@ class _SuccessOverlayState extends State<_SuccessOverlay>
 
 /// Draws the ring, then the tick.
 class _CheckPainter extends CustomPainter {
-  _CheckPainter({required this.progress, required this.color})
-    : super(repaint: progress);
+  _CheckPainter({
+    required this.progress,
+    required this.color,
+    required this.curve,
+  }) : super(repaint: progress);
 
   final Animation<double> progress;
   final Color color;
+
+  /// Passed in rather than looked up: a painter has no BuildContext, and
+  /// keeping it pure is what lets it be driven straight from `repaint:`.
+  final Curve curve;
 
   /// The ring owns the first 55% of the time, the tick the rest. The ring is
   /// the slower of the two because it travels much further.
@@ -179,7 +193,7 @@ class _CheckPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final t = AppMotion.enter.transform(progress.value);
+    final t = curve.transform(progress.value);
     final center = Offset(size.width / 2, size.height / 2);
     final radius = math.min(size.width, size.height) * 0.30;
 
@@ -238,5 +252,7 @@ class _CheckPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_CheckPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.progress != progress;
+      oldDelegate.color != color ||
+      oldDelegate.progress != progress ||
+      oldDelegate.curve != curve;
 }

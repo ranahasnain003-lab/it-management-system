@@ -22,7 +22,7 @@ Widget _app(
   return MediaQuery(
     data: MediaQueryData(disableAnimations: disableAnimations),
     child: MotionScope(
-      enabled: animationsInSettings,
+      level: animationsInSettings ? AnimationLevel.rich : AnimationLevel.off,
       child: MaterialApp(home: Scaffold(body: child)),
     ),
   );
@@ -131,7 +131,11 @@ void main() {
     test('never uses a linear, bouncing or elastic curve', () {
       // The whole tone of the app depends on this. A linear curve reads as
       // cheap; bounce and elastic read as playful, which this is not.
-      for (final curve in [AppMotion.enter, AppMotion.exit, AppMotion.move]) {
+      for (final curve in [
+        AppMotion.subtle.enter,
+        AppMotion.subtle.exit,
+        AppMotion.subtle.move,
+      ]) {
         expect(curve, isNot(Curves.linear));
         expect(curve, isNot(Curves.bounceIn));
         expect(curve, isNot(Curves.bounceOut));
@@ -141,26 +145,41 @@ void main() {
     });
 
     test('durations sit inside the ranges the design calls for', () {
-      expect(AppMotion.micro.inMilliseconds, inInclusiveRange(150, 250));
-      expect(AppMotion.short.inMilliseconds, inInclusiveRange(150, 250));
-      expect(AppMotion.screen.inMilliseconds, inInclusiveRange(250, 350));
-      expect(AppMotion.countUp.inMilliseconds, inInclusiveRange(500, 700));
-      expect(AppMotion.success.inMilliseconds, inInclusiveRange(600, 800));
-      expect(AppMotion.shake.inMilliseconds, 300);
+      expect(AppMotion.subtle.micro.inMilliseconds, inInclusiveRange(150, 250));
+      expect(AppMotion.subtle.short.inMilliseconds, inInclusiveRange(150, 250));
+      expect(
+        AppMotion.subtle.screen.inMilliseconds,
+        inInclusiveRange(250, 350),
+      );
+      expect(
+        AppMotion.subtle.countUp.inMilliseconds,
+        inInclusiveRange(500, 700),
+      );
+      expect(
+        AppMotion.subtle.success.inMilliseconds,
+        inInclusiveRange(600, 800),
+      );
+      expect(AppMotion.subtle.shake.inMilliseconds, 300);
       // Slow enough that it reads as ambient rather than as something moving.
-      expect(AppMotion.backgroundLoop.inSeconds, inInclusiveRange(20, 30));
-      expect(AppMotion.staggerCard.inMilliseconds, inInclusiveRange(40, 60));
+      expect(
+        AppMotion.subtle.backgroundLoop.inSeconds,
+        inInclusiveRange(20, 30),
+      );
+      expect(
+        AppMotion.subtle.staggerCard.inMilliseconds,
+        inInclusiveRange(40, 60),
+      );
     });
 
     test('background blobs stay faint in both themes', () {
-      expect(AppMotion.blobOpacityLight, inInclusiveRange(0.08, 0.15));
-      expect(AppMotion.blobOpacityDark, inInclusiveRange(0.08, 0.15));
+      expect(AppMotion.subtle.blobOpacityLight, inInclusiveRange(0.08, 0.15));
+      expect(AppMotion.subtle.blobOpacityDark, inInclusiveRange(0.08, 0.15));
     });
 
     test('movement distances stay small', () {
-      expect(AppMotion.slideLarge, 12);
-      expect(AppMotion.slideSmall, 8);
-      expect(AppMotion.floatDistance, 3);
+      expect(AppMotion.subtle.slideLarge, 12);
+      expect(AppMotion.subtle.slideSmall, 8);
+      expect(AppMotion.subtle.floatDistance, 3);
     });
   });
 

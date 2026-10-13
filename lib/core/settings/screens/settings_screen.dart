@@ -6,6 +6,7 @@ import '../../providers/theme_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../theme/colors.dart';
 import '../../users/screens/add_user_screen.dart';
+import '../../theme/app_motion.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -589,11 +590,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             const Divider(height: AppSpacing.lg * 2),
 
-            // Animations are on by default. Turning them off renders every
-            // animated widget in its finished state straight away, which keeps
-            // the app usable on an older phone and suits anyone who finds
-            // movement distracting. The device's own "reduce motion" setting
-            // is honoured separately and always wins.
+            // Rich by default. Off renders every animated widget in its
+            // finished state straight away, which keeps the app usable on an
+            // older phone and suits anyone who finds movement distracting.
+            // Subtle keeps the motion but makes it almost unnoticed. The
+            // device's own "reduce motion" setting is honoured separately and
+            // always wins over all three.
             Row(
               children: [
                 _buildIconTile(context, Icons.auto_awesome_motion_outlined),
@@ -602,37 +604,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: _buildRowText(
                     context,
                     'Animations',
-                    'Gentle motion when screens and cards appear',
+                    'How much the app moves',
                   ),
-                ),
-                Switch(
-                  value: themeProvider.animationsEnabled,
-                  onChanged: (value) async {
-                    try {
-                      await context.read<ThemeProvider>().setAnimationsEnabled(
-                        value,
-                      );
-
-                      if (!mounted) {
-                        return;
-                      }
-
-                      _showMessage(
-                        value
-                            ? 'Animations turned on.'
-                            : 'Animations turned off.',
-                      );
-                    } catch (_) {
-                      if (!mounted) {
-                        return;
-                      }
-
-                      _showMessage('Unable to save the animation preference.');
-                    }
-                  },
                 ),
               ],
             ),
+
+            const SizedBox(height: AppSpacing.md),
+
+            SegmentedButton<AnimationLevel>(
+              segments: const [
+                ButtonSegment(
+                  value: AnimationLevel.off,
+                  label: Text('Off'),
+                  icon: Icon(Icons.block, size: 16),
+                ),
+                ButtonSegment(
+                  value: AnimationLevel.subtle,
+                  label: Text('Subtle'),
+                  icon: Icon(Icons.water_drop_outlined, size: 16),
+                ),
+                ButtonSegment(
+                  value: AnimationLevel.rich,
+                  label: Text('Rich'),
+                  icon: Icon(Icons.auto_awesome_outlined, size: 16),
+                ),
+              ],
+              selected: {themeProvider.animationLevel},
+              showSelectedIcon: false,
+              onSelectionChanged: (selection) async {
+                final level = selection.first;
+
+                try {
+                  await context.read<ThemeProvider>().setAnimationLevel(level);
+
+                  if (!mounted) {
+                    return;
+                  }
+
+                  _showMessage('Animations set to ${level.label}.');
+                } catch (_) {
+                  if (!mounted) {
+                    return;
+                  }
+
+                  _showMessage('Unable to save the animation preference.');
+                }
+              },
+            ),
+
+            if (MediaQuery.disableAnimationsOf(context)) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'This device is set to reduce motion, so animations stay off '
+                'whatever is chosen here.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
           ],
         ),
       ),

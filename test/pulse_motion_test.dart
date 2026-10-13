@@ -11,7 +11,10 @@ Widget _app(Widget child) => MaterialApp(home: Scaffold(body: child));
 
 double _opacity(WidgetTester tester) => tester
     .widget<Opacity>(
-      find.descendant(of: find.byType(PulseFade), matching: find.byType(Opacity)),
+      find.descendant(
+        of: find.byType(PulseFade),
+        matching: find.byType(Opacity),
+      ),
     )
     .opacity;
 
@@ -54,15 +57,19 @@ void main() {
 
     // It fades, but the logo is always clearly visible: a logo that blinks out
     // reads as a fault rather than as progress.
-    expect(lowest, greaterThanOrEqualTo(AppMotion.pulseMin - 0.01));
+    expect(lowest, greaterThanOrEqualTo(AppMotion.subtle.pulseMin - 0.01));
     expect(highest, greaterThan(0.9));
     expect(lowest, lessThan(0.8));
   });
 
-  testWidgets('only changes opacity - it never turns or scales', (tester) async {
-    // The design forbids a spinning or throbbing logo outright.
+  testWidgets('at subtle it changes opacity and nothing else', (tester) async {
     await tester.pumpWidget(
-      _app(const PulseFade(animate: true, child: Text('logo'))),
+      MotionScope(
+        level: AnimationLevel.subtle,
+        child: const MaterialApp(
+          home: Scaffold(body: PulseFade(animate: true, child: Text('logo'))),
+        ),
+      ),
     );
     await tester.pump(const Duration(milliseconds: 300));
 
@@ -73,5 +80,40 @@ void main() {
       ),
       findsNothing,
     );
+  });
+
+  testWidgets('at rich it also breathes in scale, but never rotates', (
+    tester,
+  ) async {
+    // A rotating logo is forbidden at every level; a gentle swell is not.
+    await tester.pumpWidget(
+      MotionScope(
+        level: AnimationLevel.rich,
+        child: const MaterialApp(
+          home: Scaffold(body: PulseFade(animate: true, child: Text('logo'))),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+
+    final transform = tester
+        .widgetList<Transform>(
+          find.descendant(
+            of: find.byType(PulseFade),
+            matching: find.byType(Transform),
+          ),
+        )
+        .first
+        .transform;
+
+    // Scaling only: the rotation entries of the matrix stay zero.
+    expect(transform.entry(0, 1), 0);
+    expect(transform.entry(1, 0), 0);
+    // And it never swells beyond the specified 4%.
+    expect(
+      transform.entry(0, 0),
+      lessThanOrEqualTo(AppMotion.rich.pulseScale + 0.001),
+    );
+    expect(transform.entry(0, 0), greaterThanOrEqualTo(1.0 - 0.001));
   });
 }

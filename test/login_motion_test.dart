@@ -24,7 +24,10 @@ Widget _app(Widget child, {bool disableAnimations = false}) {
 double _shakeOffset(WidgetTester tester) {
   final transform = tester.widget<Transform>(
     find
-        .descendant(of: find.byType(ShakeOnSignal), matching: find.byType(Transform))
+        .descendant(
+          of: find.byType(ShakeOnSignal),
+          matching: find.byType(Transform),
+        )
         .first,
   );
   return transform.transform.getTranslation().x;
@@ -36,9 +39,7 @@ void main() {
       tester,
     ) async {
       await tester.pumpWidget(
-        _app(
-          const EntranceFadeSlide(animate: false, child: Text('card')),
-        ),
+        _app(const EntranceFadeSlide(animate: false, child: Text('card'))),
       );
 
       // No controller exists, so there is nothing to settle and nothing to
@@ -53,7 +54,9 @@ void main() {
         _app(const EntranceFadeSlide(animate: true, child: Text('card'))),
       );
 
-      final opacityAtStart = tester.widget<Opacity>(find.byType(Opacity)).opacity;
+      final opacityAtStart = tester
+          .widget<Opacity>(find.byType(Opacity))
+          .opacity;
       expect(opacityAtStart, lessThan(0.2));
 
       await tester.pumpAndSettle();
@@ -66,10 +69,10 @@ void main() {
     ) async {
       await tester.pumpWidget(
         _app(
-          const EntranceFadeSlide(
+          EntranceFadeSlide(
             animate: true,
-            delay: AppMotion.staggerLarge,
-            child: Text('card'),
+            delay: AppMotion.subtle.staggerLarge,
+            child: const Text('card'),
           ),
         ),
       );
@@ -202,7 +205,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 30));
         expect(
           _shakeOffset(tester).abs(),
-          lessThanOrEqualTo(AppMotion.shakeDistance + 0.01),
+          lessThanOrEqualTo(AppMotion.subtle.shakeDistance + 0.01),
         );
       }
 

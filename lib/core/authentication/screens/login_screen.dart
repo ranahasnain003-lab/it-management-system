@@ -27,6 +27,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final animate = AppMotion.enabled(context);
+    final motion = AppMotion.of(context);
 
     return Scaffold(
       body: AnimatedGradientBackground(
@@ -55,7 +56,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   signal: _refusals,
                   child: EntranceFadeSlide(
                     animate: animate,
-                    delay: AppMotion.staggerLarge,
+                    delay: motion.staggerLarge,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 22,

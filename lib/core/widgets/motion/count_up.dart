@@ -47,25 +47,35 @@ class _CountUpTextState extends State<CountUpText>
   /// change does not animate at all.
   int _shown = 0;
 
+  bool _started = false;
+
+  /// Started here rather than in initState because the duration comes from
+  /// the inherited animation level.
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
 
     if (!widget.animate) {
       _shown = widget.value;
       return;
     }
 
-    _controller = AnimationController(vsync: this, duration: AppMotion.countUp)
-      ..addListener(_tick)
-      ..forward();
+    _controller =
+        AnimationController(
+            vsync: this,
+            duration: AppMotion.of(context).countUp,
+          )
+          ..addListener(_tick)
+          ..forward();
   }
 
   void _tick() {
     final controller = _controller;
     if (controller == null) return;
 
-    final eased = AppMotion.enter.transform(controller.value);
+    final eased = AppMotion.of(context).enter.transform(controller.value);
     final next = (widget.value * eased).round();
 
     if (next != _shown) setState(() => _shown = next);

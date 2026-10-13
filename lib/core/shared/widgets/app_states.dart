@@ -113,13 +113,14 @@ class _AppSkeletonGroupState extends State<AppSkeletonGroup>
     super.didChangeDependencies();
 
     final wanted = AppMotion.enabled(context);
+    final motion = AppMotion.of(context);
 
     if (wanted && _controller == null) {
       _controller = AnimationController(
         vsync: this,
         duration: const Duration(milliseconds: 1100),
       )..repeat(reverse: true);
-      _pulse = CurvedAnimation(parent: _controller!, curve: AppMotion.move);
+      _pulse = CurvedAnimation(parent: _controller!, curve: motion.move);
     } else if (!wanted && _controller != null) {
       _controller!.dispose();
       _controller = null;

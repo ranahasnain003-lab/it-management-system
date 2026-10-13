@@ -51,15 +51,20 @@ class _AnimatedGradientBackgroundState extends State<AnimatedGradientBackground>
     with SingleTickerProviderStateMixin {
   AnimationController? _controller;
 
+  /// Not initState: the loop duration comes from the inherited level.
   @override
-  void initState() {
-    super.initState();
-    if (widget.animate) _start();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
   }
 
   @override
   void didUpdateWidget(AnimatedGradientBackground oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _sync();
+  }
+
+  void _sync() {
     if (widget.animate && _controller == null) {
       _start();
     } else if (!widget.animate && _controller != null) {
@@ -69,11 +74,12 @@ class _AnimatedGradientBackgroundState extends State<AnimatedGradientBackground>
   }
 
   void _start() {
+    final motion = AppMotion.of(context);
     // `repeat` with a sine/cosine-driven painter is seamless: phase 1.0 paints
     // exactly what phase 0.0 paints, so the restart cannot be seen.
     _controller = AnimationController(
       vsync: this,
-      duration: AppMotion.backgroundLoop,
+      duration: motion.backgroundLoop,
     )..repeat();
   }
 
@@ -87,9 +93,10 @@ class _AnimatedGradientBackgroundState extends State<AnimatedGradientBackground>
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final motion = AppMotion.of(context);
 
     final opacity =
-        (isDark ? AppMotion.blobOpacityDark : AppMotion.blobOpacityLight) *
+        (isDark ? motion.blobOpacityDark : motion.blobOpacityLight) *
         widget.intensity;
 
     return Stack(

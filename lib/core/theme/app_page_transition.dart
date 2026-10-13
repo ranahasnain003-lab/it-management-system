@@ -30,13 +30,15 @@ class AppPageTransitionsBuilder extends PageTransitionsBuilder {
     // provider above it.
     if (!AppMotion.enabled(context)) return child;
 
-    final entering = CurvedAnimation(parent: animation, curve: AppMotion.enter);
+    final motion = AppMotion.of(context);
+
+    final entering = CurvedAnimation(parent: animation, curve: motion.enter);
 
     // The outgoing screen only fades. Sliding it as well makes two things move
     // in opposite directions at once, which is the busy feeling this avoids.
     final leaving = CurvedAnimation(
       parent: secondaryAnimation,
-      curve: AppMotion.exit,
+      curve: motion.exit,
     );
 
     return FadeTransition(
@@ -50,7 +52,7 @@ class AppPageTransitionsBuilder extends PageTransitionsBuilder {
             return Transform.translate(
               // Small: it should read as the screen settling, not as a page
               // being thrown across.
-              offset: Offset(0, (1 - entering.value) * AppMotion.slideSmall),
+              offset: Offset(0, (1 - entering.value) * motion.slideSmall),
               child: child,
             );
           },

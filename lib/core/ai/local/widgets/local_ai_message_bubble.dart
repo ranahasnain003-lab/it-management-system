@@ -20,6 +20,7 @@ class LocalAiMessageBubble extends StatelessWidget {
     final isUser = message.isUser;
     final failed = message.status == 'error';
     final animate = AppMotion.enabled(context);
+    final motion = AppMotion.of(context);
 
     final background = isUser
         ? colors.primary
@@ -62,9 +63,9 @@ class LocalAiMessageBubble extends StatelessWidget {
             // in place instead of re-running the fade on each token - which
             // would make a streaming answer flicker the whole way through.
             AnimatedSwitcher(
-              duration: animate ? AppMotion.short : Duration.zero,
-              switchInCurve: AppMotion.enter,
-              switchOutCurve: AppMotion.exit,
+              duration: animate ? motion.short : Duration.zero,
+              switchInCurve: motion.enter,
+              switchOutCurve: motion.exit,
               child: message.isStreaming && message.content.isEmpty
                   ? Row(
                       key: const ValueKey('waiting'),

@@ -1,6 +1,7 @@
-
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../theme/app_motion.dart';
 
 class ThemeProvider extends ChangeNotifier {
   static const String _themeKey = 'app_theme';
@@ -30,29 +31,36 @@ class ThemeProvider extends ChangeNotifier {
   // ANIMATIONS
   // ================================================================
 
-  static const String _animationsKey = 'app_animations_enabled';
+  /// The level, stored by its label: 'Off', 'Subtle' or 'Rich'.
+  static const String _animationLevelKey = 'app_animation_level';
 
-  bool _animationsEnabled = true;
+  /// The old on/off key, still read once so an existing install is not reset.
+  static const String _legacyAnimationsKey = 'app_animations_enabled';
 
-  /// Whether the app's animations run.
+  AnimationLevel _animationLevel = AnimationLevel.rich;
+
+  /// How much the app animates.
   ///
-  /// On by default. Turning it off makes every animated widget render its
-  /// finished state immediately - not a quicker animation, none at all - which
-  /// is what someone on an older phone, or anyone who simply finds motion
-  /// distracting, needs. The platform's own "reduce motion" setting is honoured
-  /// separately and always wins; see [AppMotion.enabled].
-  bool get animationsEnabled => _animationsEnabled;
+  /// Rich by default. Off makes every animated widget render its finished
+  /// state immediately - not a quicker animation, none at all - which is what
+  /// someone on an older phone, or anyone who finds motion distracting,
+  /// needs. The platform's own "reduce motion" setting is honoured separately
+  /// and always wins; see [AppMotion.levelOf].
+  AnimationLevel get animationLevel => _animationLevel;
 
-  Future<void> setAnimationsEnabled(bool enabled) async {
-    if (_animationsEnabled == enabled) {
+  /// Whether anything animates at all, for callers that only need the switch.
+  bool get animationsEnabled => _animationLevel != AnimationLevel.off;
+
+  Future<void> setAnimationLevel(AnimationLevel level) async {
+    if (_animationLevel == level) {
       return;
     }
 
-    _animationsEnabled = enabled;
+    _animationLevel = level;
     notifyListeners();
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_animationsKey, enabled);
+    await prefs.setString(_animationLevelKey, level.label);
   }
 
   // ================================================================
@@ -103,7 +111,18 @@ class ThemeProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
 
     // Absent means never chosen, which is on - the default.
-    _animationsEnabled = prefs.getBool(_animationsKey) ?? true;
+    final savedLevel = prefs.getString(_animationLevelKey);
+
+    if (savedLevel != null) {
+      _animationLevel = AnimationLevel.fromLabel(savedLevel);
+    } else {
+      // Nothing chosen under the new key. An install that had turned the old
+      // on/off switch off keeps that choice; everyone else gets the default.
+      final hadAnimationsOff = prefs.getBool(_legacyAnimationsKey) == false;
+      _animationLevel = hadAnimationsOff
+          ? AnimationLevel.off
+          : AnimationLevel.rich;
+    }
 
     final savedAccent = prefs.getString(_accentKey);
 

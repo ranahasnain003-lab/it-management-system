@@ -17,7 +17,7 @@ class ShakeOnSignal extends StatefulWidget {
     required this.child,
     required this.animate,
     required this.signal,
-    this.distance = AppMotion.shakeDistance,
+    this.distance,
   });
 
   final Widget child;
@@ -32,8 +32,8 @@ class ShakeOnSignal extends StatefulWidget {
   /// leaving the person with no feedback at all on a repeated mistake.
   final int signal;
 
-  /// The furthest the child moves from centre.
-  final double distance;
+  /// The furthest the child moves from centre. Defaults to the level.
+  final double? distance;
 
   @override
   State<ShakeOnSignal> createState() => _ShakeOnSignalState();
@@ -44,13 +44,17 @@ class _ShakeOnSignalState extends State<ShakeOnSignal>
   AnimationController? _controller;
 
   @override
-  void initState() {
-    super.initState();
-    if (widget.animate) _create();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Not initState: the duration comes from the inherited animation level.
+    if (widget.animate && _controller == null) _create();
   }
 
   void _create() {
-    _controller = AnimationController(vsync: this, duration: AppMotion.shake);
+    _controller = AnimationController(
+      vsync: this,
+      duration: AppMotion.of(context).shake,
+    );
   }
 
   @override
@@ -90,7 +94,8 @@ class _ShakeOnSignalState extends State<ShakeOnSignal>
         // One and a half oscillations, damped to nothing by the end: out,
         // back, a smaller out, still. `(1 - t)` is what makes it settle rather
         // than stop dead, which is the difference between a shake and a jolt.
-        final offset = math.sin(t * math.pi * 3) * (1 - t) * widget.distance;
+        final distance = widget.distance ?? AppMotion.of(context).shakeDistance;
+        final offset = math.sin(t * math.pi * 3) * (1 - t) * distance;
 
         return Transform.translate(offset: Offset(offset, 0), child: child);
       },

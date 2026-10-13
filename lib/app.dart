@@ -178,7 +178,7 @@ class _AppState extends State<App> {
       // The Settings switch, handed to every animated widget below without
       // each of them having to find a provider. The platform's own
       // reduced-motion setting is checked separately, inside AppMotion.
-      enabled: themeProvider.animationsEnabled,
+      level: themeProvider.animationLevel,
       child: MaterialApp.router(
         debugShowCheckedModeBanner: false,
         title: 'PSBA IT Inventory',

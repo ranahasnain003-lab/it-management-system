@@ -18,7 +18,7 @@ import 'package:it_management_system/core/widgets/motion/shimmer.dart';
 
 Widget _app(Widget child, {bool animations = true}) {
   return MotionScope(
-    enabled: animations,
+    level: animations ? AnimationLevel.rich : AnimationLevel.off,
     child: MaterialApp(home: Scaffold(body: child)),
   );
 }
@@ -72,10 +72,7 @@ void main() {
     ) async {
       await tester.pumpWidget(
         _app(
-          const AnimatedGradientBackground(
-            animate: true,
-            child: Text('cards'),
-          ),
+          const AnimatedGradientBackground(animate: true, child: Text('cards')),
         ),
       );
 
@@ -97,12 +94,8 @@ void main() {
     testWidgets('a data update does not replay it', (tester) async {
       // Standing in for Firestore delivering new totals: the card rebuilds
       // with new content, and must not fade in again.
-      Widget card(String value) => _app(
-        EntranceFadeSlide(
-          animate: true,
-          child: Text(value),
-        ),
-      );
+      Widget card(String value) =>
+          _app(EntranceFadeSlide(animate: true, child: Text(value)));
 
       await tester.pumpWidget(card('12'));
       await tester.pumpAndSettle();
@@ -126,7 +119,7 @@ void main() {
               for (var i = 0; i < 4; i++)
                 EntranceFadeSlide(
                   animate: true,
-                  delay: AppMotion.staggerCard * i,
+                  delay: AppMotion.subtle.staggerCard * i,
                   child: SizedBox(height: 10, child: Text('card $i')),
                 ),
             ],
@@ -145,9 +138,10 @@ void main() {
       expect(opacities.first, greaterThan(opacities.last));
 
       await tester.pumpAndSettle();
-      for (final value in tester
-          .widgetList<Opacity>(find.byType(Opacity))
-          .map((o) => o.opacity)) {
+      for (final value
+          in tester
+              .widgetList<Opacity>(find.byType(Opacity))
+              .map((o) => o.opacity)) {
         expect(value, 1.0);
       }
     });
@@ -160,16 +154,12 @@ void main() {
   group('stat numbers', () {
     testWidgets('count up once, then land on the real figure', (tester) async {
       await tester.pumpWidget(
-        _app(
-          const CountUpText(value: 434, animate: true, style: TextStyle()),
-        ),
+        _app(const CountUpText(value: 434, animate: true, style: TextStyle())),
       );
 
       // Partway through it shows something smaller than the target.
       await tester.pump(const Duration(milliseconds: 200));
-      final midway = int.parse(
-        (tester.widget<Text>(find.byType(Text)).data)!,
-      );
+      final midway = int.parse((tester.widget<Text>(find.byType(Text)).data)!);
       expect(midway, lessThan(434));
 
       await tester.pumpAndSettle();

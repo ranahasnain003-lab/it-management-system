@@ -826,13 +826,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           itemBuilder: (context, index) {
             final animateEntrance = _playEntrance && AppMotion.enabled(context);
+            final motion = AppMotion.of(context);
 
             return EntranceFadeSlide(
               animate: animateEntrance,
               // 50ms apart, so the cards arrive as a sequence rather than as
               // a block, and the eye is led across the row.
-              delay: AppMotion.staggerCard * index,
-              offset: AppMotion.slideSmall,
+              delay: motion.staggerCard * index,
+              offset: motion.slideSmall,
               child: _buildStatCard(
                 context,
                 cards[index],

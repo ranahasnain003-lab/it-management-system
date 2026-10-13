@@ -1,11 +1,13 @@
 /// Three dots brightening and dimming in turn, while an answer is awaited.
 ///
-/// The wave runs left to right on a 1.2s cycle. It says "still working"
-/// without the impatience of a spinner, which matters here: the model runs on
-/// a laptop and a first answer can take a few seconds.
+/// The wave runs left to right on a 1.2s cycle. At the rich level each dot
+/// also rides up and down a few pixels, so the row reads as a wave travelling
+/// rather than as three lights blinking.
 ///
-/// The dots are removed by the caller the moment any text arrives, or the
-/// request fails - they never overlap the answer.
+/// It says "still working" without the impatience of a spinner, which matters
+/// here: the model runs on a laptop and a first answer can take seconds. The
+/// caller removes the dots the moment any text arrives, or the request fails,
+/// so they never overlap the answer.
 library;
 
 import 'dart:math' as math;
@@ -39,26 +41,30 @@ class _WaitingDotsState extends State<WaitingDots>
     with SingleTickerProviderStateMixin {
   AnimationController? _controller;
 
+  /// Started here rather than in initState because its duration comes from the
+  /// animation level, which is inherited and cannot be read any earlier.
   @override
-  void initState() {
-    super.initState();
-    if (widget.animate) _start();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
   }
 
   @override
   void didUpdateWidget(WaitingDots oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _sync();
+  }
+
+  void _sync() {
     if (widget.animate && _controller == null) {
-      _start();
+      _controller = AnimationController(
+        vsync: this,
+        duration: AppMotion.of(context).dots,
+      )..repeat();
     } else if (!widget.animate && _controller != null) {
       _controller!.dispose();
       _controller = null;
     }
-  }
-
-  void _start() {
-    _controller = AnimationController(vsync: this, duration: AppMotion.dots)
-      ..repeat();
   }
 
   @override
@@ -67,8 +73,8 @@ class _WaitingDotsState extends State<WaitingDots>
     super.dispose();
   }
 
-  Widget _dot(double opacity) {
-    return Container(
+  Widget _dot(double opacity, double rise) {
+    final dot = Container(
       width: widget.size,
       height: widget.size,
       margin: EdgeInsets.symmetric(horizontal: widget.size * 0.28),
@@ -77,11 +83,16 @@ class _WaitingDotsState extends State<WaitingDots>
         shape: BoxShape.circle,
       ),
     );
+
+    if (rise == 0) return dot;
+
+    return Transform.translate(offset: Offset(0, rise), child: dot);
   }
 
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
+    final motion = AppMotion.of(context);
 
     if (controller == null) {
       // Still, but present. A mid-range opacity so it does not read as a
@@ -90,7 +101,7 @@ class _WaitingDotsState extends State<WaitingDots>
         mainAxisSize: MainAxisSize.min,
         children: [
           for (var i = 0; i < widget.count; i++)
-            _dot((AppMotion.dotMin + AppMotion.dotMax) / 2),
+            _dot((motion.dotMin + motion.dotMax) / 2, 0),
         ],
       );
     }
@@ -102,22 +113,28 @@ class _WaitingDotsState extends State<WaitingDots>
           mainAxisSize: MainAxisSize.min,
           children: [
             for (var i = 0; i < widget.count; i++)
-              _dot(_opacityFor(i, controller.value)),
+              _dot(
+                _waveAt(i, controller.value, motion.dotMin, motion.dotMax),
+                // Negative is up. Zero at the subtle level, so nothing moves
+                // there and only the brightness travels.
+                -_waveAt(i, controller.value, 0, motion.dotWave),
+              ),
           ],
         );
       },
     );
   }
 
-  /// Where dot [index] is in the wave at phase [t].
+  /// Where dot [index] sits in the wave at phase [t], between [low] and
+  /// [high].
   ///
-  /// Each dot trails the one before it by a third of the cycle, so the
-  /// brightness travels along the row. Built from a cosine, so the value and
-  /// its slope match at both ends and the loop has no seam.
-  double _opacityFor(int index, double t) {
+  /// Each dot trails the one before it by a third of the cycle, so the wave
+  /// travels along the row. Built from a cosine, so the value and its slope
+  /// match at both ends and the loop has no seam.
+  double _waveAt(int index, double t, double low, double high) {
     final phase = t - (index / widget.count);
     final wave = (1 - math.cos(phase * 2 * math.pi)) / 2;
 
-    return AppMotion.dotMin + (AppMotion.dotMax - AppMotion.dotMin) * wave;
+    return low + (high - low) * wave;
   }
 }

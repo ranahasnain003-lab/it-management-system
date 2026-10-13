@@ -13,7 +13,7 @@ Widget _app({
   required void Function(BuildContext) onTap,
 }) {
   return MotionScope(
-    enabled: animations,
+    level: animations ? AnimationLevel.rich : AnimationLevel.off,
     child: MaterialApp(
       home: Scaffold(
         body: Builder(
@@ -108,7 +108,7 @@ void main() {
 
     await tester.tap(find.text('go'));
     await tester.pump();
-    await tester.pump(AppMotion.success);
+    await tester.pump(AppMotion.subtle.success);
 
     // Torn down while the mark is still holding.
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
@@ -118,6 +118,6 @@ void main() {
   });
 
   test('the draw takes the 700ms the design asks for', () {
-    expect(AppMotion.success.inMilliseconds, 700);
+    expect(AppMotion.subtle.success.inMilliseconds, 700);
   });
 }
