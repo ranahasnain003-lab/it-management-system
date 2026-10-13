@@ -10,6 +10,10 @@ import '../../services/bazaar_service.dart';
 import '../../shared/drawer/app_drawer.dart';
 import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
+import '../../theme/app_motion.dart';
+import '../../widgets/animated_gradient_background.dart';
+import '../../widgets/motion/count_up.dart';
+import '../../widgets/motion/entrance.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -19,6 +23,17 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  /// Whether the stat cards have already made their entrance in this app run.
+  ///
+  /// Static, so navigating away and back does not replay it: the entrance
+  /// marks the first sight of the dashboard, not every visit. Reset only when
+  /// the process restarts, which is what "once per session" means here.
+  static bool _entrancePlayedThisSession = false;
+
+  /// Whether THIS mounting is the one that gets to play it. Captured once, so
+  /// a Firestore update mid-build cannot start it again.
+  late final bool _playEntrance = !_entrancePlayedThisSession;
+
   // Bazaar master list (for the "All Bazaars" count). Created once.
   late final Stream<List<BazaarModel>> _bazaarStream = BazaarService()
       .getBazaars();
@@ -114,11 +129,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+
+    // Claimed on the first build that is allowed to animate, so a second
+    // dashboard opened later in the session is still.
+    if (_playEntrance) _entrancePlayedThisSession = true;
 
     return Consumer<UserProvider>(
       builder: (context, userProvider, _) {
@@ -188,9 +206,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final isWide = constraints.maxWidth >= 1000;
-                    final horizontalPadding = isWide
-                        ? 28.0
-                        : AppSpacing.lg;
+                    final horizontalPadding = isWide ? 28.0 : AppSpacing.lg;
 
                     return SingleChildScrollView(
                       physics: const AlwaysScrollableScrollPhysics(
@@ -350,61 +366,73 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 color: colors.primary.withValues(alpha: isLight ? 0.18 : 0.30),
               ),
             ),
-            child: Stack(
-              children: [
-                // Subtle decorative rings in the corner; purely visual.
-                Positioned(
-                  top: -60,
-                  right: -40,
-                  child: _welcomeRing(
-                    colors.primary,
-                    170,
-                    isLight ? 0.07 : 0.12,
+            // The drifting colour lives inside the banner rather than behind
+            // the whole page: confined to the header it reads as depth under
+            // the user's name, while behind the stat grid and the charts it
+            // would be movement under figures people are trying to read.
+            //
+            // It is clipped by the Container above, and the background's own
+            // painter sits in a RepaintBoundary, so the cards below never
+            // repaint on its frames.
+            child: AnimatedGradientBackground(
+              animate: AppMotion.enabled(context),
+              intensity: 0.8,
+              child: Stack(
+                children: [
+                  // Subtle decorative rings in the corner; purely visual.
+                  Positioned(
+                    top: -60,
+                    right: -40,
+                    child: _welcomeRing(
+                      colors.primary,
+                      170,
+                      isLight ? 0.07 : 0.12,
+                    ),
                   ),
-                ),
-                Positioned(
-                  bottom: -70,
-                  right: 70,
-                  child: _welcomeRing(
-                    colors.primary,
-                    130,
-                    isLight ? 0.05 : 0.08,
+                  Positioned(
+                    bottom: -70,
+                    right: 70,
+                    child: _welcomeRing(
+                      colors.primary,
+                      130,
+                      isLight ? 0.05 : 0.08,
+                    ),
                   ),
-                ),
-                Padding(
-                  padding: EdgeInsets.all(padding),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildWelcomeIcon(context, userProvider),
-                          const SizedBox(width: AppSpacing.md + 2),
-                          Expanded(
-                            child: _buildWelcomeText(context, userProvider),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: AppSpacing.md + 2),
-                      Text(
-                        userProvider.isNormalUser
-                            ? 'View permitted IT assets, submit requests and '
-                                  'monitor your request activity from your '
-                                  'secure workspace.'
-                            : 'Monitor and manage your organization’s IT '
-                                  'assets, users, requests and system activity '
-                                  'from one secure workspace.',
-                        style: TextStyle(
-                          color: colors.onSurfaceVariant,
-                          fontSize: 13.5,
-                          height: 1.5,
+                  Padding(
+                    padding: EdgeInsets.all(padding),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildWelcomeIcon(context, userProvider),
+                            const SizedBox(width: AppSpacing.md + 2),
+                            Expanded(
+                              child: _buildWelcomeText(context, userProvider),
+                            ),
+                          ],
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: AppSpacing.md + 2),
+                        Text(
+                          userProvider.isNormalUser
+                              ? 'View permitted IT assets, submit requests and '
+                                    'monitor your request activity from your '
+                                    'secure workspace.'
+                              : 'Monitor and manage your organization’s IT '
+                                    'assets, users, requests and system activity '
+                                    'from one secure workspace.',
+                          style: TextStyle(
+                            color: colors.onSurfaceVariant,
+                            fontSize: 13.5,
+                            height: 1.5,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -703,6 +731,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _StatData(
         title: 'Total Assets',
         value: provider.totalAssets.toString(),
+        number: provider.totalAssets,
         icon: Icons.inventory_2_outlined,
         color: AppColors.inventory,
         filter: 'All',
@@ -711,6 +740,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _StatData(
         title: 'Head Office Stock',
         value: provider.headOfficeStock.toString(),
+        number: provider.headOfficeStock,
         icon: Icons.warehouse_outlined,
         color: AppColors.headOffice,
         filter: 'Available',
@@ -729,6 +759,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _StatData(
         title: 'Stock at Bazaars',
         value: provider.deployedToBazaarsQuantity.toString(),
+        number: provider.deployedToBazaarsQuantity,
         icon: Icons.local_shipping_outlined,
         color: AppColors.bazaar,
         filter: 'Stock at Bazaars',
@@ -737,6 +768,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _StatData(
         title: 'Assigned Qty',
         value: provider.assignedQuantity.toString(),
+        number: provider.assignedQuantity,
         icon: Icons.person_outline_rounded,
         color: AppColors.assigned,
         filter: 'Assigned',
@@ -745,6 +777,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _StatData(
         title: 'Damaged at HO',
         value: provider.damagedQuantity.toString(),
+        number: provider.damagedQuantity,
         icon: Icons.warning_amber_outlined,
         color: AppColors.damaged,
         filter: 'Damaged',
@@ -753,6 +786,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _StatData(
         title: 'Under Repair at HO',
         value: provider.underRepairQuantity.toString(),
+        number: provider.underRepairQuantity,
         icon: Icons.build_outlined,
         color: AppColors.repair,
         filter: 'In Repair',
@@ -761,6 +795,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _StatData(
         title: 'Total Quantity',
         value: provider.totalQuantity.toString(),
+        number: provider.totalQuantity,
         icon: Icons.numbers_rounded,
         color: AppColors.quantity,
         filter: 'All',
@@ -790,14 +825,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
             mainAxisExtent: 78 + (48 * scale),
           ),
           itemBuilder: (context, index) {
-            return _buildStatCard(context, cards[index]);
+            final animateEntrance = _playEntrance && AppMotion.enabled(context);
+
+            return EntranceFadeSlide(
+              animate: animateEntrance,
+              // 50ms apart, so the cards arrive as a sequence rather than as
+              // a block, and the eye is led across the row.
+              delay: AppMotion.staggerCard * index,
+              offset: AppMotion.slideSmall,
+              child: _buildStatCard(
+                context,
+                cards[index],
+                animateEntrance: animateEntrance,
+              ),
+            );
           },
         );
       },
     );
   }
 
-  Widget _buildStatCard(BuildContext context, _StatData data) {
+  Widget _buildStatCard(
+    BuildContext context,
+    _StatData data, {
+    required bool animateEntrance,
+  }) {
     final colors = Theme.of(context).colorScheme;
     final brightness = colors.brightness;
 
@@ -894,9 +946,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
-                      child: Text(
-                        data.value,
-                        maxLines: 1,
+                      child: _StatValue(
+                        data: data,
+                        animate: animateEntrance,
                         style: TextStyle(
                           color: colors.onSurface,
                           fontSize: 24,
@@ -1053,10 +1105,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 action.subtitle,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: colors.onSurfaceVariant,
-                ),
+                style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
               ),
             ],
           ),
@@ -1074,10 +1123,18 @@ class _StatData {
     required this.color,
     required this.filter,
     required this.enabled,
+    this.number,
   });
 
   final String title;
   final String value;
+
+  /// The figure behind [value], when there is one.
+  ///
+  /// Null for a card whose value is not a plain count - "-" while the Bazaar
+  /// list is still loading, for instance - and those never count up: a
+  /// placeholder animating to a number would be a lie.
+  final int? number;
   final IconData icon;
   final Color color;
   final String filter;
@@ -1096,4 +1153,40 @@ class _ActionData {
   final String subtitle;
   final IconData icon;
   final VoidCallback onTap;
+}
+
+/// The big figure on a stat card.
+///
+/// Counts up on the first sight of the dashboard in a session, and only when
+/// there is a real number behind it. Every later value - a Firestore update, a
+/// pull to refresh - is shown immediately: by then the figure is information,
+/// and a number that is still settling cannot be read.
+class _StatValue extends StatelessWidget {
+  const _StatValue({
+    required this.data,
+    required this.animate,
+    required this.style,
+  });
+
+  final _StatData data;
+  final bool animate;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    final number = data.number;
+
+    // No real number behind it - "-" while the Bazaar list loads, say. A
+    // placeholder counting up to something would be a lie.
+    if (number == null || !animate) {
+      return Text(
+        data.value,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: style,
+      );
+    }
+
+    return CountUpText(value: number, animate: true, style: style);
+  }
 }

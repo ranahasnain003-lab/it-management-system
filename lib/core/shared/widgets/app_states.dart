@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import '../../theme/app_motion.dart';
 import '../../theme/colors.dart';
 import '../../widgets/motion/gentle_float.dart';
+import '../../widgets/motion/shimmer.dart';
 
 // =============================================================================
 // SKELETON
@@ -101,29 +102,58 @@ class AppSkeletonGroup extends StatefulWidget {
 
 class _AppSkeletonGroupState extends State<AppSkeletonGroup>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  )..repeat(reverse: true);
+  AnimationController? _controller;
+  Animation<double>? _pulse;
 
-  late final Animation<double> _pulse = CurvedAnimation(
-    parent: _controller,
-    curve: Curves.easeInOut,
-  );
+  /// Started from didChangeDependencies rather than initState, because
+  /// whether it should run at all depends on MotionScope and MediaQuery -
+  /// neither of which can be read before dependencies are available.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    final wanted = AppMotion.enabled(context);
+
+    if (wanted && _controller == null) {
+      _controller = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 1100),
+      )..repeat(reverse: true);
+      _pulse = CurvedAnimation(parent: _controller!, curve: AppMotion.move);
+    } else if (!wanted && _controller != null) {
+      _controller!.dispose();
+      _controller = null;
+      _pulse = null;
+    }
+  }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _pulse,
-      builder: (context, _) {
-        return _SkeletonPulse(pulse: _pulse.value, child: widget.child);
-      },
+    final pulse = _pulse;
+
+    // Motion off: the placeholders still show, because the content really is
+    // still loading - they simply hold still. Nothing repeats, so a test that
+    // lands on a loading screen can settle instead of timing out.
+    if (pulse == null) {
+      return _SkeletonPulse(pulse: 0.35, child: widget.child);
+    }
+
+    // The travelling band sits over the pulse: the pulse says "not real yet",
+    // the band says "still working".
+    return Shimmer(
+      animate: true,
+      child: AnimatedBuilder(
+        animation: pulse,
+        builder: (context, _) {
+          return _SkeletonPulse(pulse: pulse.value, child: widget.child);
+        },
+      ),
     );
   }
 }
