@@ -11,6 +11,7 @@ import '../../providers/user_provider.dart';
 import '../../shared/widgets/app_states.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
+import '../../widgets/motion/success_check.dart';
 
 class RequestsScreen extends StatefulWidget {
   const RequestsScreen({super.key});
@@ -996,51 +997,51 @@ class _RequestsScreenState extends State<RequestsScreen> {
                 spacing: AppSpacing.sm + 2,
                 children: [
                   OutlinedButton.icon(
-                      onPressed: isProcessing
-                          ? null
-                          : () {
-                              _handleRequestAction(
-                                context: context,
-                                provider: provider,
-                                request: request,
-                                approve: false,
-                                userProvider: userProvider,
-                              );
-                            },
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 46),
-                        foregroundColor: colors.error,
-                        side: BorderSide(
-                          color: colors.error.withValues(alpha: 0.45),
-                        ),
+                    onPressed: isProcessing
+                        ? null
+                        : () {
+                            _handleRequestAction(
+                              context: context,
+                              provider: provider,
+                              request: request,
+                              approve: false,
+                              userProvider: userProvider,
+                            );
+                          },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 46),
+                      foregroundColor: colors.error,
+                      side: BorderSide(
+                        color: colors.error.withValues(alpha: 0.45),
                       ),
-                      icon: const Icon(Icons.close_rounded, size: 19),
-                      label: const Text('Reject'),
                     ),
+                    icon: const Icon(Icons.close_rounded, size: 19),
+                    label: const Text('Reject'),
+                  ),
                   FilledButton.icon(
-                      onPressed: isProcessing
-                          ? null
-                          : () {
-                              _handleRequestAction(
-                                context: context,
-                                provider: provider,
-                                request: request,
-                                approve: true,
-                                userProvider: userProvider,
-                              );
-                            },
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(0, 46),
-                      ),
-                      icon: isProcessing
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.check_rounded, size: 19),
-                      label: const Text('Approve'),
+                    onPressed: isProcessing
+                        ? null
+                        : () {
+                            _handleRequestAction(
+                              context: context,
+                              provider: provider,
+                              request: request,
+                              approve: true,
+                              userProvider: userProvider,
+                            );
+                          },
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 46),
                     ),
+                    icon: isProcessing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check_rounded, size: 19),
+                    label: const Text('Approve'),
+                  ),
                 ],
               ),
             ],
@@ -1595,6 +1596,10 @@ class _RequestsScreenState extends State<RequestsScreen> {
       );
 
       if (!context.mounted) return;
+
+      // Only on approval. A rejection is a correct outcome too, but a drawn
+      // tick says "the stock moved", and on a rejection nothing did.
+      if (approve) showSuccessCheck(context);
 
       _showMessage(
         context,

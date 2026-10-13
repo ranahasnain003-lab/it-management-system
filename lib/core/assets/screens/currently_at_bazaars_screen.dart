@@ -14,6 +14,7 @@ import '../../shared/widgets/app_states.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
 import 'transfer_asset_screen.dart';
+import '../../widgets/motion/success_check.dart';
 
 class CurrentlyAtBazaarsScreen extends StatefulWidget {
   const CurrentlyAtBazaarsScreen({super.key});
@@ -1202,6 +1203,9 @@ class _CurrentlyAtBazaarsScreenState extends State<CurrentlyAtBazaarsScreen> {
 
       if (!mounted) return;
 
+      // The stock really moved, so the mark is earned. Nothing is drawn on
+      // the failure path below.
+      showSuccessCheck(context);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(

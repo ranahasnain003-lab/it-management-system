@@ -11,6 +11,7 @@ import '../../services/deployment_service.dart';
 import '../../services/permission_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
+import '../../widgets/motion/success_check.dart';
 
 class TransferAssetScreen extends StatefulWidget {
   const TransferAssetScreen({
@@ -466,6 +467,10 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
       if (!mounted) return;
 
       final assetName = asset.name.trim().isEmpty ? 'Asset' : asset.name.trim();
+
+      // The stock really moved, so the mark is earned. Nothing is drawn on
+      // the failure path below.
+      showSuccessCheck(context);
 
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()

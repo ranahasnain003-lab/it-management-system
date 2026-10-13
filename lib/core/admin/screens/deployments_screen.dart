@@ -9,6 +9,7 @@ import '../../providers/deployment_provider.dart';
 import '../../services/bazaar_service.dart';
 import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
+import '../../widgets/motion/success_check.dart';
 
 class DeploymentsScreen extends StatefulWidget {
   const DeploymentsScreen({super.key});
@@ -172,6 +173,9 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
 
       if (!mounted) return;
 
+      // The stock really moved, so the mark is earned. Nothing is drawn on
+      // the failure path below.
+      showSuccessCheck(context);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
@@ -358,6 +362,9 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
 
       if (!mounted) return;
 
+      // The stock really moved, so the mark is earned. Nothing is drawn on
+      // the failure path below.
+      showSuccessCheck(context);
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
