@@ -609,16 +609,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   value: themeProvider.animationsEnabled,
                   onChanged: (value) async {
                     try {
-                      await context
-                          .read<ThemeProvider>()
-                          .setAnimationsEnabled(value);
+                      await context.read<ThemeProvider>().setAnimationsEnabled(
+                        value,
+                      );
 
                       if (!mounted) {
                         return;
                       }
 
                       _showMessage(
-                        value ? 'Animations turned on.' : 'Animations turned off.',
+                        value
+                            ? 'Animations turned on.'
+                            : 'Animations turned off.',
                       );
                     } catch (_) {
                       if (!mounted) {
@@ -766,9 +768,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             color: colors.primary,
             size: 32,
           ),
-          title: const Text(
-            'Clear Cache?',
-          ),
+          title: const Text('Clear Cache?'),
           content: const Text(
             'Temporary image and Flutter application cache will be '
             'cleared. Your Firebase account, inventory, users, '
@@ -815,9 +815,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (dialogContext) {
         return AlertDialog(
           icon: Icon(Icons.storage_outlined, color: colors.primary),
-          title: const Text(
-            'Storage',
-          ),
+          title: const Text('Storage'),
           content: const Text(
             'PSBA IT Inventory uses Firebase for secure '
             'cloud data storage.\n\n'
@@ -859,10 +857,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               filterQuality: FilterQuality.high,
             ),
           ),
-          title: const Text(
-            'PSBA IT Inventory',
-            textAlign: TextAlign.center,
-          ),
+          title: const Text('PSBA IT Inventory', textAlign: TextAlign.center),
           content: const Text(
             'A professional enterprise IT inventory management '
             'application for managing assets, users, requests '
@@ -899,9 +894,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             color: colors.primary,
             size: 32,
           ),
-          title: const Text(
-            'Reset Settings?',
-          ),
+          title: const Text('Reset Settings?'),
           content: const Text(
             'This will restore the appearance preference on this '
             'screen to its default value. Nothing else on this '

@@ -71,8 +71,10 @@ class _AnimatedGradientBackgroundState extends State<AnimatedGradientBackground>
   void _start() {
     // `repeat` with a sine/cosine-driven painter is seamless: phase 1.0 paints
     // exactly what phase 0.0 paints, so the restart cannot be seen.
-    _controller = AnimationController(vsync: this, duration: AppMotion.backgroundLoop)
-      ..repeat();
+    _controller = AnimationController(
+      vsync: this,
+      duration: AppMotion.backgroundLoop,
+    )..repeat();
   }
 
   @override
@@ -132,9 +134,30 @@ class _BlobPainter extends CustomPainter {
   /// Each blob's resting place, size, and how far it wanders, as fractions of
   /// the shortest side so the composition holds on a phone and on a desktop.
   static const List<_Blob> _blobs = [
-    _Blob(cx: 0.18, cy: 0.16, radius: 0.62, driftX: 0.07, driftY: 0.05, phase: 0.0),
-    _Blob(cx: 0.86, cy: 0.30, radius: 0.52, driftX: 0.05, driftY: 0.07, phase: 0.37),
-    _Blob(cx: 0.52, cy: 0.88, radius: 0.72, driftX: 0.06, driftY: 0.04, phase: 0.71),
+    _Blob(
+      cx: 0.18,
+      cy: 0.16,
+      radius: 0.62,
+      driftX: 0.07,
+      driftY: 0.05,
+      phase: 0.0,
+    ),
+    _Blob(
+      cx: 0.86,
+      cy: 0.30,
+      radius: 0.52,
+      driftX: 0.05,
+      driftY: 0.07,
+      phase: 0.37,
+    ),
+    _Blob(
+      cx: 0.52,
+      cy: 0.88,
+      radius: 0.72,
+      driftX: 0.06,
+      driftY: 0.04,
+      phase: 0.71,
+    ),
   ];
 
   @override
