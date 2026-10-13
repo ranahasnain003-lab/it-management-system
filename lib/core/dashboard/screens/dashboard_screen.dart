@@ -1,21 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../../ai/assistant_modal_observer.dart';
 import '../../providers/asset_provider.dart';
 import '../../providers/asset_scope.dart';
+import '../../providers/bazaar_provider.dart';
 import '../../providers/user_provider.dart';
 import '../../services/bazaar_service.dart';
 import '../../shared/drawer/app_drawer.dart';
 import '../../shared/widgets/app_states.dart';
-import '../../theme/colors.dart';
+import '../../theme/app_brand.dart';
 import '../../theme/app_motion.dart';
-import '../../widgets/animated_gradient_background.dart';
-import '../../widgets/motion/count_up.dart';
+import '../../theme/colors.dart';
 import '../../widgets/motion/entrance.dart';
-import '../../widgets/motion/press_scale.dart';
-import '../../providers/bazaar_provider.dart';
+import '../widgets/dashboard_parts.dart';
+import '../../../models/asset_model.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -177,9 +178,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   'PSBA IT Inventory',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: AppType.metricLabel.copyWith(
                     fontSize: 11.5,
-                    fontWeight: FontWeight.w500,
                     color: colors.onSurfaceVariant,
                   ),
                 ),
@@ -237,7 +237,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _buildWelcomeHeader(context, userProvider),
+                              _buildHero(context, userProvider, wide: isWide),
                               const SizedBox(height: AppSpacing.xl),
                               _buildSectionHeader(
                                 context,
@@ -269,6 +269,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   );
                                 },
                               ),
+                              if (_hasFigures(provider)) ...[
+                                const SizedBox(height: AppSpacing.xl),
+                                _buildCharts(context, provider, wide: isWide),
+                              ],
                               const SizedBox(height: AppSpacing.xl),
                               _buildSectionHeader(
                                 context,
@@ -277,6 +281,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ),
                               const SizedBox(height: AppSpacing.md),
                               _buildQuickActions(context, userProvider),
+                              if (_hasFigures(provider)) ...[
+                                const SizedBox(height: AppSpacing.xl),
+                                _buildRecentUpdates(context, provider),
+                              ],
                             ],
                           ),
                         ),
@@ -290,6 +298,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         );
       },
     );
+  }
+
+  /// Whether there is inventory to draw a chart from. A chart of nothing is
+  /// worse than no chart: it reads as a failure rather than as an empty
+  /// inventory, which the overview above already says plainly.
+  bool _hasFigures(AssetProvider provider) {
+    return provider.errorMessage == null && provider.assets.isNotEmpty;
   }
 
   /// Current text scale factor (clamped) so fixed-height tiles grow with
@@ -307,19 +322,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return 'Administrator';
     }
 
-    if (provider.isNormalUser) {
-      return 'System User';
-    }
-
     return 'System User';
   }
 
   String _inventorySubtitle(UserProvider provider) {
-    if (provider.isSuperAdmin) {
-      return 'Real-time organization-wide asset overview';
-    }
-
-    if (provider.isAdmin) {
+    if (provider.isSuperAdmin || provider.isAdmin) {
       return 'Real-time organization-wide asset overview';
     }
 
@@ -338,217 +345,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return 'Submit and monitor your requests';
   }
 
-  Widget _buildWelcomeHeader(BuildContext context, UserProvider userProvider) {
-    final colors = Theme.of(context).colorScheme;
-    final isLight = colors.brightness == Brightness.light;
+  // ===========================================================================
+  // HERO
+  // ===========================================================================
 
-    // Soft accent-tinted surface: light enough in light mode for dark text,
-    // a gentle accent glow over the dark card in dark mode. Both bases come
-    // from the scheme, so a theme change carries the card with it.
-    final base = isLight ? colors.surface : colors.surfaceContainer;
-    final gradient = LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [
-        Color.alphaBlend(
-          colors.primary.withValues(alpha: isLight ? 0.12 : 0.24),
-          base,
-        ),
-        Color.alphaBlend(
-          colors.primary.withValues(alpha: isLight ? 0.04 : 0.08),
-          base,
-        ),
-      ],
-    );
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final padding = constraints.maxWidth >= 600
-            ? AppSpacing.xl
-            : AppSpacing.lg + 2;
-
-        // A gradient, two translucent rings and a Stack: worth its own layer
-        // so a figure landing in the grid below does not repaint all of it.
-        return RepaintBoundary(
-          child: Container(
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              gradient: gradient,
-              borderRadius: BorderRadius.circular(AppSpacing.radiusXl),
-              border: Border.all(
-                color: colors.primary.withValues(alpha: isLight ? 0.18 : 0.30),
-              ),
-            ),
-            // The drifting colour lives inside the banner rather than behind
-            // the whole page: confined to the header it reads as depth under
-            // the user's name, while behind the stat grid and the charts it
-            // would be movement under figures people are trying to read.
-            //
-            // It is clipped by the Container above, and the background's own
-            // painter sits in a RepaintBoundary, so the cards below never
-            // repaint on its frames.
-            child: AnimatedGradientBackground(
-              animate: AppMotion.enabled(context),
-              intensity: 0.8,
-              child: Stack(
-                children: [
-                  // Subtle decorative rings in the corner; purely visual.
-                  Positioned(
-                    top: -60,
-                    right: -40,
-                    child: _welcomeRing(
-                      colors.primary,
-                      170,
-                      isLight ? 0.07 : 0.12,
-                    ),
-                  ),
-                  Positioned(
-                    bottom: -70,
-                    right: 70,
-                    child: _welcomeRing(
-                      colors.primary,
-                      130,
-                      isLight ? 0.05 : 0.08,
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.all(padding),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _buildWelcomeIcon(context, userProvider),
-                            const SizedBox(width: AppSpacing.md + 2),
-                            Expanded(
-                              child: _buildWelcomeText(context, userProvider),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: AppSpacing.md + 2),
-                        Text(
-                          userProvider.isNormalUser
-                              ? 'View permitted IT assets, submit requests and '
-                                    'monitor your request activity from your '
-                                    'secure workspace.'
-                              : 'Monitor and manage your organization’s IT '
-                                    'assets, users, requests and system activity '
-                                    'from one secure workspace.',
-                          style: TextStyle(
-                            color: colors.onSurfaceVariant,
-                            fontSize: 13.5,
-                            height: 1.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _welcomeRing(Color color, double size, double alpha) {
-    return IgnorePointer(
-      child: Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color.withValues(alpha: alpha),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildWelcomeText(BuildContext context, UserProvider userProvider) {
-    final colors = Theme.of(context).colorScheme;
-
+  Widget _buildHero(
+    BuildContext context,
+    UserProvider userProvider, {
+    required bool wide,
+  }) {
     final profile = userProvider.currentUserProfile;
 
     final displayName = profile?.fullName.trim().isNotEmpty == true
         ? profile!.fullName.trim()
         : 'Welcome';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'WELCOME BACK',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            // Dark, high-contrast text on the light card (light text in dark
-            // mode, where the card is dark) - which is what the scheme's
-            // muted foreground already is in both.
-            color: colors.onSurfaceVariant,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.2,
-          ),
-        ),
-        const SizedBox(height: 3),
-        Text(
-          displayName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: colors.onSurface,
-            fontSize: 21,
-            fontWeight: FontWeight.w700,
-            letterSpacing: -0.4,
-          ),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm + 2,
-            vertical: AppSpacing.xs,
-          ),
-          decoration: BoxDecoration(
-            // The lightest surface in the scheme reads as a white pill on the
-            // tinted card in light mode; dark mode keeps the accent glow.
-            color: colors.brightness == Brightness.light
-                ? colors.surfaceContainerLowest.withValues(alpha: 0.85)
-                : colors.primary.withValues(alpha: 0.22),
-            borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
-            border: Border.all(color: colors.primary.withValues(alpha: 0.25)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.verified_user_outlined,
-                size: 14,
-                color: colors.primary,
-              ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  _displayRole(userProvider),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: colors.primary,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildWelcomeIcon(BuildContext context, UserProvider userProvider) {
-    final colors = Theme.of(context).colorScheme;
 
     final icon = userProvider.isSuperAdmin
         ? Icons.admin_panel_settings_rounded
@@ -556,14 +366,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ? Icons.manage_accounts_rounded
         : Icons.person_rounded;
 
-    return Container(
-      width: 52,
-      height: 52,
-      decoration: BoxDecoration(
-        color: colors.primary,
-        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-      ),
-      child: Icon(icon, size: 28, color: colors.onPrimary),
+    return DashboardHero(
+      name: displayName,
+      role: _displayRole(userProvider),
+      // Spelled out rather than numeric, so it cannot be read as the American
+      // order on one device and the British order on another.
+      dateLabel: DateFormat('EEEE, d MMMM y').format(DateTime.now()),
+      description: userProvider.isNormalUser
+          ? 'View permitted IT assets, submit requests and monitor your '
+                'request activity from your secure workspace.'
+          : 'Monitor and manage your organization’s IT assets, users, '
+                'requests and system activity from one secure workspace.',
+      icon: icon,
+      animate: AppMotion.enabled(context),
+      compact: !wide,
     );
   }
 
@@ -579,21 +395,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         Text(
           title,
-          style: TextStyle(
-            color: colors.onSurface,
-            fontSize: 17,
-            fontWeight: FontWeight.w700,
-            letterSpacing: -0.2,
-          ),
+          style: AppType.sectionTitle.copyWith(color: colors.onSurface),
         ),
         const SizedBox(height: 2),
         Text(
           subtitle,
-          style: TextStyle(
-            fontSize: 12.5,
-            color: colors.onSurfaceVariant,
-            height: 1.35,
-          ),
+          style: AppType.metricLabel.copyWith(color: colors.onSurfaceVariant),
         ),
       ],
     );
@@ -652,9 +459,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Expanded(
               child: Text(
                 message,
-                style: TextStyle(
+                style: AppType.body.copyWith(
                   fontSize: 13,
-                  height: 1.4,
                   color: AppColors.onTint(tone, brightness),
                 ),
               ),
@@ -664,6 +470,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
   }
+
+  // ===========================================================================
+  // KPI GRID
+  // ===========================================================================
 
   /// How many statistic cards the grid builds, whatever the role: some are
   /// only disabled, never dropped. The skeleton stands in for the same
@@ -740,13 +550,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     UserProvider userProvider, {
     int? activeBazaarCount,
   }) {
+    // Eight distinct colours, and the ones that describe a status take that
+    // status's colour from AppBrand - so "Damaged" is the same red here, on a
+    // chip in a list, and in the donut below.
     final cards = [
       _StatData(
         title: 'Total Assets',
         value: provider.totalAssets.toString(),
         number: provider.totalAssets,
-        icon: Icons.inventory_2_outlined,
-        color: AppColors.inventory,
+        icon: Icons.inventory_2_rounded,
+        color: AppBrand.green,
+        caption: 'Asset records',
         filter: 'All',
         enabled: !userProvider.isNormalUser,
       ),
@@ -754,8 +568,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: 'Head Office Stock',
         value: provider.headOfficeStock.toString(),
         number: provider.headOfficeStock,
-        icon: Icons.warehouse_outlined,
-        color: AppColors.headOffice,
+        icon: Icons.warehouse_rounded,
+        color: AppBrand.statusAvailable,
+        caption: 'Units available',
         filter: 'Available',
         enabled: true,
       ),
@@ -763,8 +578,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _StatData(
         title: 'All Bazaars',
         value: activeBazaarCount?.toString() ?? '-',
-        icon: Icons.storefront_outlined,
-        color: AppColors.info,
+        icon: Icons.storefront_rounded,
+        color: AppBrand.gold,
+        caption: 'Active locations',
         filter: 'All Bazaars',
         enabled: true,
       ),
@@ -773,8 +589,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: 'Stock at Bazaars',
         value: provider.deployedToBazaarsQuantity.toString(),
         number: provider.deployedToBazaarsQuantity,
-        icon: Icons.local_shipping_outlined,
-        color: AppColors.bazaar,
+        icon: Icons.local_shipping_rounded,
+        color: AppBrand.teal,
+        caption: 'Units deployed',
         filter: 'Stock at Bazaars',
         enabled: true,
       ),
@@ -782,8 +599,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: 'Assigned Qty',
         value: provider.assignedQuantity.toString(),
         number: provider.assignedQuantity,
-        icon: Icons.person_outline_rounded,
-        color: AppColors.assigned,
+        icon: Icons.person_pin_rounded,
+        color: AppBrand.statusAssigned,
+        caption: '${provider.assignedAssets} records',
         filter: 'Assigned',
         enabled: true,
       ),
@@ -791,8 +609,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: 'Damaged at HO',
         value: provider.damagedQuantity.toString(),
         number: provider.damagedQuantity,
-        icon: Icons.warning_amber_outlined,
-        color: AppColors.damaged,
+        icon: Icons.report_problem_rounded,
+        color: AppBrand.statusDamaged,
+        caption: '${provider.damagedAssets} records',
         filter: 'Damaged',
         enabled: true,
       ),
@@ -800,8 +619,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: 'Under Repair at HO',
         value: provider.underRepairQuantity.toString(),
         number: provider.underRepairQuantity,
-        icon: Icons.build_outlined,
-        color: AppColors.repair,
+        icon: Icons.build_rounded,
+        color: AppBrand.statusRepair,
+        caption: '${provider.underRepairAssets} records',
         filter: 'In Repair',
         enabled: true,
       ),
@@ -810,7 +630,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         value: provider.totalQuantity.toString(),
         number: provider.totalQuantity,
         icon: Icons.numbers_rounded,
-        color: AppColors.quantity,
+        color: AppBrand.statusReserved,
+        caption: 'All units',
         filter: 'All',
         enabled: !userProvider.isNormalUser,
       ),
@@ -834,12 +655,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             crossAxisCount: columns,
             crossAxisSpacing: spacing,
             mainAxisSpacing: spacing,
-            // Icon row + label + value, grown with the text scale.
-            mainAxisExtent: 78 + (48 * scale),
+            // Icon row + value + label + caption, grown with the text scale.
+            mainAxisExtent: 76 + (62 * scale),
           ),
           itemBuilder: (context, index) {
             final animateEntrance = _playEntrance && AppMotion.enabled(context);
             final motion = AppMotion.of(context);
+            final data = cards[index];
 
             return EntranceFadeSlide(
               animate: animateEntrance,
@@ -851,10 +673,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
               // The one place an overshoot is allowed. easeOutBack at the
               // rich level, plain easeOutCubic at the subtle one.
               curve: motion.cardEntrance,
-              child: _buildStatCard(
-                context,
-                cards[index],
-                animateEntrance: animateEntrance,
+              child: KpiCard(
+                label: data.title,
+                value: data.value,
+                number: data.number,
+                caption: data.caption,
+                icon: data.icon,
+                colour: data.color,
+                animateCount: animateEntrance,
+                onTap: data.enabled ? () => _openFilter(data.filter) : null,
               ),
             );
           },
@@ -863,137 +690,217 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildStatCard(
+  /// Where a statistic card goes. Unchanged from before the redesign: the same
+  /// three destinations, chosen by the same filter strings.
+  void _openFilter(String filter) {
+    // ======================================================
+    // ALL BAZAARS -> Bazaar Master
+    // ======================================================
+    if (filter == 'All Bazaars') {
+      context.push('/locations');
+      return;
+    }
+
+    // ======================================================
+    // STOCK AT BAZAARS -> Currently At Bazaars
+    // ======================================================
+    if (filter == 'Stock at Bazaars') {
+      context.push('/currently-at-bazaars');
+      return;
+    }
+
+    // Existing inventory cards continue to use the existing Assets screen
+    // and filters.
+    context.push('/assets', extra: filter);
+  }
+
+  // ===========================================================================
+  // CHARTS
+  // ===========================================================================
+
+  Widget _buildCharts(
     BuildContext context,
-    _StatData data, {
-    required bool animateEntrance,
+    AssetProvider provider, {
+    required bool wide,
   }) {
-    final colors = Theme.of(context).colorScheme;
-    final brightness = colors.brightness;
-
-    // Each tile is a Stack with an accent bar, an icon tile and two text
-    // lines; its own layer keeps one changing figure from repainting the
-    // whole grid. Clipping is what keeps the accent bar and the ripple inside
-    // the card's rounded corners.
-    return RepaintBoundary(
-      // Scales a little on press, and on the web lifts on hover. Wrapped
-      // outside the Card so the shadow belongs to the whole tile; the InkWell
-      // inside still gives the ripple, so touch feedback is unchanged.
-      child: PressScale(
-        animate: AppMotion.enabled(context) && data.enabled,
-        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
-        child: Card(
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: data.enabled
-                ? () {
-                    // ==================================================
-                    // ALL BAZAARS -> Bazaar Master
-                    // ==================================================
-                    if (data.filter == 'All Bazaars') {
-                      context.push('/locations');
-                      return;
-                    }
-
-                    // ==================================================
-                    // STOCK AT BAZAARS -> Currently At Bazaars
-                    // ==================================================
-                    if (data.filter == 'Stock at Bazaars') {
-                      context.push('/currently-at-bazaars');
-                      return;
-                    }
-
-                    // Existing inventory cards continue to use
-                    // the existing Assets screen and filters.
-                    context.push('/assets', extra: data.filter);
-                  }
-                : null,
-            child: Stack(
-              children: [
-                // Thin metric accent bar (matches the web stat card).
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: Container(width: 3, color: data.color),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.md + 3,
-                    AppSpacing.md + 2,
-                    AppSpacing.md,
-                    AppSpacing.md,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 38,
-                            height: 38,
-                            decoration: BoxDecoration(
-                              color: AppColors.tint(data.color, brightness),
-                              borderRadius: BorderRadius.circular(
-                                AppSpacing.radiusMd,
-                              ),
-                            ),
-                            child: Icon(
-                              data.icon,
-                              color: AppColors.onTint(data.color, brightness),
-                              size: 20,
-                            ),
-                          ),
-                          const Spacer(),
-                          if (data.enabled)
-                            Icon(
-                              Icons.arrow_outward_rounded,
-                              size: 16,
-                              color: colors.onSurfaceVariant.withValues(
-                                alpha: 0.7,
-                              ),
-                            ),
-                        ],
-                      ),
-                      const Spacer(),
-                      Text(
-                        data.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          color: colors.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: _StatValue(
-                          data: data,
-                          animate: animateEntrance,
-                          style: TextStyle(
-                            color: colors.onSurface,
-                            fontSize: 24,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.5,
-                            height: 1.2,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+    final donut = DashboardSection(
+      title: 'Stock Distribution',
+      subtitle: 'Where every unit currently is',
+      child: StatusDonut(
+        total: provider.totalQuantity,
+        // These four buckets are exactly the ones the provider guarantees add
+        // up to the total, so the ring is always a whole.
+        slices: [
+          ChartDatum(
+            'Head Office (available)',
+            provider.headOfficeStock,
+            AppBrand.statusAvailable,
           ),
-        ),
+          ChartDatum(
+            'At Bazaars',
+            provider.deployedToBazaarsQuantity,
+            AppBrand.teal,
+          ),
+          ChartDatum(
+            'Assigned',
+            provider.assignedQuantity,
+            AppBrand.statusAssigned,
+          ),
+          ChartDatum(
+            'Unavailable at HO',
+            provider.unavailableAtHeadOfficeQuantity,
+            AppBrand.statusDamaged,
+          ),
+        ],
+      ),
+    );
+
+    final bars = DashboardSection(
+      title: 'Top Bazaars by Stock',
+      subtitle: 'Units currently held at each location',
+      child: LocationBars(
+        bars: _locationBars(provider),
+        emptyMessage: 'No stock is currently at a Bazaar.',
+      ),
+    );
+
+    if (!wide) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [donut, const SizedBox(height: AppSpacing.lg), bars],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(flex: 5, child: donut),
+        const SizedBox(width: AppSpacing.lg),
+        Expanded(flex: 6, child: bars),
+      ],
+    );
+  }
+
+  /// The busiest Bazaars, counted from the assets this screen already holds.
+  ///
+  /// Deliberately derived from [AssetProvider.assets] rather than from the
+  /// deployment records: the deployment stream is not open on this screen, and
+  /// opening one here would be a new Firestore read for a chart.
+  List<ChartDatum> _locationBars(AssetProvider provider) {
+    final perBazaar = <String, int>{};
+
+    // Units that are at a Bazaar but whose asset record does not name which
+    // one. A record whose units are spread over several Bazaars can only name
+    // one of them, so these are grouped rather than dropped: every deployed
+    // unit on this chart adds up to the "Stock at Bazaars" figure above it.
+    var unnamed = 0;
+
+    for (final asset in provider.assets) {
+      final quantity = asset.calculatedDeployedQuantity;
+      if (quantity <= 0) continue;
+
+      final name = (asset.currentBazaarName ?? '').trim();
+
+      if (name.isEmpty) {
+        unnamed += quantity;
+        continue;
+      }
+
+      perBazaar[name] = (perBazaar[name] ?? 0) + quantity;
+    }
+
+    final ranked = perBazaar.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    // A small rotation, so neighbouring bars never share a colour.
+    const palette = [
+      AppBrand.teal,
+      AppBrand.gold,
+      AppBrand.statusAssigned,
+      AppBrand.statusReserved,
+      AppBrand.greenLight,
+    ];
+
+    return [
+      // Head Office is deliberately not a bar here. It usually holds several
+      // times what any one Bazaar does, so including it flattened every other
+      // bar to a stub; the donut above and the Head Office card already give
+      // that figure.
+      for (var i = 0; i < ranked.length && i < 5; i++)
+        ChartDatum(ranked[i].key, ranked[i].value, palette[i % palette.length]),
+      if (unnamed > 0)
+        ChartDatum('Other Bazaars', unnamed, AppBrand.statusDisposed),
+    ];
+  }
+
+  // ===========================================================================
+  // RECENT UPDATES
+  // ===========================================================================
+
+  /// The most recently touched assets, as a timeline.
+  ///
+  /// This is the inventory's own record of when each asset last changed, not
+  /// an audit trail: the activity log and the stock-movement history are
+  /// separate collections that this screen does not listen to, and starting a
+  /// listener for them here would be a new query.
+  Widget _buildRecentUpdates(BuildContext context, AssetProvider provider) {
+    final dated = provider.assets
+        .where((asset) => (asset.lastUpdated ?? asset.createdAt) != null)
+        .toList();
+
+    dated.sort((a, b) {
+      final left = a.lastUpdated ?? a.createdAt!;
+      final right = b.lastUpdated ?? b.createdAt!;
+      return right.compareTo(left);
+    });
+
+    final recent = dated.take(6).toList();
+
+    return DashboardSection(
+      title: 'Recently Updated',
+      subtitle: 'The last changes to your inventory',
+      trailing: TextButton.icon(
+        onPressed: () => context.push('/assets', extra: 'All'),
+        iconAlignment: IconAlignment.end,
+        icon: const Icon(Icons.arrow_forward_rounded, size: 16),
+        label: const Text('View all'),
+      ),
+      child: ActivityTimeline(
+        emptyMessage: 'No assets have been updated yet.',
+        entries: [
+          for (final asset in recent) _entryFor(asset),
+        ],
       ),
     );
   }
 
+  TimelineEntry _entryFor(AssetModel asset) {
+    final when = asset.lastUpdated ?? asset.createdAt;
+    final location = asset.location.trim().isEmpty
+        ? 'Head Office'
+        : asset.location.trim();
+
+    return TimelineEntry(
+      title: asset.name,
+      subtitle: '${asset.category}  ·  $location',
+      meta: when == null
+          ? asset.status
+          : '${asset.status}  ·  ${DateFormat('d MMM y, h:mm a').format(when)}',
+      icon: AppBrand.iconForCategory(asset.category),
+      colour: AppBrand.forStatus(asset.status),
+      trailingValue: '${asset.quantity}',
+      trailingLabel: 'Qty',
+      onTap: () => context.push('/assets', extra: 'All'),
+    );
+  }
+
+  // ===========================================================================
+  // QUICK ACTIONS
+  // ===========================================================================
+
   Widget _buildQuickActions(BuildContext context, UserProvider userProvider) {
+    // Unchanged destinations: each tile pushes exactly the route it pushed
+    // before the redesign.
     final List<_ActionData> actions = [];
 
     if (userProvider.isSuperAdmin) {
@@ -1001,7 +908,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _ActionData(
           title: 'Users',
           subtitle: 'Manage system users',
-          icon: Icons.people_outline_rounded,
+          icon: Icons.people_alt_rounded,
+          colour: AppBrand.statusAssigned,
           onTap: () => context.push('/users'),
         ),
       );
@@ -1010,7 +918,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _ActionData(
           title: 'Requests',
           subtitle: 'Review requests',
-          icon: Icons.assignment_outlined,
+          icon: Icons.assignment_rounded,
+          colour: AppBrand.gold,
           onTap: () => context.push('/requests'),
         ),
       );
@@ -1019,7 +928,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _ActionData(
           title: 'Requests',
           subtitle: 'Review requests',
-          icon: Icons.assignment_outlined,
+          icon: Icons.assignment_rounded,
+          colour: AppBrand.gold,
           onTap: () => context.push('/requests'),
         ),
       );
@@ -1028,7 +938,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _ActionData(
           title: 'Profile',
           subtitle: 'View your profile',
-          icon: Icons.person_outline_rounded,
+          icon: Icons.person_rounded,
+          colour: AppBrand.green,
           onTap: () => context.push('/profile'),
         ),
       );
@@ -1037,7 +948,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _ActionData(
           title: 'My Requests',
           subtitle: 'Submit and track requests',
-          icon: Icons.assignment_outlined,
+          icon: Icons.assignment_rounded,
+          colour: AppBrand.gold,
           onTap: () => context.push('/requests'),
         ),
       );
@@ -1046,7 +958,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _ActionData(
           title: 'Profile',
           subtitle: 'View your profile',
-          icon: Icons.person_outline_rounded,
+          icon: Icons.person_rounded,
+          colour: AppBrand.green,
           onTap: () => context.push('/profile'),
         ),
       );
@@ -1056,9 +969,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width = constraints.maxWidth;
-
-        final columns = width >= 1100 ? 4 : 2;
+        final columns = constraints.maxWidth >= 1100 ? 4 : 2;
 
         const spacing = AppSpacing.md;
 
@@ -1074,68 +985,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
             mainAxisExtent: 80 + (38 * scale),
           ),
           itemBuilder: (context, index) {
-            return _buildActionCard(context, actions[index]);
+            final action = actions[index];
+
+            return QuickActionTile(
+              title: action.title,
+              subtitle: action.subtitle,
+              icon: action.icon,
+              colour: action.colour,
+              // No badge on Android: the pending count lives in
+              // RequestProvider, which this screen does not listen to.
+              onTap: action.onTap,
+            );
           },
         );
       },
-    );
-  }
-
-  Widget _buildActionCard(BuildContext context, _ActionData action) {
-    final colors = Theme.of(context).colorScheme;
-
-    // Clipped so the ripple follows the card's rounded corners rather than
-    // squaring them off while a finger is down.
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: action.onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md + 2),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: AppColors.tint(colors.primary, colors.brightness),
-                      borderRadius: BorderRadius.circular(AppSpacing.radiusMd),
-                    ),
-                    child: Icon(action.icon, color: colors.primary, size: 20),
-                  ),
-                  const Spacer(),
-                  Icon(
-                    Icons.chevron_right_rounded,
-                    size: 20,
-                    color: colors.onSurfaceVariant,
-                  ),
-                ],
-              ),
-              const Spacer(),
-              Text(
-                action.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: colors.onSurface,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                action.subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
@@ -1148,6 +1011,7 @@ class _StatData {
     required this.color,
     required this.filter,
     required this.enabled,
+    this.caption,
     this.number,
   });
 
@@ -1160,6 +1024,7 @@ class _StatData {
   /// list is still loading, for instance - and those never count up: a
   /// placeholder animating to a number would be a lie.
   final int? number;
+  final String? caption;
   final IconData icon;
   final Color color;
   final String filter;
@@ -1171,47 +1036,13 @@ class _ActionData {
     required this.title,
     required this.subtitle,
     required this.icon,
+    required this.colour,
     required this.onTap,
   });
 
   final String title;
   final String subtitle;
   final IconData icon;
+  final Color colour;
   final VoidCallback onTap;
-}
-
-/// The big figure on a stat card.
-///
-/// Counts up on the first sight of the dashboard in a session, and only when
-/// there is a real number behind it. Every later value - a Firestore update, a
-/// pull to refresh - is shown immediately: by then the figure is information,
-/// and a number that is still settling cannot be read.
-class _StatValue extends StatelessWidget {
-  const _StatValue({
-    required this.data,
-    required this.animate,
-    required this.style,
-  });
-
-  final _StatData data;
-  final bool animate;
-  final TextStyle style;
-
-  @override
-  Widget build(BuildContext context) {
-    final number = data.number;
-
-    // No real number behind it - "-" while the Bazaar list loads, say. A
-    // placeholder counting up to something would be a lie.
-    if (number == null || !animate) {
-      return Text(
-        data.value,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
-      );
-    }
-
-    return CountUpText(value: number, animate: true, style: style);
-  }
 }

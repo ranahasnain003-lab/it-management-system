@@ -27,6 +27,7 @@ import 'package:it_management_system/core/providers/user_provider.dart';
 import 'package:it_management_system/core/theme/app_motion.dart';
 import 'package:it_management_system/core/theme/app_brand.dart';
 import 'package:it_management_system/core/theme/app_theme.dart';
+import 'package:it_management_system/web/pages/dashboard_page.dart';
 import 'package:it_management_system/web/pages/web_login_page.dart';
 
 import 'support/fake_providers.dart';
@@ -113,5 +114,16 @@ void main() {
     'dashboard_mobile',
     () => const DashboardScreen(),
     only: const [GoldenDevice.phone],
+  );
+
+  // The web dashboard, which is its own page rather than a wide layout of the
+  // Android one - so it has to be shot separately or half the redesign is
+  // never looked at.
+  screen(
+    'dashboard_web',
+    // The shell supplies the Scaffold in the real app; without one here every
+    // Text renders with Flutter's missing-Material debug marks.
+    () => const Scaffold(body: WebDashboardPage()),
+    only: const [GoldenDevice.desktop],
   );
 }

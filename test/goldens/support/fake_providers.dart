@@ -22,11 +22,24 @@ import 'package:it_management_system/core/providers/theme_provider.dart';
 import 'package:it_management_system/core/providers/user_provider.dart';
 import 'package:it_management_system/core/theme/app_motion.dart';
 import 'package:it_management_system/models/asset_model.dart';
+import 'package:it_management_system/models/deployment_model.dart';
 import 'package:it_management_system/models/user_model.dart';
 
 // =============================================================================
 // DATA
 // =============================================================================
+
+/// A fixed "last changed" stamp per asset, so the Android dashboard's
+/// Recently Updated timeline has something to order by and a screenshot taken
+/// tomorrow is identical to one taken today.
+DateTime _lastUpdatedFor(String id) {
+  var hash = 0;
+  for (final unit in id.codeUnits) {
+    hash = (hash * 31 + unit) & 0x7fffffff;
+  }
+
+  return DateTime(2026, 10, 9, 16, 40).subtract(Duration(hours: hash % 200));
+}
 
 /// A representative inventory: several categories, several statuses, and
 /// quantities split across Head Office, people and Bazaars.
@@ -43,6 +56,7 @@ List<AssetModel> demoAssets() {
     required double price,
     String condition = 'Good',
     String brand = '',
+    String? bazaar,
   }) {
     return AssetModel(
       id: id.toLowerCase(),
@@ -59,16 +73,22 @@ List<AssetModel> demoAssets() {
       location: 'Head Office',
       adminId: 'demo-admin',
       brand: brand,
+      // Some records name the Bazaar their deployed units sit at and some do
+      // not, which is what production looks like - a record split across
+      // several Bazaars can only name one. Both paths through the location
+      // chart are therefore exercised by the screenshots.
+      currentBazaarName: bazaar,
+      lastUpdated: _lastUpdatedFor(id),
     );
   }
 
   return [
-    one(id: 'IT-LAP-001', name: 'Dell Latitude 5420', category: 'Laptop', status: 'Assigned', quantity: 40, headOffice: 20, assigned: 0, deployed: 20, price: 185000, brand: 'Dell'),
+    one(id: 'IT-LAP-001', name: 'Dell Latitude 5420', category: 'Laptop', status: 'Assigned', quantity: 40, headOffice: 20, assigned: 0, deployed: 20, price: 185000, brand: 'Dell', bazaar: 'Township Bazaar'),
     one(id: 'IT-LAP-002', name: 'HP ProBook 450 G9', category: 'Laptop', status: 'Available', quantity: 25, headOffice: 25, assigned: 0, deployed: 0, price: 165000, brand: 'HP'),
     one(id: 'IT-LAP-003', name: 'Lenovo ThinkPad E14', category: 'Laptop', status: 'Assigned', quantity: 18, headOffice: 0, assigned: 18, deployed: 0, price: 158000, brand: 'Lenovo'),
-    one(id: 'IT-MON-001', name: 'Dell P2422H Monitor', category: 'Monitor', status: 'Assigned', quantity: 60, headOffice: 25, assigned: 0, deployed: 35, price: 46000, brand: 'Dell'),
+    one(id: 'IT-MON-001', name: 'Dell P2422H Monitor', category: 'Monitor', status: 'Assigned', quantity: 60, headOffice: 25, assigned: 0, deployed: 35, price: 46000, brand: 'Dell', bazaar: 'Gulberg Bazaar'),
     one(id: 'IT-MON-002', name: 'HP E24 G5 Monitor', category: 'Monitor', status: 'Available', quantity: 35, headOffice: 35, assigned: 0, deployed: 0, price: 51000, brand: 'HP'),
-    one(id: 'IT-PRN-001', name: 'HP LaserJet Pro M404dn', category: 'Printer', status: 'Assigned', quantity: 12, headOffice: 8, assigned: 0, deployed: 4, price: 78000, brand: 'HP'),
+    one(id: 'IT-PRN-001', name: 'HP LaserJet Pro M404dn', category: 'Printer', status: 'Assigned', quantity: 12, headOffice: 8, assigned: 0, deployed: 4, price: 78000, brand: 'HP', bazaar: 'Model Town Bazaar'),
     one(id: 'IT-PRN-002', name: 'Epson EcoTank L3250', category: 'Printer', status: 'Damaged', quantity: 8, headOffice: 8, assigned: 0, deployed: 0, price: 62000, condition: 'Poor', brand: 'Epson'),
     one(id: 'IT-DSK-001', name: 'Dell OptiPlex 7090', category: 'Desktop', status: 'Available', quantity: 30, headOffice: 30, assigned: 0, deployed: 0, price: 145000, brand: 'Dell'),
     one(id: 'IT-DSK-002', name: 'HP EliteDesk 800 G6', category: 'Desktop', status: 'Disposed', quantity: 11, headOffice: 11, assigned: 0, deployed: 0, price: 152000, condition: 'Poor', brand: 'HP'),
@@ -77,7 +97,7 @@ List<AssetModel> demoAssets() {
     one(id: 'IT-SWT-002', name: 'TP-Link TL-SG1024D', category: 'Switch', status: 'Assigned', quantity: 20, headOffice: 14, assigned: 0, deployed: 6, price: 98000, brand: 'TP-Link'),
     one(id: 'IT-UPS-001', name: 'APC Smart-UPS 1500VA', category: 'UPS', status: 'Under Maintenance', quantity: 14, headOffice: 14, assigned: 0, deployed: 0, price: 115000, brand: 'APC'),
     one(id: 'IT-UPS-002', name: 'Vertiv Liebert PSA5', category: 'UPS', status: 'In Repair', quantity: 9, headOffice: 9, assigned: 0, deployed: 0, price: 68000, condition: 'Fair', brand: 'Vertiv'),
-    one(id: 'IT-CAM-001', name: 'Hikvision DS-2CD2143G2', category: 'Camera', status: 'Assigned', quantity: 28, headOffice: 18, assigned: 0, deployed: 10, price: 49000, brand: 'Hikvision'),
+    one(id: 'IT-CAM-001', name: 'Hikvision DS-2CD2143G2', category: 'Camera', status: 'Assigned', quantity: 28, headOffice: 18, assigned: 0, deployed: 10, price: 49000, brand: 'Hikvision', bazaar: 'Multan Bazaar'),
     one(id: 'IT-CAM-002', name: 'Dahua IPC-HDW2431T', category: 'Camera', status: 'Lost', quantity: 16, headOffice: 16, assigned: 0, deployed: 0, price: 29500, brand: 'Dahua'),
     one(id: 'IT-MOB-001', name: 'Samsung Galaxy A54', category: 'Mobile', status: 'Assigned', quantity: 22, headOffice: 0, assigned: 22, deployed: 0, price: 135000, brand: 'Samsung'),
     one(id: 'IT-TAB-001', name: 'Samsung Galaxy Tab A8', category: 'Tablet', status: 'Assigned', quantity: 15, headOffice: 10, assigned: 0, deployed: 5, price: 78000, brand: 'Samsung'),
@@ -159,9 +179,32 @@ class FakeAssetProvider extends AssetProvider {
   @override
   int get disposedQuantity => _sumWithStatus('disposed');
 
+  // Record counts, which the captions under each figure quote. Without these
+  // every caption read "0 records" next to a non-zero number.
+  @override
+  int get assignedAssets =>
+      _demo.where((a) => a.calculatedAssignedQuantity > 0).length;
+
+  @override
+  int get damagedAssets => _countWithStatus('damaged');
+
+  @override
+  int get underRepairAssets =>
+      _countWithStatus('under maintenance') + _countWithStatus('in repair');
+
+  /// Head Office units that are not available. Overridden so the four donut
+  /// slices still add up to the total, as the real provider guarantees.
+  @override
+  int get unavailableAtHeadOfficeQuantity => _demo
+      .where(_isUnavailable)
+      .fold(0, (s, a) => s + a.calculatedHeadOfficeQuantity);
+
   @override
   double get totalInventoryValue =>
       _demo.fold(0.0, (s, a) => s + a.purchasePrice * a.quantity);
+
+  int _countWithStatus(String status) =>
+      _demo.where((a) => a.status.trim().toLowerCase() == status).length;
 
   int _sumWithStatus(String status) => _demo
       .where((a) => a.status.trim().toLowerCase() == status)
@@ -213,8 +256,24 @@ class FakeAuthProvider extends AuthProvider {
 }
 
 class FakeBazaarProvider extends BazaarProvider {
+  final List<BazaarModel> _demo = demoBazaars();
+
   @override
   bool get isLoading => false;
+
+  @override
+  String? get errorMessage => null;
+
+  // The counts read a private field on the real provider, so the two getters
+  // the dashboard quotes are overridden rather than the list behind them.
+  @override
+  List<BazaarModel> get bazaars => List.unmodifiable(_demo);
+
+  @override
+  int get activeBazaarCount => _demo.where((b) => b.isActive).length;
+
+  @override
+  int get inactiveBazaarCount => _demo.where((b) => !b.isActive).length;
 
   @override
   Stream<List<BazaarModel>> get bazaarStream => Stream.value(demoBazaars());
@@ -228,8 +287,22 @@ class FakeBazaarProvider extends BazaarProvider {
 }
 
 class FakeDeploymentProvider extends DeploymentProvider {
+  final List<DeploymentModel> _demo = demoDeployments();
+
   @override
   bool get isLoading => false;
+
+  @override
+  String? get error => null;
+
+  // Both are overridden because the real getters read a private field the
+  // fake never fills, not the public list above it.
+  @override
+  List<DeploymentModel> get deployments => List.unmodifiable(_demo);
+
+  @override
+  List<DeploymentModel> get activeDeployments =>
+      _demo.where((d) => d.isActive).toList(growable: false);
 
   @override
   void listenToDeployments() {}
@@ -241,6 +314,17 @@ class FakeDeploymentProvider extends DeploymentProvider {
 class FakeRequestProvider extends RequestProvider {
   @override
   bool get isLoading => false;
+
+  @override
+  String? get errorMessage => null;
+
+  // A plausible queue, so the pending badge on the Requests shortcut is
+  // actually exercised by the screenshot.
+  @override
+  int get pendingRequests => 6;
+
+  @override
+  int get totalRequests => 31;
 }
 
 class FakeNotificationProvider extends NotificationProvider {
@@ -272,6 +356,112 @@ class FakeThemeProvider extends ThemeProvider {
 // The screens start Firestore listeners as soon as they build. The fakes below
 // already hold the data, so every listen call is a no-op - without this a
 // screenshot test fails on a channel error from a query nobody needs.
+
+/// Stock movements, so the web dashboard's bar chart and its timeline have
+/// something to draw. Dated from a fixed day rather than from `now`, so a
+/// screenshot taken tomorrow is identical to one taken today.
+List<DeploymentModel> demoDeployments() {
+  final base = DateTime(2026, 10, 9, 11, 20);
+
+  DeploymentModel one({
+    required String id,
+    required String asset,
+    required String action,
+    required String from,
+    required String to,
+    required int quantity,
+    required int hoursAgo,
+    String status = 'Active',
+  }) {
+    final when = base.subtract(Duration(hours: hoursAgo));
+
+    return DeploymentModel(
+      id: id,
+      assetDocumentId: 'a-$id',
+      assetId: 'PSBA-$id',
+      assetName: asset,
+      action: action,
+      fromLocation: from,
+      toLocation: to,
+      toBazaarName: to == 'Head Office' ? null : to,
+      fromBazaarName: from == 'Head Office' ? null : from,
+      quantity: quantity,
+      originalQuantity: quantity,
+      sentBy: 'demo-uid',
+      sentByName: 'Hussnain Atif',
+      deploymentDate: when,
+      status: status,
+      createdAt: when,
+    );
+  }
+
+  return [
+    one(
+      id: '1041',
+      asset: 'Dell Latitude 5440',
+      action: 'Deploy',
+      from: 'Head Office',
+      to: 'Township Bazaar',
+      quantity: 14,
+      hoursAgo: 2,
+    ),
+    one(
+      id: '1040',
+      asset: 'HP LaserJet Pro M404',
+      action: 'Deploy',
+      from: 'Head Office',
+      to: 'Model Town Bazaar',
+      quantity: 9,
+      hoursAgo: 7,
+    ),
+    one(
+      id: '1039',
+      asset: 'Cisco Catalyst 2960',
+      action: 'Transfer',
+      from: 'Township Bazaar',
+      to: 'Gulberg Bazaar',
+      quantity: 6,
+      hoursAgo: 26,
+    ),
+    one(
+      id: '1038',
+      asset: 'APC Smart-UPS 1500VA',
+      action: 'Deploy',
+      from: 'Head Office',
+      to: 'Faisalabad Bazaar',
+      quantity: 11,
+      hoursAgo: 49,
+    ),
+    one(
+      id: '1037',
+      asset: 'Lenovo ThinkCentre M70q',
+      action: 'Deploy',
+      from: 'Head Office',
+      to: 'Gulberg Bazaar',
+      quantity: 8,
+      hoursAgo: 72,
+    ),
+    one(
+      id: '1036',
+      asset: 'Hikvision DS-2CD2143',
+      action: 'Deploy',
+      from: 'Head Office',
+      to: 'Multan Bazaar',
+      quantity: 12,
+      hoursAgo: 96,
+    ),
+    one(
+      id: '1035',
+      asset: 'Epson EB-X51 Projector',
+      action: 'Return',
+      from: 'Model Town Bazaar',
+      to: 'Head Office',
+      quantity: 2,
+      hoursAgo: 120,
+      status: 'Returned',
+    ),
+  ];
+}
 
 /// The Bazaars the demo inventory is spread across.
 List<BazaarModel> demoBazaars() => const [

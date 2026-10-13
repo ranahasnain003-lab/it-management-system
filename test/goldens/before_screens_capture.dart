@@ -1,12 +1,19 @@
 /// Writes "before" screenshots of the screens the redesign will touch.
 ///
-/// Run on purpose, because it writes files:
+/// Deliberately NOT named `*_test.dart`, so `flutter test` does not collect
+/// it. The images under `test/goldens/before/` are a record of how the app
+/// looked before the redesign; comparing them against today's code would fail
+/// by design, and more loudly with every screen that gets rebuilt. The suite
+/// is a capture tool, not a regression test. The "after" suite next door is
+/// the regression test.
 ///
-///   flutter test test/goldens/before_screens_test.dart --update-goldens
+/// Run on purpose, against the code as it was, because it writes files:
 ///
-/// Rendered in Roboto, which is what the app falls back to today - it bundles
-/// no font of its own. Using the new Inter here would quietly flatter the
-/// "before".
+///   flutter test test/goldens/before_screens_capture.dart --update-goldens
+///
+/// Rendered in Roboto and against the old blue seed, which is what the app
+/// used before the brand palette. Using the new Inter and green here would
+/// quietly flatter the "before".
 library;
 
 import 'package:firebase_core/firebase_core.dart';
@@ -26,6 +33,7 @@ import 'package:it_management_system/core/providers/theme_provider.dart';
 import 'package:it_management_system/core/providers/user_provider.dart';
 import 'package:it_management_system/core/theme/app_motion.dart';
 import 'package:it_management_system/core/theme/app_theme.dart';
+import 'package:it_management_system/web/pages/dashboard_page.dart';
 import 'package:it_management_system/web/pages/web_login_page.dart';
 
 import 'support/fake_providers.dart';
@@ -123,5 +131,16 @@ void main() {
     'dashboard_mobile',
     () => const DashboardScreen(),
     only: const [GoldenDevice.phone],
+  );
+
+  // The web dashboard, which is its own page rather than a wide layout of the
+  // Android one - so it has to be shot separately or half the redesign is
+  // never looked at.
+  screen(
+    'dashboard_web',
+    // The shell supplies the Scaffold in the real app; without one here every
+    // Text renders with Flutter's missing-Material debug marks.
+    () => const Scaffold(body: WebDashboardPage()),
+    only: const [GoldenDevice.desktop],
   );
 }
