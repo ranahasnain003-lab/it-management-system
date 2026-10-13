@@ -15,6 +15,7 @@ import '../../widgets/animated_gradient_background.dart';
 import '../../widgets/motion/count_up.dart';
 import '../../widgets/motion/entrance.dart';
 import '../../widgets/motion/press_scale.dart';
+import '../../providers/bazaar_provider.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -35,9 +36,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// a Firestore update mid-build cannot start it again.
   late final bool _playEntrance = !_entrancePlayedThisSession;
 
-  // Bazaar master list (for the "All Bazaars" count). Created once.
-  late final Stream<List<BazaarModel>> _bazaarStream = BazaarService()
-      .getBazaars();
+  // Bazaar master list (for the "All Bazaars" count). Opened once.
+  //
+  // Taken from BazaarProvider rather than by constructing BazaarService here:
+  // the same service and the same query, but reached through the provider the
+  // screen is already given. Building the service inline made this the one
+  // piece of dashboard data that could not be substituted, so the screen could
+  // not be rendered without a live Firestore.
+  Stream<List<BazaarModel>>? _bazaarStream;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bazaarStream ??= context.read<BazaarProvider>().bazaarStream;
+  }
 
   // Account/role/admin scope the inventory listener was started for. When the
   // live profile changes (role changed, user reassigned to another Admin),

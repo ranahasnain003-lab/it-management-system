@@ -68,6 +68,11 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
+  # Lets the golden screenshots swap in a fake Firebase platform, so real
+  # screens can be rendered without a Firebase project and without mocking
+  # Pigeon channel names that change between releases.
+  firebase_core_platform_interface: ^8.1.1
+
   flutter_lints: ^6.0.0
 
   # Tests: in-memory Firestore for service/inventory unit tests, and
