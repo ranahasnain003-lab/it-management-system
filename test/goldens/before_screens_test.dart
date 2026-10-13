@@ -33,8 +33,17 @@ import 'support/golden_harness.dart';
 
 /// Wraps [child] in the providers, theme and MotionScope the real app gives
 /// it, so what is rendered is the screen itself rather than a mock-up of it.
+/// The palette the app had before the redesign.
+///
+/// Pinned so these shots stay a reproducible record of the old design rather
+/// than drifting as the theme changes underneath them. Roboto is forced the
+/// same way, by withGoldenFont below.
+const Color _legacyBlue = Color(0xFF2457D6);
+
 Widget _hosted(Widget child, {required bool dark, required String fontFamily}) {
-  final theme = dark ? AppTheme.dark() : AppTheme.light();
+  final theme = dark
+      ? AppTheme.dark(seedColor: _legacyBlue)
+      : AppTheme.light(seedColor: _legacyBlue);
 
   return MultiProvider(
     providers: [
@@ -83,7 +92,9 @@ void main() {
             folder: 'before',
             name: name,
             device: device,
-            theme: dark ? AppTheme.dark() : AppTheme.light(),
+            theme: dark
+                ? AppTheme.dark(seedColor: _legacyBlue)
+                : AppTheme.light(seedColor: _legacyBlue),
             dark: dark,
             child: _hosted(build(), dark: dark, fontFamily: 'Roboto'),
           );

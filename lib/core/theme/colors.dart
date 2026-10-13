@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'app_brand.dart';
+
 /// Brand and semantic colours shared by the Android app and the web
 /// dashboard. Surfaces and text colours come from the active [ColorScheme]
 /// (built in app_theme.dart) so light and dark mode stay consistent; the
@@ -7,10 +9,14 @@ import 'package:flutter/material.dart';
 class AppColors {
   AppColors._();
 
-  /// Brand blue (the "Default" accent).
-  static const Color primary = Color(0xFF2457D6);
+  /// The brand colour, sampled from the PSBA mark in
+  /// assets/branding/psba_mark.png - it covers 44,512 of the logo's opaque
+  /// pixels. The app previously used a blue here, so every button and accent
+  /// in the product was a colour the brand does not use.
+  static const Color primary = AppBrand.green;
 
-  static const Color secondary = Color(0xFF0F766E);
+  /// The supporting colour, for emphasis that is not the primary action.
+  static const Color secondary = AppBrand.gold;
 
   // Semantic tones.
   static const Color success = Color(0xFF16A34A);

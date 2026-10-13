@@ -93,3 +93,11 @@ flutter:
 
   assets:
     - assets/branding/
+
+  # Bundled, not downloaded at runtime: the app must look the same offline, on
+  # first launch, and on a device with no network. Inter is OFL licensed; the
+  # licence travels with it in assets/fonts/Inter-OFL.txt.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Variable.ttf

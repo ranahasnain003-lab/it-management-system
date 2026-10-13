@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'app_page_transition.dart';
+import 'app_brand.dart';
 import 'colors.dart';
 
 /// One design system for the Android app and the web dashboard.
@@ -61,8 +62,12 @@ class AppTheme {
     }
 
     return base.copyWith(
-      primary: Color.lerp(seed, Colors.white, 0.22),
-      onPrimary: Colors.white,
+      // Lightened well past the seed, with dark text on it, which is the
+      // standard dark-theme pairing. At the old 0.22 the brand green gave
+      // white text only 4.07:1 - below AA. At 0.40 the near-black below
+      // reaches 6.81:1. Measured, not guessed; brand_palette_test checks it.
+      primary: Color.lerp(seed, Colors.white, 0.40),
+      onPrimary: const Color(0xFF04120A),
       surface: AppColors.darkSurface,
       onSurface: AppColors.darkText,
       onSurfaceVariant: AppColors.darkTextMuted,
@@ -99,11 +104,19 @@ class AppTheme {
     final radiusMd = BorderRadius.circular(AppSpacing.radiusMd);
     final radiusLg = BorderRadius.circular(AppSpacing.radiusLg);
 
+    // Inter everywhere. Applied to the base typography rather than per style,
+    // so component themes that build their own TextStyle inherit it too - the
+    // app previously had no bundled font at all and rendered in whatever the
+    // platform supplied, so the same build looked different on two devices.
     final baseText =
         (isDark
                 ? Typography.material2021().white
                 : Typography.material2021().black)
-            .apply(bodyColor: scheme.onSurface, displayColor: scheme.onSurface);
+            .apply(
+              fontFamily: AppType.family,
+              bodyColor: scheme.onSurface,
+              displayColor: scheme.onSurface,
+            );
 
     final textTheme = baseText.copyWith(
       headlineMedium: baseText.headlineMedium?.copyWith(
@@ -149,7 +162,11 @@ class AppTheme {
     );
 
     final buttonShape = RoundedRectangleBorder(borderRadius: radiusMd);
-    const buttonText = TextStyle(fontSize: 14, fontWeight: FontWeight.w600);
+    const buttonText = TextStyle(
+      fontFamily: AppType.family,
+      fontSize: 14,
+      fontWeight: FontWeight.w600,
+    );
 
     OutlineInputBorder inputBorder(Color color, [double width = 1]) {
       return OutlineInputBorder(
