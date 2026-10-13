@@ -3,7 +3,11 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
+import '../../../providers/theme_provider.dart';
+import '../../../theme/app_motion.dart';
+import '../../../widgets/motion/waiting_dots.dart';
 import '../local_ai_models.dart';
 
 class LocalAiMessageBubble extends StatelessWidget {
@@ -17,6 +21,10 @@ class LocalAiMessageBubble extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final isUser = message.isUser;
     final failed = message.status == 'error';
+    final animate = AppMotion.enabled(
+      context,
+      enabledInSettings: context.watch<ThemeProvider>().animationsEnabled,
+    );
 
     final background = isUser
         ? colors.primary
@@ -50,36 +58,47 @@ class LocalAiMessageBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (message.content.isNotEmpty)
-              SelectableText(
-                message.content,
-                style: text.bodyMedium?.copyWith(color: foreground, height: 1.4),
-              ),
-
-            // An answer that is still arriving, with nothing written yet. The
-            // model can take a while to start on CPU, and the inventory data
-            // is read before that, so silence here would read as a failure.
-            if (message.isStreaming && message.content.isEmpty)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox(
-                    width: 13,
-                    height: 13,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: foreground,
+            // Waiting, then the answer. Swapped through one AnimatedSwitcher
+            // so the dots fade out as the first words fade in, rather than
+            // the dots vanishing and text appearing abruptly.
+            //
+            // The keys are what make this happen exactly once. Every later
+            // delta keeps the 'answer' key, so the switcher updates the text
+            // in place instead of re-running the fade on each token - which
+            // would make a streaming answer flicker the whole way through.
+            AnimatedSwitcher(
+              duration: animate ? AppMotion.short : Duration.zero,
+              switchInCurve: AppMotion.enter,
+              switchOutCurve: AppMotion.exit,
+              child: message.isStreaming && message.content.isEmpty
+                  ? Row(
+                      key: const ValueKey('waiting'),
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // The model runs on a laptop, and the inventory is
+                        // read before it starts, so silence here would read
+                        // as a failure.
+                        WaitingDots(animate: animate, color: foreground),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            message.progress ?? 'Thinking…',
+                            style: text.bodySmall?.copyWith(color: foreground),
+                          ),
+                        ),
+                      ],
+                    )
+                  : message.content.isEmpty
+                  ? const SizedBox.shrink(key: ValueKey('empty'))
+                  : SelectableText(
+                      message.content,
+                      key: const ValueKey('answer'),
+                      style: text.bodyMedium?.copyWith(
+                        color: foreground,
+                        height: 1.4,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Flexible(
-                    child: Text(
-                      message.progress ?? 'Thinking…',
-                      style: text.bodySmall?.copyWith(color: foreground),
-                    ),
-                  ),
-                ],
-              ),
+            ),
 
             if (message.wasStopped) ...[
               if (message.content.isNotEmpty) const SizedBox(height: 6),
