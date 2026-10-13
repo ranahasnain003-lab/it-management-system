@@ -586,6 +586,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ),
+
+            const Divider(height: AppSpacing.lg * 2),
+
+            // Animations are on by default. Turning them off renders every
+            // animated widget in its finished state straight away, which keeps
+            // the app usable on an older phone and suits anyone who finds
+            // movement distracting. The device's own "reduce motion" setting
+            // is honoured separately and always wins.
+            Row(
+              children: [
+                _buildIconTile(context, Icons.auto_awesome_motion_outlined),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: _buildRowText(
+                    context,
+                    'Animations',
+                    'Gentle motion when screens and cards appear',
+                  ),
+                ),
+                Switch(
+                  value: themeProvider.animationsEnabled,
+                  onChanged: (value) async {
+                    try {
+                      await context
+                          .read<ThemeProvider>()
+                          .setAnimationsEnabled(value);
+
+                      if (!mounted) {
+                        return;
+                      }
+
+                      _showMessage(
+                        value ? 'Animations turned on.' : 'Animations turned off.',
+                      );
+                    } catch (_) {
+                      if (!mounted) {
+                        return;
+                      }
+
+                      _showMessage('Unable to save the animation preference.');
+                    }
+                  },
+                ),
+              ],
+            ),
           ],
         ),
       ),

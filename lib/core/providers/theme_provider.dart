@@ -27,6 +27,35 @@ class ThemeProvider extends ChangeNotifier {
   }
 
   // ================================================================
+  // ANIMATIONS
+  // ================================================================
+
+  static const String _animationsKey = 'app_animations_enabled';
+
+  bool _animationsEnabled = true;
+
+  /// Whether the app's animations run.
+  ///
+  /// On by default. Turning it off makes every animated widget render its
+  /// finished state immediately - not a quicker animation, none at all - which
+  /// is what someone on an older phone, or anyone who simply finds motion
+  /// distracting, needs. The platform's own "reduce motion" setting is honoured
+  /// separately and always wins; see [AppMotion.enabled].
+  bool get animationsEnabled => _animationsEnabled;
+
+  Future<void> setAnimationsEnabled(bool enabled) async {
+    if (_animationsEnabled == enabled) {
+      return;
+    }
+
+    _animationsEnabled = enabled;
+    notifyListeners();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_animationsKey, enabled);
+  }
+
+  // ================================================================
   // ACCENT COLOUR
   // ================================================================
 
@@ -72,6 +101,9 @@ class ThemeProvider extends ChangeNotifier {
 
   Future<void> loadTheme() async {
     final prefs = await SharedPreferences.getInstance();
+
+    // Absent means never chosen, which is on - the default.
+    _animationsEnabled = prefs.getBool(_animationsKey) ?? true;
 
     final savedAccent = prefs.getString(_accentKey);
 
