@@ -49,3 +49,6 @@ app.*.map.json
 
 # OTA release payloads: a 60 MB APK is a build artifact, never source.
 /ota_release/
+
+# Transient diff output written when a golden comparison fails.
+test/goldens/failures/
