@@ -110,10 +110,17 @@ class _AnimatedGradientBackgroundState extends State<AnimatedGradientBackground>
                 // Null when still: the painter then draws the phase-zero
                 // composition once and is never asked again.
                 animation: _controller,
-                // Two or three related colours only. Tertiary is the quietest
-                // of the three in this theme, so it carries the largest blob.
+                // Three related colours from the theme and nothing else. At
+                // the rich level each blob travels between them over the
+                // loop, which is what gives the background its slow change of
+                // hue without ever introducing a colour the theme does not
+                // already use.
                 colors: [scheme.primary, scheme.tertiary, scheme.secondary],
                 opacity: opacity,
+                drift: motion.blobDrift,
+                blur: motion.blobBlur,
+                count: motion.blobCount,
+                colourShift: motion.blobColourShift,
               ),
             ),
           ),
@@ -130,6 +137,10 @@ class _BlobPainter extends CustomPainter {
     required this.animation,
     required this.colors,
     required this.opacity,
+    required this.drift,
+    required this.blur,
+    required this.count,
+    required this.colourShift,
   }) : super(repaint: animation);
 
   /// Drives repainting. Null means a single still frame.
@@ -138,33 +149,30 @@ class _BlobPainter extends CustomPainter {
   final List<Color> colors;
   final double opacity;
 
+  /// How far a blob wanders, as a fraction of the screen.
+  final double drift;
+
+  /// Blur sigma as a fraction of the shortest side. Lower is both sharper and
+  /// cheaper, which is why the rich level blurs LESS rather than more.
+  final double blur;
+
+  /// How many blobs to draw.
+  final int count;
+
+  /// How far a blob's colour travels towards the next one, 0 to 1.
+  final double colourShift;
+
   /// Each blob's resting place, size, and how far it wanders, as fractions of
   /// the shortest side so the composition holds on a phone and on a desktop.
+  /// The drift values are unit weights; the level's own [drift] scales them,
+  /// so one number moves the whole composition.
   static const List<_Blob> _blobs = [
-    _Blob(
-      cx: 0.18,
-      cy: 0.16,
-      radius: 0.62,
-      driftX: 0.07,
-      driftY: 0.05,
-      phase: 0.0,
-    ),
-    _Blob(
-      cx: 0.86,
-      cy: 0.30,
-      radius: 0.52,
-      driftX: 0.05,
-      driftY: 0.07,
-      phase: 0.37,
-    ),
-    _Blob(
-      cx: 0.52,
-      cy: 0.88,
-      radius: 0.72,
-      driftX: 0.06,
-      driftY: 0.04,
-      phase: 0.71,
-    ),
+    _Blob(cx: 0.18, cy: 0.16, radius: 0.62, wx: 1.0, wy: 0.75, phase: 0.0),
+    _Blob(cx: 0.86, cy: 0.30, radius: 0.52, wx: 0.75, wy: 1.0, phase: 0.37),
+    _Blob(cx: 0.52, cy: 0.88, radius: 0.72, wx: 0.9, wy: 0.6, phase: 0.71),
+    // The fourth is drawn only at the rich level, and is the smallest and
+    // fastest-travelling of the four so the composition never looks static.
+    _Blob(cx: 0.72, cy: 0.62, radius: 0.44, wx: 1.1, wy: 0.9, phase: 0.18),
   ];
 
   @override
@@ -172,28 +180,30 @@ class _BlobPainter extends CustomPainter {
     final t = animation?.value ?? 0.0;
     final shortest = math.min(size.width, size.height);
 
-    // One layer for all three blobs, blurred as a whole. Blurring the layer
-    // rather than each circle is what removes every hard edge where two blobs
-    // overlap, and it is one filter pass instead of three.
+    // One layer for every blob, blurred as a whole. Blurring the layer rather
+    // than each circle is what removes every hard edge where two blobs
+    // overlap, and it is one filter pass instead of four.
     canvas.saveLayer(
       Offset.zero & size,
       Paint()
         ..imageFilter = ui.ImageFilter.blur(
-          sigmaX: shortest * 0.22,
-          sigmaY: shortest * 0.22,
+          sigmaX: shortest * blur,
+          sigmaY: shortest * blur,
           tileMode: TileMode.decal,
         ),
     );
 
-    for (var i = 0; i < _blobs.length; i++) {
+    final drawn = math.min(count, _blobs.length);
+
+    for (var i = 0; i < drawn; i++) {
       final blob = _blobs[i];
 
       // Sine and cosine of the phase: continuous, and identical at t=0 and
       // t=1, so the loop never jumps. Different multiples per axis give each
       // blob an unhurried path that does not simply retrace itself.
       final angle = (t + blob.phase) * 2 * math.pi;
-      final dx = math.sin(angle) * blob.driftX;
-      final dy = math.cos(angle * 0.8) * blob.driftY;
+      final dx = math.sin(angle) * blob.wx * drift;
+      final dy = math.cos(angle * 0.8) * blob.wy * drift;
 
       final center = Offset(
         (blob.cx + dx) * size.width,
@@ -203,20 +213,44 @@ class _BlobPainter extends CustomPainter {
       canvas.drawCircle(
         center,
         blob.radius * shortest,
-        Paint()..color = colors[i % colors.length].withValues(alpha: opacity),
+        Paint()..color = _colourFor(i, t).withValues(alpha: opacity),
       );
     }
 
     canvas.restore();
   }
 
+  /// The colour of blob [i] at phase [t].
+  ///
+  /// Each blob drifts from its own colour towards the next one in the list and
+  /// back again over the loop. The palette is only ever the theme's primary,
+  /// tertiary and secondary, so however far it travels the result is always a
+  /// colour the app already uses - never a hue invented by interpolation into
+  /// something unrelated.
+  Color _colourFor(int i, double t) {
+    final base = colors[i % colors.length];
+    if (colourShift <= 0) return base;
+
+    final next = colors[(i + 1) % colors.length];
+
+    // A cosine, so the colour arrives back exactly where it began and the loop
+    // stays seamless in hue as well as in position.
+    final wave = (1 - math.cos((t + _blobs[i].phase) * 2 * math.pi)) / 2;
+
+    return Color.lerp(base, next, wave * colourShift) ?? base;
+  }
+
   @override
   bool shouldRepaint(_BlobPainter oldDelegate) {
-    // The animation repaints through `repaint:`; this only catches a theme
-    // change, where the colours or the opacity are genuinely different.
+    // The animation repaints through `repaint:`; this only catches a theme or
+    // level change, where the composition is genuinely different.
     return oldDelegate.opacity != opacity ||
         !listEquals(oldDelegate.colors, colors) ||
-        oldDelegate.animation != animation;
+        oldDelegate.animation != animation ||
+        oldDelegate.drift != drift ||
+        oldDelegate.blur != blur ||
+        oldDelegate.count != count ||
+        oldDelegate.colourShift != colourShift;
   }
 }
 
@@ -226,16 +260,18 @@ class _Blob {
     required this.cx,
     required this.cy,
     required this.radius,
-    required this.driftX,
-    required this.driftY,
+    required this.wx,
+    required this.wy,
     required this.phase,
   });
 
   final double cx;
   final double cy;
   final double radius;
-  final double driftX;
-  final double driftY;
+
+  /// Relative drift weights, scaled by the level's own drift value.
+  final double wx;
+  final double wy;
 
   /// Offset into the shared loop, so the blobs do not move in unison.
   final double phase;

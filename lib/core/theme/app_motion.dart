@@ -210,6 +210,9 @@ class AppMotion {
   /// loop, 0 to 1. Zero keeps each blob a single colour.
   final double blobColourShift;
 
+  /// Whether blobs change colour over the loop at all.
+  bool get colourShiftEnabled => blobColourShift > 0;
+
   // --- opacity ---------------------------------------------------------------
 
   /// How far the signing-in logo fades at the bottom of its breath.

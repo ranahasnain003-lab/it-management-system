@@ -162,6 +162,8 @@ class _SuccessOverlayState extends State<_SuccessOverlay>
                   progress: _draw,
                   color: colors.primary,
                   curve: AppMotion.of(context).enter,
+                  onColor: colors.onPrimary,
+                  filled: AppMotion.of(context).level == AnimationLevel.rich,
                 ),
               ),
             ),
@@ -178,6 +180,8 @@ class _CheckPainter extends CustomPainter {
     required this.progress,
     required this.color,
     required this.curve,
+    required this.onColor,
+    required this.filled,
   }) : super(repaint: progress);
 
   final Animation<double> progress;
@@ -187,6 +191,13 @@ class _CheckPainter extends CustomPainter {
   /// keeping it pure is what lets it be driven straight from `repaint:`.
   final Curve curve;
 
+  /// The colour the tick is drawn in when the disc is filled.
+  final Color onColor;
+
+  /// Rich: a filled disc with a white tick and one expanding ring.
+  /// Subtle: the original outlined ring with a coloured tick.
+  final bool filled;
+
   /// The ring owns the first 55% of the time, the tick the rest. The ring is
   /// the slower of the two because it travels much further.
   static const double _ringShare = 0.55;
@@ -195,18 +206,36 @@ class _CheckPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final t = curve.transform(progress.value);
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = math.min(size.width, size.height) * 0.30;
+    // 0.26 rather than 0.30 so the expanding ring, which reaches 1.6x, still
+    // fits inside the card instead of being clipped at its edges.
+    final radius = math.min(size.width, size.height) * 0.26;
 
-    final stroke = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.2
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    // --- the ring -----------------------------------------------------------
     final ringProgress = (t / _ringShare).clamp(0.0, 1.0);
-    if (ringProgress > 0) {
+
+    // --- the expanding ring -------------------------------------------------
+    //
+    // Rich only. One ring travels outwards and fades as it goes, which is what
+    // makes the mark feel like an event rather than an icon appearing. It is a
+    // stroked circle, not a glow: the design rules glow out.
+    if (filled && t > 0.1) {
+      final ripple = ((t - 0.1) / 0.9).clamp(0.0, 1.0);
+
+      canvas.drawCircle(
+        center,
+        radius * (1.0 + ripple * 0.6),
+        Paint()
+          ..color = color.withValues(alpha: 0.28 * (1 - ripple))
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.4,
+      );
+    }
+
+    // --- the disc, or the drawn ring ----------------------------------------
+    if (filled) {
+      // The circle fills with the primary colour and the tick is cut out of it
+      // in white, which reads far more strongly than an outline.
+      canvas.drawCircle(center, radius * ringProgress, Paint()..color = color);
+    } else if (ringProgress > 0) {
       canvas.drawArc(
         Rect.fromCircle(center: center, radius: radius),
         // From the top, clockwise, so it reads as being drawn rather than
@@ -214,9 +243,21 @@ class _CheckPainter extends CustomPainter {
         -math.pi / 2,
         2 * math.pi * ringProgress,
         false,
-        stroke,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.2
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
       );
     }
+
+    final stroke = Paint()
+      ..color = filled ? onColor : color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = filled ? 3.6 : 3.2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
 
     // --- the tick -----------------------------------------------------------
     final tickProgress = ((t - _ringShare) / (1 - _ringShare)).clamp(0.0, 1.0);
@@ -254,5 +295,7 @@ class _CheckPainter extends CustomPainter {
   bool shouldRepaint(_CheckPainter oldDelegate) =>
       oldDelegate.color != color ||
       oldDelegate.progress != progress ||
-      oldDelegate.curve != curve;
+      oldDelegate.curve != curve ||
+      oldDelegate.onColor != onColor ||
+      oldDelegate.filled != filled;
 }

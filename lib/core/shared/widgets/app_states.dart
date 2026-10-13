@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 import '../../theme/app_motion.dart';
 import '../../theme/colors.dart';
 import '../../widgets/motion/gentle_float.dart';
+import '../../widgets/motion/pulsing_halo.dart';
 import '../../widgets/motion/shimmer.dart';
 
 // =============================================================================
@@ -366,18 +367,24 @@ class AppEmptyState extends StatelessWidget {
             // screen they expected to have content.
             GentleFloat(
               animate: AppMotion.enabled(context),
-              child: Container(
-                padding: EdgeInsets.all(
-                  compact ? AppSpacing.md : AppSpacing.lg,
-                ),
-                decoration: BoxDecoration(
-                  color: colors.surfaceContainerHighest.withValues(alpha: 0.6),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  icon,
-                  size: compact ? 26 : 34,
-                  color: colors.onSurfaceVariant,
+              child: PulsingHalo(
+                animate: AppMotion.enabled(context),
+                color: colors.primary,
+                child: Container(
+                  padding: EdgeInsets.all(
+                    compact ? AppSpacing.md : AppSpacing.lg,
+                  ),
+                  decoration: BoxDecoration(
+                    color: colors.surfaceContainerHighest.withValues(
+                      alpha: 0.6,
+                    ),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    icon,
+                    size: compact ? 26 : 34,
+                    color: colors.onSurfaceVariant,
+                  ),
                 ),
               ),
             ),

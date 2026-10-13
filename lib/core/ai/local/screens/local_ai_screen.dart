@@ -13,6 +13,8 @@ import '../local_ai_provider.dart';
 import '../widgets/local_ai_composer.dart';
 import '../widgets/local_ai_message_bubble.dart';
 import '../widgets/local_ai_status_banner.dart';
+import '../../../theme/app_motion.dart';
+import '../../../widgets/motion/entrance.dart';
 
 class LocalAiScreen extends StatefulWidget {
   const LocalAiScreen({super.key});
@@ -177,8 +179,29 @@ class _LocalAiScreenState extends State<LocalAiScreen>
                       controller: _scroll,
                       padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
                       itemCount: messages.length,
-                      itemBuilder: (context, index) =>
-                          LocalAiMessageBubble(message: messages[index]),
+                      itemBuilder: (context, index) {
+                        // Only the newest message arrives; the ones already on
+                        // screen are built plainly. Keying on the message id
+                        // means the entrance belongs to that message and does
+                        // not re-run as the list grows around it, and
+                        // scrolling back through a long conversation animates
+                        // nothing.
+                        final isNewest = index == messages.length - 1;
+
+                        final bubble = LocalAiMessageBubble(
+                          message: messages[index],
+                        );
+
+                        if (!isNewest) return bubble;
+
+                        return EntranceFadeSlide(
+                          key: ValueKey('enter-${messages[index].id}'),
+                          animate: AppMotion.enabled(context),
+                          offset: AppMotion.of(context).slideList,
+                          duration: AppMotion.of(context).short,
+                          child: bubble,
+                        );
+                      },
                     ),
             ),
             LocalAiComposer(
@@ -244,5 +267,5 @@ class _EmptyState extends StatelessWidget {
         ),
       ),
     );
-  } 
+  }
 }

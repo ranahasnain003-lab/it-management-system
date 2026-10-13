@@ -14,6 +14,7 @@ import '../../theme/app_motion.dart';
 import '../../widgets/animated_gradient_background.dart';
 import '../../widgets/motion/count_up.dart';
 import '../../widgets/motion/entrance.dart';
+import '../../widgets/motion/press_scale.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -830,10 +831,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
             return EntranceFadeSlide(
               animate: animateEntrance,
-              // 50ms apart, so the cards arrive as a sequence rather than as
-              // a block, and the eye is led across the row.
+              // Staggered, so the cards arrive as a sequence rather than as a
+              // block, and the eye is led across the row.
               delay: motion.staggerCard * index,
               offset: motion.slideSmall,
+              scaleFrom: motion.cardEntranceScale,
+              // The one place an overshoot is allowed. easeOutBack at the
+              // rich level, plain easeOutCubic at the subtle one.
+              curve: motion.cardEntrance,
               child: _buildStatCard(
                 context,
                 cards[index],
@@ -859,110 +864,117 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // whole grid. Clipping is what keeps the accent bar and the ripple inside
     // the card's rounded corners.
     return RepaintBoundary(
-      child: Card(
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: data.enabled
-              ? () {
-                  // ==================================================
-                  // ALL BAZAARS -> Bazaar Master
-                  // ==================================================
-                  if (data.filter == 'All Bazaars') {
-                    context.push('/locations');
-                    return;
-                  }
+      // Scales a little on press, and on the web lifts on hover. Wrapped
+      // outside the Card so the shadow belongs to the whole tile; the InkWell
+      // inside still gives the ripple, so touch feedback is unchanged.
+      child: PressScale(
+        animate: AppMotion.enabled(context) && data.enabled,
+        borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+        child: Card(
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: data.enabled
+                ? () {
+                    // ==================================================
+                    // ALL BAZAARS -> Bazaar Master
+                    // ==================================================
+                    if (data.filter == 'All Bazaars') {
+                      context.push('/locations');
+                      return;
+                    }
 
-                  // ==================================================
-                  // STOCK AT BAZAARS -> Currently At Bazaars
-                  // ==================================================
-                  if (data.filter == 'Stock at Bazaars') {
-                    context.push('/currently-at-bazaars');
-                    return;
-                  }
+                    // ==================================================
+                    // STOCK AT BAZAARS -> Currently At Bazaars
+                    // ==================================================
+                    if (data.filter == 'Stock at Bazaars') {
+                      context.push('/currently-at-bazaars');
+                      return;
+                    }
 
-                  // Existing inventory cards continue to use
-                  // the existing Assets screen and filters.
-                  context.push('/assets', extra: data.filter);
-                }
-              : null,
-          child: Stack(
-            children: [
-              // Thin metric accent bar (matches the web stat card).
-              Positioned(
-                left: 0,
-                top: 0,
-                bottom: 0,
-                child: Container(width: 3, color: data.color),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.md + 3,
-                  AppSpacing.md + 2,
-                  AppSpacing.md,
-                  AppSpacing.md,
+                    // Existing inventory cards continue to use
+                    // the existing Assets screen and filters.
+                    context.push('/assets', extra: data.filter);
+                  }
+                : null,
+            child: Stack(
+              children: [
+                // Thin metric accent bar (matches the web stat card).
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: Container(width: 3, color: data.color),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 38,
-                          height: 38,
-                          decoration: BoxDecoration(
-                            color: AppColors.tint(data.color, brightness),
-                            borderRadius: BorderRadius.circular(
-                              AppSpacing.radiusMd,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md + 3,
+                    AppSpacing.md + 2,
+                    AppSpacing.md,
+                    AppSpacing.md,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: AppColors.tint(data.color, brightness),
+                              borderRadius: BorderRadius.circular(
+                                AppSpacing.radiusMd,
+                              ),
+                            ),
+                            child: Icon(
+                              data.icon,
+                              color: AppColors.onTint(data.color, brightness),
+                              size: 20,
                             ),
                           ),
-                          child: Icon(
-                            data.icon,
-                            color: AppColors.onTint(data.color, brightness),
-                            size: 20,
-                          ),
-                        ),
-                        const Spacer(),
-                        if (data.enabled)
-                          Icon(
-                            Icons.arrow_outward_rounded,
-                            size: 16,
-                            color: colors.onSurfaceVariant.withValues(
-                              alpha: 0.7,
+                          const Spacer(),
+                          if (data.enabled)
+                            Icon(
+                              Icons.arrow_outward_rounded,
+                              size: 16,
+                              color: colors.onSurfaceVariant.withValues(
+                                alpha: 0.7,
+                              ),
                             ),
-                          ),
-                      ],
-                    ),
-                    const Spacer(),
-                    Text(
-                      data.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        color: colors.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: _StatValue(
-                        data: data,
-                        animate: animateEntrance,
+                      const Spacer(),
+                      Text(
+                        data.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: colors.onSurface,
-                          fontSize: 24,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.5,
-                          height: 1.2,
+                          fontSize: 12.5,
+                          color: colors.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: _StatValue(
+                          data: data,
+                          animate: animateEntrance,
+                          style: TextStyle(
+                            color: colors.onSurface,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.5,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
