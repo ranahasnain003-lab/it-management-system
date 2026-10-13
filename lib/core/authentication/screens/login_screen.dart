@@ -4,7 +4,9 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../theme/app_brand.dart';
 import '../../theme/app_motion.dart';
+import '../../theme/colors.dart';
 import '../../widgets/animated_gradient_background.dart';
 import '../../widgets/motion/entrance.dart';
 import '../../widgets/motion/idle_sweep.dart';
@@ -31,28 +33,22 @@ class _LoginScreenState extends State<LoginScreen> {
     final motion = AppMotion.of(context);
 
     return Scaffold(
-      body: AnimatedGradientBackground(
-        animate: animate,
-        child: SafeArea(
-          child: AuthScrollBody(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // The logo and title arrive first.
-                EntranceFadeSlide(
-                  animate: animate,
-                  child: const AuthHeader(
-                    icon: Icons.admin_panel_settings_rounded,
-                    title: 'Welcome back',
-                    subtitle: 'Sign in to your PSBA IT Inventory account.',
-                    brandAsset: 'assets/branding/psba_mark.png',
-                  ),
-                ),
-                const SizedBox(height: 28),
+      backgroundColor: colors.surfaceContainerLowest,
+      body: Column(
+        children: [
+          // A green band carrying the brand, so the screen has a top rather
+          // than a form floating in the middle of an empty page. The drifting
+          // colour lives here, over a deep green base - the same blobs over a
+          // near-white page desaturate to a grey haze.
+          _BrandHeader(animate: animate),
 
-                // Then, 80ms later, the card they belong to.
-                ShakeOnSignal(
+          Expanded(
+            child: Transform.translate(
+              // The card rides up over the band, which ties the two together
+              // and removes the dead strip that sat between them.
+              offset: const Offset(0, -34),
+              child: AuthScrollBody(
+                child: ShakeOnSignal(
                   animate: animate,
                   signal: _refusals,
                   child: EntranceFadeSlide(
@@ -61,24 +57,15 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 22,
-                        vertical: 28,
+                        vertical: 26,
                       ),
                       decoration: BoxDecoration(
-                        // Semi-opaque, so the drifting colour behind reads as
-                        // depth without ever competing with the form.
-                        color: colors.surface.withValues(alpha: 0.86),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: colors.outlineVariant,
-                          width: 1,
+                        color: colors.surface,
+                        borderRadius: BorderRadius.circular(
+                          AppSpacing.radiusXl,
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: colors.shadow.withValues(alpha: 0.07),
-                            blurRadius: 24,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
+                        border: Border.all(color: colors.outlineVariant),
+                        boxShadow: AppShadow.card(colors.shadow),
                       ),
                       child: AuthSignInForm(
                         showHeader: false,
@@ -88,10 +75,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -364,6 +351,84 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The green band at the top of the phone sign-in screen.
+///
+/// Carries the logo and the greeting over the drifting gradient. It is a fixed
+/// height rather than a fraction of the screen so a short phone and a tall one
+/// get the same band, and the form below keeps its position.
+class _BrandHeader extends StatelessWidget {
+  const _BrandHeader({required this.animate});
+
+  final bool animate;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 252,
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [AppBrand.greenDeep, AppBrand.green],
+          ),
+        ),
+        child: AnimatedGradientBackground(
+          animate: animate,
+          // Colour over colour, so it can carry far more opacity than the
+          // default palette does over a pale page.
+          colors: const [AppBrand.greenLight, AppBrand.gold, AppBrand.teal],
+          opacityOverride: 0.30,
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 48),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  EntranceFadeSlide(
+                    animate: animate,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(AppSpacing.radiusLg),
+                      child: Image.asset(
+                        'assets/branding/psba_mark.png',
+                        width: 56,
+                        height: 56,
+                        filterQuality: FilterQuality.high,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  EntranceFadeSlide(
+                    animate: animate,
+                    delay: AppMotion.of(context).staggerLarge,
+                    child: Text(
+                      'Welcome back',
+                      style: AppType.pageTitle.copyWith(color: Colors.white),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  EntranceFadeSlide(
+                    animate: animate,
+                    delay: AppMotion.of(context).staggerLarge * 2,
+                    child: Text(
+                      'Sign in to your PSBA IT Inventory account.',
+                      style: AppType.pageSubtitle.copyWith(
+                        color: Colors.white.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

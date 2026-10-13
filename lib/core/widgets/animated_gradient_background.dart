@@ -30,6 +30,8 @@ class AnimatedGradientBackground extends StatefulWidget {
     required this.child,
     required this.animate,
     this.intensity = 1.0,
+    this.colors,
+    this.opacityOverride,
   });
 
   /// The content drawn over the background.
@@ -41,6 +43,21 @@ class AnimatedGradientBackground extends StatefulWidget {
 
   /// Scales the blob opacity, for places that want it fainter still.
   final double intensity;
+
+  /// The blob colours. Defaults to the theme's primary, tertiary and
+  /// secondary.
+  ///
+  /// Supplied explicitly by panels that sit on a strong background: the
+  /// default palette is tuned for a near-white surface, where it reads as a
+  /// soft wash, and the same colours over a deep panel disappear.
+  final List<Color>? colors;
+
+  /// Replaces the level's blob opacity outright.
+  ///
+  /// Colour over colour can carry far more opacity than colour over white
+  /// before it muddies, so a brand panel asks for its own value rather than
+  /// scaling one meant for a white page.
+  final double? opacityOverride;
 
   @override
   State<AnimatedGradientBackground> createState() =>
@@ -96,8 +113,9 @@ class _AnimatedGradientBackgroundState extends State<AnimatedGradientBackground>
     final motion = AppMotion.of(context);
 
     final opacity =
+        widget.opacityOverride ??
         (isDark ? motion.blobOpacityDark : motion.blobOpacityLight) *
-        widget.intensity;
+            widget.intensity;
 
     return Stack(
       children: [
@@ -115,7 +133,9 @@ class _AnimatedGradientBackgroundState extends State<AnimatedGradientBackground>
                 // loop, which is what gives the background its slow change of
                 // hue without ever introducing a colour the theme does not
                 // already use.
-                colors: [scheme.primary, scheme.tertiary, scheme.secondary],
+                colors:
+                    widget.colors ??
+                    [scheme.primary, scheme.tertiary, scheme.secondary],
                 opacity: opacity,
                 drift: motion.blobDrift,
                 blur: motion.blobBlur,
