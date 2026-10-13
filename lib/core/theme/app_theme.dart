@@ -1,8 +1,8 @@
 import 'dart:math' as math;
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import 'app_page_transition.dart';
 import 'colors.dart';
 
 /// One design system for the Android app and the web dashboard.
@@ -86,20 +86,24 @@ class AppTheme {
   static ThemeData _build(ColorScheme scheme) {
     final isDark = scheme.brightness == Brightness.dark;
 
-    final background =
-        isDark ? AppColors.darkBackground : AppColors.lightBackground;
+    final background = isDark
+        ? AppColors.darkBackground
+        : AppColors.lightBackground;
     final cardColor = isDark ? AppColors.darkCard : AppColors.lightSurface;
-    final inputFill = isDark ? const Color(0xFF0F1726) : const Color(0xFFF8FAFC);
+    final inputFill = isDark
+        ? const Color(0xFF0F1726)
+        : const Color(0xFFF8FAFC);
     final border = scheme.outlineVariant;
     final hint = isDark ? AppColors.darkTextHint : AppColors.lightTextHint;
 
     final radiusMd = BorderRadius.circular(AppSpacing.radiusMd);
     final radiusLg = BorderRadius.circular(AppSpacing.radiusLg);
 
-    final baseText = (isDark
-            ? Typography.material2021().white
-            : Typography.material2021().black)
-        .apply(bodyColor: scheme.onSurface, displayColor: scheme.onSurface);
+    final baseText =
+        (isDark
+                ? Typography.material2021().white
+                : Typography.material2021().black)
+            .apply(bodyColor: scheme.onSurface, displayColor: scheme.onSurface);
 
     final textTheme = baseText.copyWith(
       headlineMedium: baseText.headlineMedium?.copyWith(
@@ -165,13 +169,17 @@ class AppTheme {
       textTheme: textTheme,
       visualDensity: VisualDensity.standard,
 
+      // One transition on every platform. The app used to push horizontally
+      // on iOS and macOS and fade everywhere else, so the same build felt
+      // like two different apps; see app_page_transition.dart.
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
-          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-          TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
-          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
-          TargetPlatform.linux: FadeForwardsPageTransitionsBuilder(),
+          TargetPlatform.android: AppPageTransitionsBuilder(),
+          TargetPlatform.iOS: AppPageTransitionsBuilder(),
+          TargetPlatform.windows: AppPageTransitionsBuilder(),
+          TargetPlatform.macOS: AppPageTransitionsBuilder(),
+          TargetPlatform.linux: AppPageTransitionsBuilder(),
+          TargetPlatform.fuchsia: AppPageTransitionsBuilder(),
         },
       ),
 
@@ -194,7 +202,10 @@ class AppTheme {
           letterSpacing: -0.2,
         ),
         iconTheme: IconThemeData(color: scheme.onSurface, size: 22),
-        actionsIconTheme: IconThemeData(color: scheme.onSurfaceVariant, size: 22),
+        actionsIconTheme: IconThemeData(
+          color: scheme.onSurfaceVariant,
+          size: 22,
+        ),
       ),
 
       // ---------------------------------------------------------------------
@@ -220,7 +231,10 @@ class AppTheme {
         filled: true,
         fillColor: inputFill,
         isDense: false,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 14,
+        ),
         hintStyle: TextStyle(color: hint, fontSize: 14),
         labelStyle: TextStyle(
           color: scheme.onSurfaceVariant,
@@ -239,9 +253,7 @@ class AppTheme {
         suffixIconColor: scheme.onSurfaceVariant,
         border: inputBorder(border),
         enabledBorder: inputBorder(border),
-        disabledBorder: inputBorder(
-          border.withValues(alpha: 0.45),
-        ),
+        disabledBorder: inputBorder(border.withValues(alpha: 0.45)),
         focusedBorder: inputBorder(scheme.primary, 1.5),
         errorBorder: inputBorder(scheme.error.withValues(alpha: 0.7), 1.2),
         focusedErrorBorder: inputBorder(scheme.error, 1.5),
@@ -318,9 +330,15 @@ class AppTheme {
         style: SegmentedButton.styleFrom(
           shape: buttonShape,
           side: BorderSide(color: border),
-          selectedBackgroundColor: AppColors.tint(scheme.primary, scheme.brightness),
+          selectedBackgroundColor: AppColors.tint(
+            scheme.primary,
+            scheme.brightness,
+          ),
           selectedForegroundColor: scheme.primary,
-          textStyle: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+          textStyle: const TextStyle(
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
@@ -403,7 +421,9 @@ class AppTheme {
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         elevation: 4,
-        backgroundColor: isDark ? const Color(0xFF1F2A3C) : const Color(0xFF1E293B),
+        backgroundColor: isDark
+            ? const Color(0xFF1F2A3C)
+            : const Color(0xFF1E293B),
         actionTextColor: Color.lerp(scheme.primary, Colors.white, 0.45),
         shape: RoundedRectangleBorder(borderRadius: radiusMd),
         contentTextStyle: const TextStyle(
@@ -481,10 +501,15 @@ class AppTheme {
       chipTheme: ChipThemeData(
         backgroundColor: scheme.surfaceContainer,
         selectedColor: AppColors.tint(scheme.primary, scheme.brightness),
-        secondarySelectedColor: AppColors.tint(scheme.primary, scheme.brightness),
+        secondarySelectedColor: AppColors.tint(
+          scheme.primary,
+          scheme.brightness,
+        ),
         checkmarkColor: scheme.primary,
         side: BorderSide(color: border),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.radiusSm)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppSpacing.radiusSm),
+        ),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         labelStyle: TextStyle(
           color: scheme.onSurface,
@@ -530,7 +555,9 @@ class AppTheme {
       scrollbarTheme: ScrollbarThemeData(
         radius: const Radius.circular(8),
         thickness: const WidgetStatePropertyAll(8),
-        thumbColor: WidgetStatePropertyAll(scheme.outline.withValues(alpha: 0.55)),
+        thumbColor: WidgetStatePropertyAll(
+          scheme.outline.withValues(alpha: 0.55),
+        ),
       ),
 
       // ---------------------------------------------------------------------
@@ -660,8 +687,9 @@ class AppButtonRow extends StatelessWidget {
         }
 
         return Row(
-          mainAxisAlignment:
-              compact ? MainAxisAlignment.start : MainAxisAlignment.end,
+          mainAxisAlignment: compact
+              ? MainAxisAlignment.start
+              : MainAxisAlignment.end,
           children: items,
         );
       },

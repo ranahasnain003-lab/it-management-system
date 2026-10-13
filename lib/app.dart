@@ -15,6 +15,7 @@ import 'core/providers/request_provider.dart';
 import 'core/providers/theme_provider.dart';
 import 'core/providers/user_provider.dart';
 import 'core/routes/app_router.dart';
+import 'core/theme/app_motion.dart';
 import 'core/theme/app_theme.dart';
 
 class App extends StatefulWidget {
@@ -173,20 +174,26 @@ class _AppState extends State<App> {
   Widget build(BuildContext context) {
     final themeProvider = context.watch<ThemeProvider>();
 
-    return MaterialApp.router(
-      debugShowCheckedModeBanner: false,
-      title: 'PSBA IT Inventory',
+    return MotionScope(
+      // The Settings switch, handed to every animated widget below without
+      // each of them having to find a provider. The platform's own
+      // reduced-motion setting is checked separately, inside AppMotion.
+      enabled: themeProvider.animationsEnabled,
+      child: MaterialApp.router(
+        debugShowCheckedModeBanner: false,
+        title: 'PSBA IT Inventory',
 
-      // The AI Assistant is hosted by the router's signed-in shell, not by a
-      // builder above the navigator, so dialogs and sheets stay above it.
-      routerConfig: _router,
+        // The AI Assistant is hosted by the router's signed-in shell, not by a
+        // builder above the navigator, so dialogs and sheets stay above it.
+        routerConfig: _router,
 
-      // Use the project's centralized theme configuration.
-      theme: AppTheme.light(seedColor: themeProvider.accentColor),
-      darkTheme: AppTheme.dark(seedColor: themeProvider.accentColor),
+        // Use the project's centralized theme configuration.
+        theme: AppTheme.light(seedColor: themeProvider.accentColor),
+        darkTheme: AppTheme.dark(seedColor: themeProvider.accentColor),
 
-      // ThemeProvider controls Light / Dark / System Default.
-      themeMode: themeProvider.themeMode,
+        // ThemeProvider controls Light / Dark / System Default.
+        themeMode: themeProvider.themeMode,
+      ),
     );
   }
 }

@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
-import '../../providers/theme_provider.dart';
 import '../../theme/app_motion.dart';
 import '../../widgets/animated_gradient_background.dart';
 import '../../widgets/motion/entrance.dart';
@@ -27,10 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final animate = AppMotion.enabled(
-      context,
-      enabledInSettings: context.watch<ThemeProvider>().animationsEnabled,
-    );
+    final animate = AppMotion.enabled(context);
 
     return Scaffold(
       body: AnimatedGradientBackground(

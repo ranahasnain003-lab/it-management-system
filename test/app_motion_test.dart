@@ -13,24 +13,33 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:it_management_system/core/theme/app_motion.dart';
 import 'package:it_management_system/core/widgets/animated_gradient_background.dart';
 
-/// Builds [child] with a chosen `disableAnimations`.
-Widget _app(Widget child, {bool disableAnimations = false}) {
+/// Builds [child] with a chosen platform setting and Settings switch.
+Widget _app(
+  Widget child, {
+  bool disableAnimations = false,
+  bool animationsInSettings = true,
+}) {
   return MediaQuery(
     data: MediaQueryData(disableAnimations: disableAnimations),
-    child: MaterialApp(home: Scaffold(body: child)),
+    child: MotionScope(
+      enabled: animationsInSettings,
+      child: MaterialApp(home: Scaffold(body: child)),
+    ),
   );
 }
 
 void main() {
   group('AppMotion.enabled', () {
-    testWidgets('off when the platform asks for reduced motion', (tester) async {
+    testWidgets('off when the platform asks for reduced motion', (
+      tester,
+    ) async {
       late bool enabled;
 
       await tester.pumpWidget(
         _app(
           Builder(
             builder: (context) {
-              enabled = AppMotion.enabled(context, enabledInSettings: true);
+              enabled = AppMotion.enabled(context);
               return const SizedBox();
             },
           ),
@@ -48,14 +57,37 @@ void main() {
         _app(
           Builder(
             builder: (context) {
-              enabled = AppMotion.enabled(context, enabledInSettings: false);
+              enabled = AppMotion.enabled(context);
+              return const SizedBox();
+            },
+          ),
+          animationsInSettings: false,
+        ),
+      );
+
+      expect(enabled, isFalse);
+    });
+
+    testWidgets('on by default when no scope has been installed', (
+      tester,
+    ) async {
+      // Why MotionScope defaults to true: a leaf widget must work with
+      // nothing above it, which is how the assistant's message bubble is
+      // built in its own tests.
+      late bool enabled;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) {
+              enabled = AppMotion.enabled(context);
               return const SizedBox();
             },
           ),
         ),
       );
 
-      expect(enabled, isFalse);
+      expect(enabled, isTrue);
     });
 
     testWidgets('the platform wins even when Settings says on', (tester) async {
@@ -66,7 +98,7 @@ void main() {
         _app(
           Builder(
             builder: (context) {
-              enabled = AppMotion.enabled(context, enabledInSettings: true);
+              enabled = AppMotion.enabled(context);
               return const SizedBox();
             },
           ),
@@ -84,7 +116,7 @@ void main() {
         _app(
           Builder(
             builder: (context) {
-              enabled = AppMotion.enabled(context, enabledInSettings: true);
+              enabled = AppMotion.enabled(context);
               return const SizedBox();
             },
           ),
@@ -150,7 +182,9 @@ void main() {
       expect(find.text('content'), findsOneWidget);
     });
 
-    testWidgets('still paints its background when animation is off', (tester) async {
+    testWidgets('still paints its background when animation is off', (
+      tester,
+    ) async {
       // Off means a still frame, not a blank screen.
       await tester.pumpWidget(
         _app(
@@ -164,7 +198,9 @@ void main() {
       expect(find.byType(CustomPaint), findsWidgets);
     });
 
-    testWidgets('animates without rebuilding the content above it', (tester) async {
+    testWidgets('animates without rebuilding the content above it', (
+      tester,
+    ) async {
       // The point of driving the painter through `repaint:`. The children here
       // are Firestore-backed cards in the real app, and rebuilding them at
       // 60fps would be ruinous.
@@ -212,11 +248,11 @@ void main() {
       );
     });
 
-    testWidgets('stops cleanly when switched from animating to still', (tester) async {
+    testWidgets('stops cleanly when switched from animating to still', (
+      tester,
+    ) async {
       await tester.pumpWidget(
-        _app(
-          const AnimatedGradientBackground(animate: true, child: Text('c')),
-        ),
+        _app(const AnimatedGradientBackground(animate: true, child: Text('c'))),
       );
       await tester.pump(const Duration(milliseconds: 200));
 

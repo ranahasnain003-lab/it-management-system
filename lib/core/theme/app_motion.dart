@@ -150,11 +150,37 @@ abstract final class AppMotion {
   /// widget checks this and renders its finished, static state instead - not a
   /// faster animation, no animation at all.
   ///
-  /// [enabledInSettings] comes from ThemeProvider.animationsEnabled. It is
-  /// passed in rather than read here so this file stays free of Provider and
-  /// can be used from anywhere, including tests.
-  static bool enabled(BuildContext context, {required bool enabledInSettings}) {
-    if (!enabledInSettings) return false;
+  /// The Settings value arrives through [MotionScope] rather than through
+  /// Provider, so an animated widget can be dropped into a test, or used
+  /// anywhere in the tree, without needing a ThemeProvider above it.
+  static bool enabled(BuildContext context) {
+    if (!MotionScope.of(context)) return false;
     return !MediaQuery.disableAnimationsOf(context);
   }
+}
+
+/// Carries the Settings animation preference down the tree.
+///
+/// An InheritedWidget rather than a Provider lookup, for one reason: an
+/// animated widget must work with nothing above it. Leaf widgets like the
+/// assistant's message bubble are built directly in tests, and making each of
+/// them demand a ThemeProvider would mean every such test had to construct one
+/// - or, worse, that forgetting to would throw at runtime rather than at
+/// compile time.
+///
+/// Absent means on, which is the app's default.
+class MotionScope extends InheritedWidget {
+  const MotionScope({super.key, required this.enabled, required super.child});
+
+  final bool enabled;
+
+  /// The preference in force here. True when no scope has been installed.
+  static bool of(BuildContext context) {
+    final scope = context.dependOnInheritedWidgetOfExactType<MotionScope>();
+    return scope?.enabled ?? true;
+  }
+
+  @override
+  bool updateShouldNotify(MotionScope oldWidget) =>
+      oldWidget.enabled != enabled;
 }

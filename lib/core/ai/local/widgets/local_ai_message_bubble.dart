@@ -3,9 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:provider/provider.dart';
 
-import '../../../providers/theme_provider.dart';
 import '../../../theme/app_motion.dart';
 import '../../../widgets/motion/waiting_dots.dart';
 import '../local_ai_models.dart';
@@ -21,10 +19,7 @@ class LocalAiMessageBubble extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final isUser = message.isUser;
     final failed = message.status == 'error';
-    final animate = AppMotion.enabled(
-      context,
-      enabledInSettings: context.watch<ThemeProvider>().animationsEnabled,
-    );
+    final animate = AppMotion.enabled(context);
 
     final background = isUser
         ? colors.primary
