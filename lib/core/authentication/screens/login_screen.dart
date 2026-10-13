@@ -7,6 +7,7 @@ import '../../providers/auth_provider.dart';
 import '../../theme/app_motion.dart';
 import '../../widgets/animated_gradient_background.dart';
 import '../../widgets/motion/entrance.dart';
+import '../../widgets/motion/idle_sweep.dart';
 import '../../widgets/motion/shake.dart';
 import '../widgets/auth_widgets.dart';
 
@@ -321,12 +322,19 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
               ),
             ),
             const SizedBox(height: 8),
-            AuthSubmitButton(
-              label: 'Sign in',
-              loadingLabel: 'Signing in...',
-              icon: Icons.login_rounded,
-              loading: auth.activeAction == AuthAction.login,
-              onPressed: busy ? null : _signIn,
+            // A faint band crosses the button every few seconds while it is
+            // idle, never while it is working: a sweep over a spinner would
+            // be two things competing for the same attention.
+            IdleSweep(
+              animate: AppMotion.enabled(context) && !busy,
+              borderRadius: BorderRadius.circular(14),
+              child: AuthSubmitButton(
+                label: 'Sign in',
+                loadingLabel: 'Signing in...',
+                icon: Icons.login_rounded,
+                loading: auth.activeAction == AuthAction.login,
+                onPressed: busy ? null : _signIn,
+              ),
             ),
             const SizedBox(height: 16),
             AuthLinkRow(
