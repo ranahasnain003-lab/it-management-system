@@ -17,6 +17,7 @@ import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
 import 'add_asset_screen.dart';
 import 'transfer_asset_screen.dart';
+import '../../widgets/motion/first_load_list.dart';
 
 class AssetsScreen extends StatefulWidget {
   const AssetsScreen({super.key, this.initialStatus = 'All'});
@@ -28,6 +29,9 @@ class AssetsScreen extends StatefulWidget {
 }
 
 class _AssetsScreenState extends State<AssetsScreen> {
+  /// Lives as long as this screen does, so leaving and returning is a new
+  /// visit, while a mere rebuild is not.
+  final FirstLoadEntrance _rowEntrance = FirstLoadEntrance();
   final TextEditingController _searchController = TextEditingController();
 
   /// The text the list is actually filtered on. It trails the field by
@@ -839,7 +843,13 @@ class _AssetsScreenState extends State<AssetsScreen> {
           itemCount: assets.length,
           separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm),
           itemBuilder: (context, index) {
-            return _buildAssetCard(context, provider, assets[index]);
+            final row = _buildAssetCard(context, provider, assets[index]);
+
+            // Only on the very first load of this screen. Scrolling, pulling
+            // to refresh and Firestore updates all leave the rows alone.
+            if (index >= FirstLoadEntrance.maxRows - 1) _rowEntrance.spend();
+
+            return _rowEntrance.wrap(context, index, row);
           },
         );
       },
@@ -1911,10 +1921,7 @@ class _DeleteAssetRequestDialogState extends State<_DeleteAssetRequestDialog> {
         children: [
           // The scheme's error red, not the brand constant, so the icon stays
           // readable on the dark dialog surface too.
-          Icon(
-            Icons.delete_outline_rounded,
-            color: theme.colorScheme.error,
-          ),
+          Icon(Icons.delete_outline_rounded, color: theme.colorScheme.error),
           const SizedBox(width: AppSpacing.sm + 2),
           const Expanded(child: Text('Request Asset Deletion')),
         ],

@@ -9,6 +9,7 @@ import '../../services/bazaar_service.dart';
 import '../../services/permission_service.dart';
 import '../../shared/widgets/app_states.dart';
 import '../../theme/colors.dart';
+import '../../widgets/motion/first_load_list.dart';
 
 class LocationManagementScreen extends StatefulWidget {
   const LocationManagementScreen({super.key});
@@ -19,6 +20,9 @@ class LocationManagementScreen extends StatefulWidget {
 }
 
 class _LocationManagementScreenState extends State<LocationManagementScreen> {
+  /// Lives as long as this screen does, so leaving and returning is a new
+  /// visit, while a mere rebuild is not.
+  final FirstLoadEntrance _rowEntrance = FirstLoadEntrance();
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   final BazaarService _bazaarService = BazaarService();
@@ -618,9 +622,14 @@ class _LocationManagementScreenState extends State<LocationManagementScreen> {
           itemCount: bazaars.length,
           separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.sm + 2),
           itemBuilder: (context, index) {
-            return RepaintBoundary(
+            final row = RepaintBoundary(
               child: _buildBazaarCard(context, bazaars[index]),
             );
+
+            // Only on the very first load of this screen.
+            if (index >= FirstLoadEntrance.maxRows - 1) _rowEntrance.spend();
+
+            return _rowEntrance.wrap(context, index, row);
           },
         );
       },
