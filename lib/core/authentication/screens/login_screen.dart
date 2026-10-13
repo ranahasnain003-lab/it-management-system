@@ -4,18 +4,95 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/auth_provider.dart';
+import '../../providers/theme_provider.dart';
+import '../../theme/app_motion.dart';
+import '../../widgets/animated_gradient_background.dart';
+import '../../widgets/motion/entrance.dart';
+import '../../widgets/motion/shake.dart';
 import '../widgets/auth_widgets.dart';
 
 /// Android sign-in screen.
-class LoginScreen extends StatelessWidget {
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
   @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  /// Bumped on each refused sign-in, which is what makes the card shake.
+  /// A counter rather than a flag, so a second wrong password shakes again.
+  int _refusals = 0;
+
+  @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final animate = AppMotion.enabled(
+      context,
+      enabledInSettings: context.watch<ThemeProvider>().animationsEnabled,
+    );
+
     return Scaffold(
-      body: SafeArea(
-        child: AuthScrollBody(
-          child: AuthSignInForm(onSignedIn: () => context.go('/dashboard')),
+      body: AnimatedGradientBackground(
+        animate: animate,
+        child: SafeArea(
+          child: AuthScrollBody(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // The logo and title arrive first.
+                EntranceFadeSlide(
+                  animate: animate,
+                  child: const AuthHeader(
+                    icon: Icons.admin_panel_settings_rounded,
+                    title: 'Welcome back',
+                    subtitle: 'Sign in to your PSBA IT Inventory account.',
+                    brandAsset: 'assets/branding/psba_mark.png',
+                  ),
+                ),
+                const SizedBox(height: 28),
+
+                // Then, 80ms later, the card they belong to.
+                ShakeOnSignal(
+                  animate: animate,
+                  signal: _refusals,
+                  child: EntranceFadeSlide(
+                    animate: animate,
+                    delay: AppMotion.staggerLarge,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 22,
+                        vertical: 28,
+                      ),
+                      decoration: BoxDecoration(
+                        // Semi-opaque, so the drifting colour behind reads as
+                        // depth without ever competing with the form.
+                        color: colors.surface.withValues(alpha: 0.86),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: colors.outlineVariant,
+                          width: 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: colors.shadow.withValues(alpha: 0.07),
+                            blurRadius: 24,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: AuthSignInForm(
+                        showHeader: false,
+                        onSignedIn: () => context.go('/dashboard'),
+                        onSignInFailed: () => setState(() => _refusals++),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -35,9 +112,23 @@ class AuthSignInForm extends StatefulWidget {
     this.subtitle = 'Sign in to your PSBA IT Inventory account.',
     this.centeredHeader = true,
     this.brandAsset = 'assets/branding/psba_mark.png',
+    this.onSignInFailed,
+    this.showHeader = true,
   });
 
+  /// Whether the form draws its own logo-and-title header.
+  ///
+  /// The Android screen sets this false and draws the header itself, above the
+  /// card, so the logo and the card can arrive one after the other. The web
+  /// page keeps the default and is unaffected.
+  final bool showHeader;
+
   final VoidCallback onSignedIn;
+
+  /// Called when a sign-in attempt is refused, so the screen around the form
+  /// can react - the Android screen shakes its card. Optional, because the web
+  /// login page uses the same form and does not.
+  final VoidCallback? onSignInFailed;
   final String title;
   final String subtitle;
   final bool centeredHeader;
@@ -132,6 +223,11 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
       if (code == AuthProvider.busyCode) return;
 
       setState(() => _errorMessage = AuthProvider.describeError(e));
+
+      // The refusal is already written out above; this only points the eye
+      // back at the form. Not called for the busy case, which is not a
+      // refusal and returns before this line.
+      widget.onSignInFailed?.call();
     }
   }
 
@@ -166,14 +262,16 @@ class _AuthSignInFormState extends State<AuthSignInForm> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            AuthHeader(
-              icon: Icons.admin_panel_settings_rounded,
-              title: widget.title,
-              subtitle: widget.subtitle,
-              centered: widget.centeredHeader,
-              brandAsset: widget.brandAsset,
-            ),
-            const SizedBox(height: 28),
+            if (widget.showHeader) ...[
+              AuthHeader(
+                icon: Icons.admin_panel_settings_rounded,
+                title: widget.title,
+                subtitle: widget.subtitle,
+                centered: widget.centeredHeader,
+                brandAsset: widget.brandAsset,
+              ),
+              const SizedBox(height: 28),
+            ],
 
             if (_sessionMessage != null) ...[
               AuthNotice(
