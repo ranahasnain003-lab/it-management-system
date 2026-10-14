@@ -96,10 +96,70 @@ class AppMotion {
     required this.skeletonOpacity,
     required this.shimmerOpacity,
     required this.cardEntrance,
+    required this.dashboardEntrance,
+    required this.dashboardCardSlide,
+    required this.dashboardCardScale,
+    required this.dashboardSheen,
+    required this.dashboardIconLoop,
+    required this.dashboardHeroLoop,
+    required this.dashboardValueFlash,
+    required this.dashboardRoll,
+    required this.dashboardTilt,
+    required this.dashboardLoops,
   });
 
   /// Which level these values belong to.
   final AnimationLevel level;
+
+  // --- the dashboard ---------------------------------------------------------
+  //
+  // The dashboard is the one screen that is looked AT rather than worked in,
+  // and the only one with its own rules. Everywhere else an entrance plays
+  // once per session and nothing loops; here the opening sequence replays on
+  // every visit and a few things keep moving while the screen is open.
+  //
+  // These live in AppMotion rather than inside the dashboard so the three
+  // levels stay in one place, but nothing outside lib/core/dashboard and
+  // lib/web/pages/dashboard_page.dart reads them.
+
+  /// How long the whole opening sequence takes, from the hero starting to
+  /// drop to the last quick action landing. Every part of the sequence is an
+  /// [Interval] inside this one window, so the order is authored in one place
+  /// and cannot drift.
+  final Duration dashboardEntrance;
+
+  /// How far a KPI card travels up as it arrives.
+  final double dashboardCardSlide;
+
+  /// What a KPI card scales from as it arrives.
+  final double dashboardCardScale;
+
+  /// How often the light sweeps across a KPI card. Each card is offset within
+  /// this period so they never sweep together.
+  final Duration dashboardSheen;
+
+  /// The period of a KPI icon's own small loop - a bob, a pulse or a tilt.
+  final Duration dashboardIconLoop;
+
+  /// The period of the hero's drifting glass circles.
+  final Duration dashboardHeroLoop;
+
+  /// How long a card stays washed green or red after its figure changes.
+  final Duration dashboardValueFlash;
+
+  /// How long an odometer digit takes to roll to its new value.
+  final Duration dashboardRoll;
+
+  /// The most a card tilts towards the pointer, in degrees. Zero on the
+  /// subtle level, which lifts without tilting.
+  final double dashboardTilt;
+
+  /// Whether the always-alive loops run at all.
+  ///
+  /// False at the subtle level: subtle keeps the opening sequence and drops
+  /// everything that moves on its own. There is no "off" set - off is
+  /// [enabled] returning false, which skips the controllers entirely.
+  final bool dashboardLoops;
 
   // --- durations -------------------------------------------------------------
 
@@ -300,6 +360,18 @@ class AppMotion {
     skeletonOpacity: 0.30,
     shimmerOpacity: 0.55,
     cardEntrance: Curves.easeOutCubic,
+    // Subtle keeps the opening sequence - shorter, flatter, no overshoot -
+    // and switches every self-starting loop off.
+    dashboardEntrance: Duration(milliseconds: 900),
+    dashboardCardSlide: 14,
+    dashboardCardScale: 1.0,
+    dashboardSheen: Duration(seconds: 7),
+    dashboardIconLoop: Duration(seconds: 3),
+    dashboardHeroLoop: Duration(seconds: 24),
+    dashboardValueFlash: Duration(milliseconds: 900),
+    dashboardRoll: Duration(milliseconds: 420),
+    dashboardTilt: 0,
+    dashboardLoops: false,
   );
 
   /// The default. Clearly alive, still professional.
@@ -352,6 +424,18 @@ class AppMotion {
     skeletonOpacity: 0.30,
     shimmerOpacity: 0.60,
     cardEntrance: Curves.easeOutBack,
+    // 1.45s of opening sequence: long enough to read as choreography rather
+    // than as one blink, short enough that nobody waits for it.
+    dashboardEntrance: Duration(milliseconds: 1450),
+    dashboardCardSlide: 36,
+    dashboardCardScale: 0.90,
+    dashboardSheen: Duration(seconds: 6),
+    dashboardIconLoop: Duration(milliseconds: 2600),
+    dashboardHeroLoop: Duration(seconds: 14),
+    dashboardValueFlash: Duration(milliseconds: 1000),
+    dashboardRoll: Duration(milliseconds: 520),
+    dashboardTilt: 5,
+    dashboardLoops: true,
   );
 
   // ===========================================================================

@@ -20,6 +20,7 @@ class PressScale extends StatefulWidget {
     required this.animate,
     this.onTap,
     this.borderRadius,
+    this.scaleOverride,
   });
 
   final Widget child;
@@ -28,6 +29,13 @@ class PressScale extends StatefulWidget {
 
   /// Used by the hover shadow, so it follows the card's own corners.
   final BorderRadius? borderRadius;
+
+  /// A press scale for this widget only, overriding the level's.
+  ///
+  /// The dashboard presses a little deeper than the rest of the app, because
+  /// its tiles are large and a 0.98 on a big card is not felt. Null - which
+  /// is every other caller - keeps [AppMotion.pressScale] exactly as it was.
+  final double? scaleOverride;
 
   @override
   State<PressScale> createState() => _PressScaleState();
@@ -43,7 +51,12 @@ class _PressScaleState extends State<PressScale> {
     final colors = Theme.of(context).colorScheme;
 
     // 1.0 and 0 at the subtle level: nothing to do, so nothing is wrapped.
-    final canPress = widget.animate && motion.pressScale != 1.0;
+    final pressed = widget.scaleOverride ?? motion.pressScale;
+
+    // The override still defers to the level: at subtle the level's own scale
+    // is 1.0 and nothing should press, whatever a caller asked for.
+    final canPress =
+        widget.animate && motion.pressScale != 1.0 && pressed != 1.0;
     final canHover = widget.animate && motion.hoverLift > 0;
 
     if (!canPress && !canHover) {
@@ -59,7 +72,7 @@ class _PressScaleState extends State<PressScale> {
             );
     }
 
-    final scale = _pressed ? motion.pressScale : 1.0;
+    final scale = _pressed ? pressed : 1.0;
     final lift = _hovered && !_pressed ? -motion.hoverLift : 0.0;
 
     return MouseRegion(
