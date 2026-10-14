@@ -1,15 +1,21 @@
-/// Tests for the two dashboard guarantees that are easy to lose:
+/// Tests for the dashboard guarantees that are easy to lose:
 ///
-///   1. the stat cards do not rebuild on background animation frames, and
-///   2. the entrance plays once per session, not on every refresh.
+///   1. the stat cards do not rebuild on background animation frames,
+///   2. a shared entrance widget does not replay when its content changes,
+///   3. the dashboard sequence replays when the screen is opened again but
+///      NOT when Firestore delivers new figures, and
+///   4. each level means what it says.
 ///
-/// Both are tested through the widgets that carry the behaviour rather than
+/// They are tested through the widgets that carry the behaviour rather than
 /// through DashboardScreen itself, which needs Firebase and six providers.
+/// The dashboard rendered end to end, with pixels compared, is
+/// test/dashboard_motion_frames_test.dart.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:it_management_system/core/dashboard/widgets/dashboard_motion.dart';
 import 'package:it_management_system/core/theme/app_motion.dart';
 import 'package:it_management_system/core/widgets/animated_gradient_background.dart';
 import 'package:it_management_system/core/widgets/motion/count_up.dart';
@@ -87,10 +93,14 @@ void main() {
   });
 
   // ===========================================================================
-  // THE ENTRANCE PLAYS ONCE
+  // ENTRANCEFADESLIDE DOES NOT REPLAY ON NEW CONTENT
+  //
+  // This is the shared widget the rest of the app uses. The dashboard no
+  // longer uses it - it has its own sequence, tested below - but every other
+  // screen does, and this contract is theirs.
   // ===========================================================================
 
-  group('the entrance plays once', () {
+  group('a shared entrance does not replay', () {
     testWidgets('a data update does not replay it', (tester) async {
       // Standing in for Firestore delivering new totals: the card rebuilds
       // with new content, and must not fade in again.
@@ -223,6 +233,159 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('skeleton'), findsOneWidget);
+    });
+  });
+  _dashboardSequenceTests();
+}
+
+// =============================================================================
+// THE DASHBOARD SEQUENCE
+// =============================================================================
+//
+// The policy that changed in this round: the opening sequence now plays every
+// time the dashboard is opened rather than once per app run, and it still must
+// not replay when Firestore delivers new figures. Both come from the same
+// design - one controller for the whole screen, read through an
+// InheritedWidget - so both are tested here against that controller.
+
+/// The entrance value [Staged] would be reading, as the tree sees it.
+double _entranceValue(WidgetTester tester) {
+  final context = tester.element(find.byKey(const ValueKey('probe')));
+
+  return DashboardMotion.of(context).entrance.value;
+}
+
+bool _loops(WidgetTester tester) {
+  final context = tester.element(find.byKey(const ValueKey('probe')));
+
+  return DashboardMotion.of(context).loops;
+}
+
+Widget _host(String content, {required AnimationLevel level}) {
+  return MotionScope(
+    level: level,
+    child: MaterialApp(
+      home: Scaffold(
+        body: DashboardMotionHost(
+          child: Column(
+            children: [
+              const SizedBox(key: ValueKey('probe'), height: 1),
+              // Stands in for a Firestore-backed card: new content, same
+              // position in the tree.
+              Staged(slot: DashboardStage.hero, child: Text(content)),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+void _dashboardSequenceTests() {
+  group('the dashboard sequence', () {
+    testWidgets('runs from zero when the screen is mounted', (tester) async {
+      await tester.pumpWidget(_host('12', level: AnimationLevel.rich));
+
+      expect(_entranceValue(tester), 0.0);
+
+      await tester.pump(const Duration(milliseconds: 700));
+      final midway = _entranceValue(tester);
+
+      expect(midway, greaterThan(0.0));
+      expect(midway, lessThan(1.0));
+
+      await tester.pump(const Duration(milliseconds: 900));
+      expect(_entranceValue(tester), 1.0);
+    });
+
+    testWidgets('a Firestore update does not restart it', (tester) async {
+      // The hazard this whole design exists to remove. The old screen latched
+      // the entrance with a flag, and any rebuild that recreated the card's
+      // subtree - a notice appearing above the grid, a loading state swapping
+      // out - started it again, so the figures blinked and re-rolled while
+      // somebody was reading them.
+      await tester.pumpWidget(_host('12', level: AnimationLevel.rich));
+      await tester.pump(const Duration(milliseconds: 1600));
+
+      expect(_entranceValue(tester), 1.0);
+      expect(find.text('12'), findsOneWidget);
+
+      // New totals arrive.
+      await tester.pumpWidget(_host('57', level: AnimationLevel.rich));
+      await tester.pump();
+
+      expect(find.text('57'), findsOneWidget);
+      expect(
+        _entranceValue(tester),
+        1.0,
+        reason: 'New data replayed the opening sequence.',
+      );
+    });
+
+    testWidgets('it is finished and still when motion is off', (tester) async {
+      await tester.pumpWidget(_host('12', level: AnimationLevel.off));
+
+      // No controller at all, so everything below renders in its settled
+      // state and pumpAndSettle stays usable.
+      expect(_entranceValue(tester), 1.0);
+      await tester.pumpAndSettle();
+      expect(_entranceValue(tester), 1.0);
+    });
+
+    testWidgets('loops run at rich and not at subtle', (tester) async {
+      await tester.pumpWidget(_host('12', level: AnimationLevel.rich));
+      expect(_loops(tester), isTrue);
+
+      await tester.pumpWidget(_host('12', level: AnimationLevel.subtle));
+      await tester.pump();
+      expect(
+        _loops(tester),
+        isFalse,
+        reason: 'Subtle keeps the opening sequence and drops the loops.',
+      );
+
+      await tester.pumpWidget(_host('12', level: AnimationLevel.off));
+      await tester.pump();
+      expect(_loops(tester), isFalse);
+    });
+
+    testWidgets('subtle still opens', (tester) async {
+      await tester.pumpWidget(_host('12', level: AnimationLevel.subtle));
+
+      expect(_entranceValue(tester), 0.0);
+
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(_entranceValue(tester), greaterThan(0.0));
+
+      await tester.pumpAndSettle();
+      expect(_entranceValue(tester), 1.0);
+    });
+
+    testWidgets('a card rebuilt after the sequence adds no animation work', (
+      tester,
+    ) async {
+      // The case that matters for a screen fed by live streams. Once the
+      // sequence is over, a card rebuilt by a Firestore tick must come back as
+      // its plain self - no AnimatedBuilder, no listener on a controller that
+      // will never fire again - or the cost of the entrance would be paid
+      // forever by every card on the screen.
+      await tester.pumpWidget(_host('12', level: AnimationLevel.rich));
+      await tester.pump(const Duration(milliseconds: 1600));
+
+      expect(_entranceValue(tester), 1.0);
+
+      // New totals arrive, which rebuilds the Staged subtree.
+      await tester.pumpWidget(_host('57', level: AnimationLevel.rich));
+      await tester.pump();
+
+      expect(find.text('57'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(Staged),
+          matching: find.byType(AnimatedBuilder),
+        ),
+        findsNothing,
+      );
     });
   });
 }
