@@ -12,9 +12,10 @@ import '../../services/bazaar_service.dart';
 import '../../shared/drawer/app_drawer.dart';
 import '../../shared/widgets/app_states.dart';
 import '../../theme/app_brand.dart';
-import '../../theme/app_motion.dart';
 import '../../theme/colors.dart';
-import '../../widgets/motion/entrance.dart';
+import '../../widgets/motion/pause_when_hidden.dart';
+import '../widgets/dashboard_effects.dart';
+import '../widgets/dashboard_motion.dart';
 import '../widgets/dashboard_parts.dart';
 import '../../../models/asset_model.dart';
 
@@ -26,16 +27,12 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  /// Whether the stat cards have already made their entrance in this app run.
-  ///
-  /// Static, so navigating away and back does not replay it: the entrance
-  /// marks the first sight of the dashboard, not every visit. Reset only when
-  /// the process restarts, which is what "once per session" means here.
-  static bool _entrancePlayedThisSession = false;
-
-  /// Whether THIS mounting is the one that gets to play it. Captured once, so
-  /// a Firestore update mid-build cannot start it again.
-  late final bool _playEntrance = !_entrancePlayedThisSession;
+  // The entrance used to be latched to once per app run by a static flag.
+  // It is not any more: the dashboard is the one screen people open to look
+  // at rather than to work in, so the opening sequence plays every time it is
+  // opened. DashboardMotionHost owns that, and because the whole sequence is
+  // one controller read through an InheritedWidget, a Firestore update cannot
+  // restart it - a rebuilt card simply reads the sequence where it already is.
 
   // Bazaar master list (for the "All Bazaars" count). Opened once.
   //
@@ -148,10 +145,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
 
-    // Claimed on the first build that is allowed to animate, so a second
-    // dashboard opened later in the session is still.
-    if (_playEntrance) _entrancePlayedThisSession = true;
-
     return Consumer<UserProvider>(
       builder: (context, userProvider, _) {
         _ensureListenerScope(userProvider);
@@ -208,92 +201,118 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ],
           ),
-          body: Consumer<AssetProvider>(
-            builder: (context, provider, _) {
-              return RefreshIndicator(
-                onRefresh: () async {
-                  await _initializeDashboard(forceRefresh: true);
+          body: PauseWhenHidden(
+            child: DashboardMotionHost(
+              child: PageBackdrop(
+                child: Consumer<AssetProvider>(
+                  builder: (context, provider, _) {
+                    return DashboardRefresh(
+                      onRefresh: () async {
+                        await _initializeDashboard(forceRefresh: true);
 
-                  await Future<void>.delayed(const Duration(milliseconds: 400));
-                },
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final isWide = constraints.maxWidth >= 1000;
-                    final horizontalPadding = isWide ? 28.0 : AppSpacing.lg;
+                        await Future<void>.delayed(
+                          const Duration(milliseconds: 400),
+                        );
+                      },
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final isWide = constraints.maxWidth >= 1000;
+                          final horizontalPadding = isWide
+                              ? 28.0
+                              : AppSpacing.lg;
 
-                    return SingleChildScrollView(
-                      physics: const AlwaysScrollableScrollPhysics(
-                        parent: ClampingScrollPhysics(),
-                      ),
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        AppSpacing.lg,
-                        horizontalPadding,
-                        AppSpacing.xxl,
-                      ),
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 1450),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildHero(context, userProvider, wide: isWide),
-                              const SizedBox(height: AppSpacing.xl),
-                              _buildSectionHeader(
-                                context,
-                                title: 'Inventory Overview',
-                                subtitle: _inventorySubtitle(userProvider),
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              _buildInventoryNotice(
-                                context,
-                                provider,
-                                userProvider,
-                              ),
-                              StreamBuilder<List<BazaarModel>>(
-                                stream: _bazaarStream,
-                                builder: (context, bazaarSnapshot) {
-                                  final bazaars = bazaarSnapshot.data;
-
-                                  // Crossfade so the figures arrive rather
-                                  // than replacing the placeholders in a jump.
-                                  return AppStateSwitcher(
-                                    child: _buildInventorySection(
+                          return SingleChildScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(
+                              parent: ClampingScrollPhysics(),
+                            ),
+                            padding: EdgeInsets.fromLTRB(
+                              horizontalPadding,
+                              AppSpacing.lg,
+                              horizontalPadding,
+                              AppSpacing.xxl,
+                            ),
+                            child: Center(
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 1450,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    _buildHero(
+                                      context,
+                                      userProvider,
+                                      wide: isWide,
+                                    ),
+                                    const SizedBox(height: AppSpacing.xl),
+                                    _buildSectionHeader(
+                                      context,
+                                      title: 'Inventory Overview',
+                                      subtitle: _inventorySubtitle(
+                                        userProvider,
+                                      ),
+                                    ),
+                                    const SizedBox(height: AppSpacing.md),
+                                    _buildInventoryNotice(
                                       context,
                                       provider,
                                       userProvider,
-                                      activeBazaarCount: bazaars
-                                          ?.where((bazaar) => bazaar.isActive)
-                                          .length,
                                     ),
-                                  );
-                                },
+                                    StreamBuilder<List<BazaarModel>>(
+                                      stream: _bazaarStream,
+                                      builder: (context, bazaarSnapshot) {
+                                        final bazaars = bazaarSnapshot.data;
+
+                                        // Crossfade so the figures arrive rather
+                                        // than replacing the placeholders in a jump.
+                                        return AppStateSwitcher(
+                                          child: _buildInventorySection(
+                                            context,
+                                            provider,
+                                            userProvider,
+                                            activeBazaarCount: bazaars
+                                                ?.where(
+                                                  (bazaar) => bazaar.isActive,
+                                                )
+                                                .length,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    if (_hasFigures(provider)) ...[
+                                      const SizedBox(height: AppSpacing.xl),
+                                      _buildCharts(
+                                        context,
+                                        provider,
+                                        wide: isWide,
+                                      ),
+                                    ],
+                                    const SizedBox(height: AppSpacing.xl),
+                                    _buildSectionHeader(
+                                      context,
+                                      title: 'Quick Actions',
+                                      subtitle: _quickActionsSubtitle(
+                                        userProvider,
+                                      ),
+                                    ),
+                                    const SizedBox(height: AppSpacing.md),
+                                    _buildQuickActions(context, userProvider),
+                                    if (_hasFigures(provider)) ...[
+                                      const SizedBox(height: AppSpacing.xl),
+                                      _buildRecentUpdates(context, provider),
+                                    ],
+                                  ],
+                                ),
                               ),
-                              if (_hasFigures(provider)) ...[
-                                const SizedBox(height: AppSpacing.xl),
-                                _buildCharts(context, provider, wide: isWide),
-                              ],
-                              const SizedBox(height: AppSpacing.xl),
-                              _buildSectionHeader(
-                                context,
-                                title: 'Quick Actions',
-                                subtitle: _quickActionsSubtitle(userProvider),
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                              _buildQuickActions(context, userProvider),
-                              if (_hasFigures(provider)) ...[
-                                const SizedBox(height: AppSpacing.xl),
-                                _buildRecentUpdates(context, provider),
-                              ],
-                            ],
-                          ),
-                        ),
+                            ),
+                          );
+                        },
                       ),
                     );
                   },
                 ),
-              );
-            },
+              ),
+            ),
           ),
         );
       },
@@ -378,7 +397,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           : 'Monitor and manage your organization’s IT assets, users, '
                 'requests and system activity from one secure workspace.',
       icon: icon,
-      animate: AppMotion.enabled(context),
       compact: !wide,
     );
   }
@@ -659,30 +677,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
             mainAxisExtent: 76 + (62 * scale),
           ),
           itemBuilder: (context, index) {
-            final animateEntrance = _playEntrance && AppMotion.enabled(context);
-            final motion = AppMotion.of(context);
             final data = cards[index];
 
-            return EntranceFadeSlide(
-              animate: animateEntrance,
-              // Staggered, so the cards arrive as a sequence rather than as a
-              // block, and the eye is led across the row.
-              delay: motion.staggerCard * index,
-              offset: motion.slideSmall,
-              scaleFrom: motion.cardEntranceScale,
-              // The one place an overshoot is allowed. easeOutBack at the
-              // rich level, plain easeOutCubic at the subtle one.
-              curve: motion.cardEntrance,
-              child: KpiCard(
-                label: data.title,
-                value: data.value,
-                number: data.number,
-                caption: data.caption,
-                icon: data.icon,
-                colour: data.color,
-                animateCount: animateEntrance,
-                onTap: data.enabled ? () => _openFilter(data.filter) : null,
-              ),
+            // No entrance wrapper here any more. The card takes its own slot
+            // out of the dashboard's shared sequence from its index, which is
+            // what lets this grid be rebuilt by a Firestore tick without
+            // every card flying in again.
+            return KpiCard(
+              index: index,
+              label: data.title,
+              value: data.value,
+              number: data.number,
+              caption: data.caption,
+              icon: data.icon,
+              colour: data.color,
+              onTap: data.enabled ? () => _openFilter(data.filter) : null,
             );
           },
         );
@@ -724,6 +733,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required bool wide,
   }) {
     final donut = DashboardSection(
+      slot: DashboardStage.sectionLabel,
       title: 'Stock Distribution',
       subtitle: 'Where every unit currently is',
       child: StatusDonut(
@@ -756,6 +766,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
 
     final bars = DashboardSection(
+      slot: DashboardStage.sectionLabel,
       title: 'Top Bazaars by Stock',
       subtitle: 'Units currently held at each location',
       child: LocationBars(
@@ -767,7 +778,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!wide) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [donut, const SizedBox(height: AppSpacing.lg), bars],
+        children: [
+          donut,
+          const SizedBox(height: AppSpacing.lg),
+          bars,
+        ],
       );
     }
 
@@ -857,6 +872,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final recent = dated.take(6).toList();
 
     return DashboardSection(
+      slot: DashboardStage.rail,
       title: 'Recently Updated',
       subtitle: 'The last changes to your inventory',
       trailing: TextButton.icon(
@@ -867,9 +883,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       child: ActivityTimeline(
         emptyMessage: 'No assets have been updated yet.',
-        entries: [
-          for (final asset in recent) _entryFor(asset),
-        ],
+        entries: [for (final asset in recent) _entryFor(asset)],
       ),
     );
   }
@@ -881,6 +895,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         : asset.location.trim();
 
     return TimelineEntry(
+      // The asset's own document id, so an asset that moves to the top of
+      // the list is recognised as the same row rather than as a new one.
+      id: asset.id,
       title: asset.name,
       subtitle: '${asset.category}  ·  $location',
       meta: when == null
@@ -988,6 +1005,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             final action = actions[index];
 
             return QuickActionTile(
+              index: index,
               title: action.title,
               subtitle: action.subtitle,
               icon: action.icon,

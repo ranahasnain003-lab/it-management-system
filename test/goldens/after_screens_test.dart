@@ -74,7 +74,17 @@ void main() {
   });
 
   /// Every screen, at both sizes and in both themes.
-  void screen(String name, Widget Function() build, {List<GoldenDevice>? only}) {
+  ///
+  /// [settle] is how long the capture pumps for before the shot. The default
+  /// comfortably outlasts a login screen; the dashboard needs longer, because
+  /// its opening sequence runs for 1.45s and a shorter pump would photograph
+  /// it halfway through.
+  void screen(
+    String name,
+    Widget Function() build, {
+    List<GoldenDevice>? only,
+    Duration settle = const Duration(milliseconds: 1200),
+  }) {
     for (final device in only ?? GoldenDevice.all) {
       for (final dark in [false, true]) {
         testWidgets('$name - ${device.name} - ${dark ? 'dark' : 'light'}', (
@@ -87,6 +97,7 @@ void main() {
             device: device,
             theme: dark ? AppTheme.dark() : AppTheme.light(),
             dark: dark,
+            settle: settle,
             child: _hosted(build(), dark: dark, fontFamily: AppType.family),
           );
         });
@@ -114,6 +125,7 @@ void main() {
     'dashboard_mobile',
     () => const DashboardScreen(),
     only: const [GoldenDevice.phone],
+    settle: const Duration(milliseconds: 2100),
   );
 
   // The web dashboard, which is its own page rather than a wide layout of the
@@ -125,5 +137,6 @@ void main() {
     // Text renders with Flutter's missing-Material debug marks.
     () => const Scaffold(body: WebDashboardPage()),
     only: const [GoldenDevice.desktop],
+    settle: const Duration(milliseconds: 2100),
   );
 }

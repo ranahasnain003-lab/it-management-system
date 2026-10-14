@@ -12,9 +12,10 @@ import '../../core/providers/user_provider.dart';
 import '../../core/services/permission_service.dart';
 import '../../core/shared/widgets/app_states.dart';
 import '../../core/theme/app_brand.dart';
-import '../../core/theme/app_motion.dart';
 import '../../core/theme/colors.dart';
-import '../../core/widgets/motion/entrance.dart';
+import '../../core/dashboard/widgets/dashboard_effects.dart';
+import '../../core/dashboard/widgets/dashboard_motion.dart';
+import '../../core/widgets/motion/pause_when_hidden.dart';
 import '../../models/deployment_model.dart';
 import '../widgets/web_common.dart';
 import 'movement_kind.dart';
@@ -27,14 +28,13 @@ class WebDashboardPage extends StatefulWidget {
 }
 
 class _WebDashboardPageState extends State<WebDashboardPage> {
-  /// Whether the figures have already counted up in this browser session.
-  ///
-  /// Static for the same reason the Android screen's flag is: the entrance
-  /// marks the first sight of the dashboard, not every return to it from
-  /// another page in the shell.
-  static bool _entrancePlayedThisSession = false;
-
-  late final bool _playEntrance = !_entrancePlayedThisSession;
+  // The figures used to count up only once per browser session. They do it on
+  // every visit now, which on the web means every time the shell builds this
+  // page, because context.go disposes the old one rather than stacking on it.
+  //
+  // Nothing latches it, because nothing needs to: the sequence is one
+  // controller in DashboardMotionHost, so a Firestore tick rebuilding these
+  // cards reads it wherever it already is rather than starting it again.
 
   @override
   Widget build(BuildContext context) {
@@ -52,298 +52,302 @@ class _WebDashboardPageState extends State<WebDashboardPage> {
     // keeps its layout and the wait reads as the numbers landing.
     final isFirstLoad = assets.isLoading && assets.assets.isEmpty;
 
-    final animate = AppMotion.enabled(context);
-    final countUp = _playEntrance && animate && !isFirstLoad;
-
-    if (_playEntrance && !isFirstLoad) _entrancePlayedThisSession = true;
-
-    return WebPage(
-      title: 'Dashboard',
-      children: [
-        DashboardHero(
-          name: profile?.name.trim().isNotEmpty == true
-              ? profile!.name.trim()
-              : (profile?.email ?? 'Welcome'),
-          role: PermissionService.roleLabel(role),
-          // Spelled out rather than numeric, so it cannot be read as the
-          // American order on one machine and the British order on another.
-          dateLabel: DateFormat('EEEE, d MMMM y').format(DateTime.now()),
-          description: users.isNormalUser
-              ? 'Real-time inventory of the organisation, shared with the '
-                    'Android app.'
-              : 'Assets, Head Office stock, Bazaar transfers and approvals, '
-                    'in real time and shared with the Android app.',
-          icon: users.isSuperAdmin
-              ? Icons.admin_panel_settings_rounded
-              : users.isAdmin
-              ? Icons.manage_accounts_rounded
-              : Icons.person_rounded,
-          animate: animate,
-        ),
-        const SizedBox(height: AppSpacing.xl),
-
-        if (assets.errorMessage != null)
-          _DashboardNotice(
-            icon: Icons.error_outline_rounded,
-            title: 'Unable to load inventory',
-            message: cleanError(assets.errorMessage!),
-            isError: true,
-            // The same scope-preserving refresh the Android screens use, so a
-            // transient network failure does not need a reload of the app.
-            onRetry: () => context.read<AssetProvider>().refreshAssets(),
-          ),
-
-        // Other live sources feed several cards; a failure must not be shown
-        // as zero pending requests / Bazaars / movements.
-        for (final failure in [
-          if (requests.errorMessage != null)
-            ('Requests', requests.errorMessage!),
-          if (bazaars.errorMessage != null) ('Bazaars', bazaars.errorMessage!),
-          if (movements.error != null) ('Stock movements', movements.error!),
-        ])
-          _DashboardNotice(
-            icon: Icons.error_outline_rounded,
-            title: 'Unable to load ${failure.$1.toLowerCase()}',
-            message:
-                '${cleanError(failure.$2)} The related figures below may be incomplete.',
-            isError: true,
-          ),
-
-        const _GroupLabel('Inventory overview'),
-        AppStateSwitcher(
-          child: isFirstLoad
-              // Full width, so the placeholder tiles start at the left edge
-              // exactly where the real ones do.
-              ? const SizedBox(
-                  key: ValueKey('overview-loading'),
-                  width: double.infinity,
-                  child: AppStatSkeleton(count: 4),
-                )
-              : _KpiGrid(
-                  key: const ValueKey('overview'),
-                  animate: animate && _playEntrance,
-                  columnsFor: (width) => width >= 900
-                      ? 4
-                      : width >= 520
-                      ? 2
-                      : 1,
-                  children: [
-                    KpiCard(
-                      // The number is a count of asset records, so it is named
-                      // the way the Android dashboard names it instead of
-                      // reading as a total.
-                      label: 'Total Assets',
-                      value: '${assets.totalAssets}',
-                      number: assets.totalAssets,
-                      caption: 'Asset records',
-                      icon: Icons.inventory_2_rounded,
-                      colour: AppBrand.green,
-                      animateCount: countUp,
-                      onTap: () => context.go('/inventory'),
-                    ),
-                    KpiCard(
-                      label: 'Total Quantity',
-                      value: '${assets.totalQuantity}',
-                      number: assets.totalQuantity,
-                      caption: 'All units in inventory',
-                      icon: Icons.numbers_rounded,
-                      colour: AppBrand.statusReserved,
-                      animateCount: countUp,
-                      onTap: () => context.go('/inventory'),
-                    ),
-                    KpiCard(
-                      label: 'Head Office Stock',
-                      value: '${assets.headOfficeStock}',
-                      number: assets.headOfficeStock,
-                      caption: 'Units available at Head Office',
-                      icon: Icons.warehouse_rounded,
-                      colour: AppBrand.statusAvailable,
-                      animateCount: countUp,
-                      onTap: () => context.go('/inventory/head-office'),
-                    ),
-                    KpiCard(
-                      label: 'Stock at Bazaars',
-                      value: '${assets.deployedToBazaarsQuantity}',
-                      number: assets.deployedToBazaarsQuantity,
-                      caption: 'Units currently at Bazaars',
-                      icon: Icons.local_shipping_rounded,
-                      colour: AppBrand.teal,
-                      animateCount: countUp,
-                      onTap: () => context.go('/transfers/current-stock'),
-                    ),
-                  ],
-                ),
-        ),
-        const SizedBox(height: AppSpacing.xl),
-        const _GroupLabel('Status and activity'),
-        AppStateSwitcher(
-          child: isFirstLoad
-              ? const SizedBox(
-                  key: ValueKey('activity-loading'),
-                  width: double.infinity,
-                  child: AppStatSkeleton(count: 5),
-                )
-              : _KpiGrid(
-                  key: const ValueKey('activity'),
-                  animate: animate && _playEntrance,
-                  columnsFor: (width) => width >= 1200
-                      ? 5
-                      : width >= 760
-                      ? 3
-                      : width >= 520
-                      ? 2
-                      : 1,
-                  children: [
-                    KpiCard(
-                      label: 'Assigned',
-                      value: '${assets.assignedQuantity}',
-                      number: assets.assignedQuantity,
-                      caption: '${assets.assignedAssets} asset records',
-                      icon: Icons.person_pin_rounded,
-                      colour: AppBrand.statusAssigned,
-                      animateCount: countUp,
-                      onTap: () => context.go('/inventory/assigned'),
-                    ),
-                    KpiCard(
-                      label: 'Damaged',
-                      value: '${assets.damagedQuantity}',
-                      number: assets.damagedQuantity,
-                      caption: 'At HO · ${assets.damagedAssets} records',
-                      icon: Icons.report_problem_rounded,
-                      colour: AppBrand.statusDamaged,
-                      animateCount: countUp,
-                      onTap: () => context.go('/inventory/damaged'),
-                    ),
-                    KpiCard(
-                      label: 'Under Repair',
-                      value: '${assets.underRepairQuantity}',
-                      number: assets.underRepairQuantity,
-                      caption: 'At HO · ${assets.underRepairAssets} records',
-                      icon: Icons.build_rounded,
-                      colour: AppBrand.statusRepair,
-                      animateCount: countUp,
-                      onTap: () => context.go('/inventory/under-repair'),
-                    ),
-                    KpiCard(
-                      label: 'Pending Requests',
-                      value: '${requests.pendingRequests}',
-                      number: requests.pendingRequests,
-                      caption: '${requests.totalRequests} total',
-                      icon: Icons.assignment_late_rounded,
-                      colour: AppBrand.statusMaintenance,
-                      animateCount: countUp,
-                      onTap: () => context.go('/requests'),
-                    ),
-                    KpiCard(
-                      label: 'All Bazaars',
-                      value: bazaars.isLoading && bazaars.bazaars.isEmpty
-                          ? '—'
-                          : '${bazaars.activeBazaarCount}',
-                      // No figure while the list is still loading, so the
-                      // placeholder never counts up to a number.
-                      number: bazaars.isLoading && bazaars.bazaars.isEmpty
-                          ? null
-                          : bazaars.activeBazaarCount,
-                      caption: '${bazaars.inactiveBazaarCount} disabled',
-                      icon: Icons.storefront_rounded,
-                      colour: AppBrand.gold,
-                      animateCount: countUp,
-                      // Bazaar MASTER, not the stock-at-Bazaars screen.
-                      onTap: () => context.go('/bazaars'),
-                    ),
-                  ],
-                ),
-        ),
-        const SizedBox(height: AppSpacing.xl),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            // Charts repaint on their own while a tooltip follows the
-            // pointer; a boundary each keeps that off the rest of the page.
-            final distribution = RepaintBoundary(
-              child: DashboardSection(
-                title: 'Stock Distribution',
-                subtitle: 'Where every unit currently is',
-                child: StatusDonut(
-                  total: assets.totalQuantity,
-                  // These four buckets are exactly the ones the provider
-                  // guarantees add up to the total, so the ring is a whole.
-                  slices: [
-                    ChartDatum(
-                      'Head Office (available)',
-                      assets.headOfficeStock,
-                      AppBrand.statusAvailable,
-                    ),
-                    ChartDatum(
-                      'At Bazaars',
-                      assets.deployedToBazaarsQuantity,
-                      AppBrand.teal,
-                    ),
-                    ChartDatum(
-                      'Assigned',
-                      assets.assignedQuantity,
-                      AppBrand.statusAssigned,
-                    ),
-                    ChartDatum(
-                      'Unavailable at HO',
-                      assets.unavailableAtHeadOfficeQuantity,
-                      AppBrand.statusDamaged,
-                    ),
-                  ],
-                ),
+    return PauseWhenHidden(
+      child: DashboardMotionHost(
+        child: PageBackdrop(
+          child: WebPage(
+            title: 'Dashboard',
+            children: [
+              DashboardHero(
+                name: profile?.name.trim().isNotEmpty == true
+                    ? profile!.name.trim()
+                    : (profile?.email ?? 'Welcome'),
+                role: PermissionService.roleLabel(role),
+                // Spelled out rather than numeric, so it cannot be read as the
+                // American order on one machine and the British order on another.
+                dateLabel: DateFormat('EEEE, d MMMM y').format(DateTime.now()),
+                description: users.isNormalUser
+                    ? 'Real-time inventory of the organisation, shared with the '
+                          'Android app.'
+                    : 'Assets, Head Office stock, Bazaar transfers and approvals, '
+                          'in real time and shared with the Android app.',
+                icon: users.isSuperAdmin
+                    ? Icons.admin_panel_settings_rounded
+                    : users.isAdmin
+                    ? Icons.manage_accounts_rounded
+                    : Icons.person_rounded,
               ),
-            );
+              const SizedBox(height: AppSpacing.xl),
 
-            final bazaarChart = RepaintBoundary(
-              child: DashboardSection(
-                title: 'Top Bazaars by Stock',
-                subtitle: 'Units currently held at each location',
-                child: LocationBars(bars: _bazaarBars(movements)),
+              if (assets.errorMessage != null)
+                _DashboardNotice(
+                  icon: Icons.error_outline_rounded,
+                  title: 'Unable to load inventory',
+                  message: cleanError(assets.errorMessage!),
+                  isError: true,
+                  // The same scope-preserving refresh the Android screens use, so a
+                  // transient network failure does not need a reload of the app.
+                  onRetry: () => context.read<AssetProvider>().refreshAssets(),
+                ),
+
+              // Other live sources feed several cards; a failure must not be shown
+              // as zero pending requests / Bazaars / movements.
+              for (final failure in [
+                if (requests.errorMessage != null)
+                  ('Requests', requests.errorMessage!),
+                if (bazaars.errorMessage != null)
+                  ('Bazaars', bazaars.errorMessage!),
+                if (movements.error != null)
+                  ('Stock movements', movements.error!),
+              ])
+                _DashboardNotice(
+                  icon: Icons.error_outline_rounded,
+                  title: 'Unable to load ${failure.$1.toLowerCase()}',
+                  message:
+                      '${cleanError(failure.$2)} The related figures below may be incomplete.',
+                  isError: true,
+                ),
+
+              const _GroupLabel('Inventory overview'),
+              AppStateSwitcher(
+                child: isFirstLoad
+                    // Full width, so the placeholder tiles start at the left edge
+                    // exactly where the real ones do.
+                    ? const SizedBox(
+                        key: ValueKey('overview-loading'),
+                        width: double.infinity,
+                        child: AppStatSkeleton(count: 4),
+                      )
+                    : _KpiGrid(
+                        key: const ValueKey('overview'),
+                        columnsFor: (width) => width >= 900
+                            ? 4
+                            : width >= 520
+                            ? 2
+                            : 1,
+                        children: [
+                          KpiCard(
+                            index: 0,
+                            // The number is a count of asset records, so it is named
+                            // the way the Android dashboard names it instead of
+                            // reading as a total.
+                            label: 'Total Assets',
+                            value: '${assets.totalAssets}',
+                            number: assets.totalAssets,
+                            caption: 'Asset records',
+                            icon: Icons.inventory_2_rounded,
+                            colour: AppBrand.green,
+                            onTap: () => context.go('/inventory'),
+                          ),
+                          KpiCard(
+                            index: 1,
+                            label: 'Total Quantity',
+                            value: '${assets.totalQuantity}',
+                            number: assets.totalQuantity,
+                            caption: 'All units in inventory',
+                            icon: Icons.numbers_rounded,
+                            colour: AppBrand.statusReserved,
+                            onTap: () => context.go('/inventory'),
+                          ),
+                          KpiCard(
+                            index: 2,
+                            label: 'Head Office Stock',
+                            value: '${assets.headOfficeStock}',
+                            number: assets.headOfficeStock,
+                            caption: 'Units available at Head Office',
+                            icon: Icons.warehouse_rounded,
+                            colour: AppBrand.statusAvailable,
+                            onTap: () => context.go('/inventory/head-office'),
+                          ),
+                          KpiCard(
+                            index: 3,
+                            label: 'Stock at Bazaars',
+                            value: '${assets.deployedToBazaarsQuantity}',
+                            number: assets.deployedToBazaarsQuantity,
+                            caption: 'Units currently at Bazaars',
+                            icon: Icons.local_shipping_rounded,
+                            colour: AppBrand.teal,
+                            onTap: () => context.go('/transfers/current-stock'),
+                          ),
+                        ],
+                      ),
               ),
-            );
+              const SizedBox(height: AppSpacing.xl),
+              const _GroupLabel('Status and activity'),
+              AppStateSwitcher(
+                child: isFirstLoad
+                    ? const SizedBox(
+                        key: ValueKey('activity-loading'),
+                        width: double.infinity,
+                        child: AppStatSkeleton(count: 5),
+                      )
+                    : _KpiGrid(
+                        key: const ValueKey('activity'),
+                        columnsFor: (width) => width >= 1200
+                            ? 5
+                            : width >= 760
+                            ? 3
+                            : width >= 520
+                            ? 2
+                            : 1,
+                        children: [
+                          KpiCard(
+                            index: 4,
+                            label: 'Assigned',
+                            value: '${assets.assignedQuantity}',
+                            number: assets.assignedQuantity,
+                            caption: '${assets.assignedAssets} asset records',
+                            icon: Icons.person_pin_rounded,
+                            colour: AppBrand.statusAssigned,
+                            onTap: () => context.go('/inventory/assigned'),
+                          ),
+                          KpiCard(
+                            index: 5,
+                            label: 'Damaged',
+                            value: '${assets.damagedQuantity}',
+                            number: assets.damagedQuantity,
+                            caption: 'At HO · ${assets.damagedAssets} records',
+                            icon: Icons.report_problem_rounded,
+                            colour: AppBrand.statusDamaged,
+                            onTap: () => context.go('/inventory/damaged'),
+                          ),
+                          KpiCard(
+                            index: 6,
+                            label: 'Under Repair',
+                            value: '${assets.underRepairQuantity}',
+                            number: assets.underRepairQuantity,
+                            caption:
+                                'At HO · ${assets.underRepairAssets} records',
+                            icon: Icons.build_rounded,
+                            colour: AppBrand.statusRepair,
+                            onTap: () => context.go('/inventory/under-repair'),
+                          ),
+                          KpiCard(
+                            index: 7,
+                            label: 'Pending Requests',
+                            value: '${requests.pendingRequests}',
+                            number: requests.pendingRequests,
+                            caption: '${requests.totalRequests} total',
+                            icon: Icons.assignment_late_rounded,
+                            colour: AppBrand.statusMaintenance,
+                            onTap: () => context.go('/requests'),
+                          ),
+                          KpiCard(
+                            index: 8,
+                            label: 'All Bazaars',
+                            value: bazaars.isLoading && bazaars.bazaars.isEmpty
+                                ? '—'
+                                : '${bazaars.activeBazaarCount}',
+                            // No figure while the list is still loading, so the
+                            // placeholder never counts up to a number.
+                            number: bazaars.isLoading && bazaars.bazaars.isEmpty
+                                ? null
+                                : bazaars.activeBazaarCount,
+                            caption: '${bazaars.inactiveBazaarCount} disabled',
+                            icon: Icons.storefront_rounded,
+                            colour: AppBrand.gold,
+                            // Bazaar MASTER, not the stock-at-Bazaars screen.
+                            onTap: () => context.go('/bazaars'),
+                          ),
+                        ],
+                      ),
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  // Charts repaint on their own while a tooltip follows the
+                  // pointer; a boundary each keeps that off the rest of the page.
+                  final distribution = RepaintBoundary(
+                    child: DashboardSection(
+                      slot: DashboardStage.sectionLabel,
+                      title: 'Stock Distribution',
+                      subtitle: 'Where every unit currently is',
+                      child: StatusDonut(
+                        total: assets.totalQuantity,
+                        // These four buckets are exactly the ones the provider
+                        // guarantees add up to the total, so the ring is a whole.
+                        slices: [
+                          ChartDatum(
+                            'Head Office (available)',
+                            assets.headOfficeStock,
+                            AppBrand.statusAvailable,
+                          ),
+                          ChartDatum(
+                            'At Bazaars',
+                            assets.deployedToBazaarsQuantity,
+                            AppBrand.teal,
+                          ),
+                          ChartDatum(
+                            'Assigned',
+                            assets.assignedQuantity,
+                            AppBrand.statusAssigned,
+                          ),
+                          ChartDatum(
+                            'Unavailable at HO',
+                            assets.unavailableAtHeadOfficeQuantity,
+                            AppBrand.statusDamaged,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
 
-            if (constraints.maxWidth < 1100) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  distribution,
-                  const SizedBox(height: AppSpacing.lg),
-                  bazaarChart,
-                ],
-              );
-            }
+                  final bazaarChart = RepaintBoundary(
+                    child: DashboardSection(
+                      slot: DashboardStage.sectionLabel,
+                      title: 'Top Bazaars by Stock',
+                      subtitle: 'Units currently held at each location',
+                      child: LocationBars(bars: _bazaarBars(movements)),
+                    ),
+                  );
 
-            // Both cards use the same fixed chart height, so they line up
-            // without intrinsic measurement.
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(flex: 5, child: distribution),
-                const SizedBox(width: AppSpacing.lg),
-                Expanded(flex: 6, child: bazaarChart),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: AppSpacing.xl),
-        const _GroupLabel('Quick actions'),
-        _QuickActions(
-          role: role,
-          isNormalUser: users.isNormalUser,
-          pendingRequests: requests.pendingRequests,
-        ),
-        const SizedBox(height: AppSpacing.xl),
-        DashboardSection(
-          title: 'Recent Stock Movements',
-          subtitle: 'The latest deployments, transfers and returns',
-          trailing: TextButton.icon(
-            onPressed: () => context.go('/transfers/history'),
-            iconAlignment: IconAlignment.end,
-            icon: const Icon(Icons.arrow_forward_rounded, size: 16),
-            label: const Text('View all'),
+                  if (constraints.maxWidth < 1100) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        distribution,
+                        const SizedBox(height: AppSpacing.lg),
+                        bazaarChart,
+                      ],
+                    );
+                  }
+
+                  // Both cards use the same fixed chart height, so they line up
+                  // without intrinsic measurement.
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(flex: 5, child: distribution),
+                      const SizedBox(width: AppSpacing.lg),
+                      Expanded(flex: 6, child: bazaarChart),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              const _GroupLabel('Quick actions'),
+              _QuickActions(
+                role: role,
+                isNormalUser: users.isNormalUser,
+                pendingRequests: requests.pendingRequests,
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              DashboardSection(
+                slot: DashboardStage.rail,
+                title: 'Recent Stock Movements',
+                subtitle: 'The latest deployments, transfers and returns',
+                trailing: TextButton.icon(
+                  onPressed: () => context.go('/transfers/history'),
+                  iconAlignment: IconAlignment.end,
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 16),
+                  label: const Text('View all'),
+                ),
+                child: _RecentMovements(movements: movements),
+              ),
+            ],
           ),
-          child: _RecentMovements(movements: movements),
         ),
-      ],
+      ),
     );
   }
 
@@ -408,24 +412,13 @@ class _GroupLabel extends StatelessWidget {
 /// KPI grid with an explicit column count per width, so rows divide evenly
 /// instead of leaving a lone card on the last row.
 class _KpiGrid extends StatelessWidget {
-  const _KpiGrid({
-    super.key,
-    required this.columnsFor,
-    required this.children,
-    this.animate = false,
-  });
+  const _KpiGrid({super.key, required this.columnsFor, required this.children});
 
   final int Function(double width) columnsFor;
   final List<Widget> children;
 
-  /// Whether the cards make a staggered entrance. Only on the first sight of
-  /// the dashboard; returning to it from another page is still.
-  final bool animate;
-
   @override
   Widget build(BuildContext context) {
-    final motion = AppMotion.of(context);
-
     return LayoutBuilder(
       builder: (context, constraints) {
         const spacing = 16.0; // WebCardGrid spacing.
@@ -437,20 +430,13 @@ class _KpiGrid extends StatelessWidget {
         final minItemWidth = ((width + spacing) / columns - spacing - 0.5)
             .clamp(1.0, double.infinity);
 
+        // No entrance wrapper here any more: each KpiCard takes its own slot
+        // out of the dashboard sequence from the index it was given, so this
+        // grid can be rebuilt by a Firestore tick without replaying anything.
         return WebCardGrid(
           minItemWidth: minItemWidth,
           itemHeight: 140,
-          children: [
-            for (var i = 0; i < children.length; i++)
-              EntranceFadeSlide(
-                animate: animate,
-                delay: motion.staggerCard * i,
-                offset: motion.slideSmall,
-                scaleFrom: motion.cardEntranceScale,
-                curve: motion.cardEntrance,
-                child: children[i],
-              ),
-          ],
+          children: children,
         );
       },
     );
@@ -482,6 +468,7 @@ class _QuickActions extends StatelessWidget {
     final tiles = <Widget>[
       if (PermissionService.canAddAsset(role))
         QuickActionTile(
+          index: 0,
           title: 'Add Asset',
           subtitle: 'Register new inventory',
           icon: Icons.add_box_rounded,
@@ -490,6 +477,7 @@ class _QuickActions extends StatelessWidget {
         ),
       if (PermissionService.canTransferAsset(role))
         QuickActionTile(
+          index: 1,
           title: 'New Transfer',
           subtitle: 'Deploy or move stock',
           icon: Icons.local_shipping_rounded,
@@ -497,6 +485,7 @@ class _QuickActions extends StatelessWidget {
           onTap: () => context.go('/transfers/new'),
         ),
       QuickActionTile(
+        index: 2,
         title: isNormalUser ? 'My Requests' : 'Requests',
         subtitle: isNormalUser ? 'Submit and track' : 'Review and approve',
         icon: Icons.assignment_rounded,
@@ -507,6 +496,7 @@ class _QuickActions extends StatelessWidget {
         onTap: () => context.go('/requests'),
       ),
       QuickActionTile(
+        index: 3,
         title: 'Bazaars',
         subtitle: 'Locations and their stock',
         icon: Icons.storefront_rounded,
@@ -515,11 +505,7 @@ class _QuickActions extends StatelessWidget {
       ),
     ];
 
-    return WebCardGrid(
-      minItemWidth: 230,
-      itemHeight: 126,
-      children: tiles,
-    );
+    return WebCardGrid(minItemWidth: 230, itemHeight: 126, children: tiles);
   }
 }
 
@@ -654,6 +640,10 @@ class _RecentMovements extends StatelessWidget {
         '${movement.toBazaarName ?? movement.toLocation}';
 
     return TimelineEntry(
+      // The movement document id, so a movement arriving at the top of the
+      // list is recognised as new and highlighted, and the rows that were
+      // already there are not.
+      id: movement.id,
       title: movement.assetName,
       subtitle: route,
       meta:
