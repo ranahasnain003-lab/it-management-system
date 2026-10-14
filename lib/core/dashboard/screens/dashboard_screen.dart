@@ -765,6 +765,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
 
+    final rings = DashboardSection(
+      slot: DashboardStage.sectionLabel,
+      title: 'Allocation',
+      subtitle: 'What share of the inventory is where',
+      child: AllocationRings(
+        total: provider.totalQuantity,
+        available: provider.headOfficeStock,
+        atBazaars: provider.deployedToBazaarsQuantity,
+        assigned: provider.assignedQuantity,
+      ),
+    );
+
     final bars = DashboardSection(
       slot: DashboardStage.sectionLabel,
       title: 'Top Bazaars by Stock',
@@ -781,17 +793,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           donut,
           const SizedBox(height: AppSpacing.lg),
+          rings,
+          const SizedBox(height: AppSpacing.lg),
           bars,
         ],
       );
     }
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(flex: 5, child: donut),
-        const SizedBox(width: AppSpacing.lg),
-        Expanded(flex: 6, child: bars),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(flex: 5, child: donut),
+            const SizedBox(width: AppSpacing.lg),
+            Expanded(flex: 6, child: bars),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        rings,
       ],
     );
   }

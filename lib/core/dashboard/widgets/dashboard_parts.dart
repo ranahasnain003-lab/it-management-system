@@ -1591,3 +1591,79 @@ class DashboardSection extends StatelessWidget {
     return Staged(slot: where, slide: 18, child: card);
   }
 }
+
+// =============================================================================
+// ALLOCATION RINGS
+// =============================================================================
+
+/// Three shares of the total inventory, as rings.
+///
+/// The same four buckets the donut draws, read a different way: the donut
+/// answers "how is everything split", these answer "how much of everything is
+/// each of these". A ring is quicker to read against a target than a slice of
+/// a pie is, which is why both are here.
+///
+/// Each ring sweeps on the opening sequence and keeps a soft glow travelling
+/// at its leading end afterwards, so the end of the value is marked without
+/// the value itself ever moving.
+class AllocationRings extends StatelessWidget {
+  const AllocationRings({
+    super.key,
+    required this.total,
+    required this.available,
+    required this.atBazaars,
+    required this.assigned,
+  });
+
+  final int total;
+  final int available;
+  final int atBazaars;
+  final int assigned;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    if (total <= 0) {
+      return SizedBox(
+        height: 120,
+        child: Center(
+          child: Text(
+            'No inventory to measure yet.',
+            style: AppType.body.copyWith(color: colors.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+
+    double share(int part) => (part / total).clamp(0.0, 1.0);
+
+    String percent(int part) => '${(part * 100 / total).round()}%';
+
+    return Wrap(
+      spacing: AppSpacing.xl,
+      runSpacing: AppSpacing.lg,
+      alignment: WrapAlignment.spaceEvenly,
+      children: [
+        ProgressRing(
+          fraction: share(available),
+          colour: AppBrand.statusAvailable,
+          label: percent(available),
+          caption: 'Available\nat HO',
+        ),
+        ProgressRing(
+          fraction: share(atBazaars),
+          colour: AppBrand.teal,
+          label: percent(atBazaars),
+          caption: 'At\nBazaars',
+        ),
+        ProgressRing(
+          fraction: share(assigned),
+          colour: AppBrand.statusAssigned,
+          label: percent(assigned),
+          caption: 'Assigned\nto people',
+        ),
+      ],
+    );
+  }
+}

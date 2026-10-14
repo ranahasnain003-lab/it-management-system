@@ -325,6 +325,18 @@ class _WebDashboardPageState extends State<WebDashboardPage> {
                 },
               ),
               const SizedBox(height: AppSpacing.xl),
+              DashboardSection(
+                slot: DashboardStage.sectionLabel,
+                title: 'Allocation',
+                subtitle: 'What share of the inventory is where',
+                child: AllocationRings(
+                  total: assets.totalQuantity,
+                  available: assets.headOfficeStock,
+                  atBazaars: assets.deployedToBazaarsQuantity,
+                  assigned: assets.assignedQuantity,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.xl),
               const _GroupLabel('Quick actions'),
               _QuickActions(
                 role: role,
