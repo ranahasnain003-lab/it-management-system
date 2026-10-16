@@ -9,6 +9,7 @@ import '../../providers/user_provider.dart';
 import '../../services/bazaar_service.dart';
 import '../../services/deployment_service.dart';
 import '../../services/permission_service.dart';
+import '../../shared/widgets/searchable_picker.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/colors.dart';
 import '../../widgets/motion/success_check.dart';
@@ -1011,55 +1012,49 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
       );
     }
 
-    return DropdownButtonFormField<String>(
-      initialValue: selectedValue,
-      isExpanded: true,
+    return SearchablePickerField<String>(
+      value: selectedValue,
+      enabled: !_isTransferring,
+      searchHint: 'Search asset name or tag…',
+      emptyMessage: 'No asset matches that search.',
       decoration: InputDecoration(
         labelText: 'Select Asset *',
         hintText: 'Choose an asset',
         prefixIcon: const Icon(Icons.inventory_2_outlined),
       ),
-      items: assets.map((asset) {
+      options: assets.map((asset) {
         final name = asset.name.trim().isEmpty
             ? 'Unnamed Asset'
             : asset.name.trim();
+        final tag = asset.assetId.trim();
 
-        return DropdownMenuItem<String>(
+        return PickerOption<String>(
           value: asset.id.trim(),
-          child: Text(
-            asset.assetId.trim().isEmpty
-                ? name
-                : '$name • '
-                      '${asset.assetId.trim()}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontWeight: FontWeight.w700),
-          ),
+          label: name,
+          subtitle: tag.isEmpty ? null : tag,
         );
       }).toList(),
-      onChanged: _isTransferring
-          ? null
-          : (value) {
-              if (value == null) {
-                return;
-              }
+      onChanged: (value) {
+        if (value == null) {
+          return;
+        }
 
-              setState(() {
-                _selectedAssetDocumentId = value;
-                _selectedAsset = null;
-                _sources = <_LocationStock>[];
+        setState(() {
+          _selectedAssetDocumentId = value;
+          _selectedAsset = null;
+          _sources = <_LocationStock>[];
 
-                _selectedSourceId = null;
-                _selectedSourceName = null;
+          _selectedSourceId = null;
+          _selectedSourceName = null;
 
-                _selectedDestinationId = null;
-                _selectedDestinationName = null;
+          _selectedDestinationId = null;
+          _selectedDestinationName = null;
 
-                _quantityController.clear();
-              });
+          _quantityController.clear();
+        });
 
-              _loadSourcesForAsset(value);
-            },
+        _loadSourcesForAsset(value);
+      },
       validator: (_) {
         final selected = _selectedAssetDocumentId;
 
@@ -1276,61 +1271,49 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
       selectedValue = _selectedSourceId;
     }
 
-    return DropdownButtonFormField<String>(
-      initialValue: selectedValue,
-      isExpanded: true,
+    return SearchablePickerField<String>(
+      value: selectedValue,
+      enabled: !_isTransferring,
+      searchHint: 'Search locations…',
+      emptyMessage: 'No stock location matches that search.',
       decoration: InputDecoration(
         labelText: 'Source Location *',
         hintText: 'Select where stock is currently located',
         prefixIcon: const Icon(Icons.my_location_outlined),
       ),
-      items: _sources.map((source) {
-        return DropdownMenuItem<String>(
-          value: source.id,
-          child: Row(
-            children: [
-              Icon(
-                source.id == '__head_office__'
-                    ? Icons.business_outlined
-                    : Icons.storefront_outlined,
-                size: 20,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  '${source.name} • '
-                  '${source.quantity} units',
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
-      onChanged: _isTransferring
-          ? null
-          : (value) {
-              if (value == null) {
-                return;
-              }
+      options: _sources
+          .map(
+            (source) => PickerOption<String>(
+              value: source.id,
+              label: source.name,
+              subtitle: '${source.quantity} units',
+              icon: source.id == '__head_office__'
+                  ? Icons.business_outlined
+                  : Icons.storefront_outlined,
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        if (value == null) {
+          return;
+        }
 
-              final source = _findSource(value);
+        final source = _findSource(value);
 
-              if (source == null) {
-                return;
-              }
+        if (source == null) {
+          return;
+        }
 
-              setState(() {
-                _selectedSourceId = source.id;
-                _selectedSourceName = source.name;
+        setState(() {
+          _selectedSourceId = source.id;
+          _selectedSourceName = source.name;
 
-                _selectedDestinationId = null;
-                _selectedDestinationName = null;
+          _selectedDestinationId = null;
+          _selectedDestinationName = null;
 
-                _quantityController.clear();
-              });
-            },
+          _quantityController.clear();
+        });
+      },
       validator: (_) {
         if (_selectedSourceId == null || _selectedSourceId!.trim().isEmpty) {
           return 'Please select the source location.';
@@ -1452,64 +1435,49 @@ class _TransferAssetScreenState extends State<TransferAssetScreen> {
       selectedValue = selectedDestination;
     }
 
-    return DropdownButtonFormField<String>(
-      initialValue: selectedValue,
-      isExpanded: true,
+    return SearchablePickerField<String>(
+      value: selectedValue,
+      enabled: !_isTransferring,
+      searchHint: 'Search Head Office or a Bazaar…',
+      emptyMessage: 'No destination matches that search.',
       decoration: InputDecoration(
         labelText: 'Destination *',
         hintText: 'Select destination',
         prefixIcon: const Icon(Icons.location_on_outlined),
       ),
-      items: destinations.map((destination) {
+      options: destinations.map((destination) {
         final name = destination['name'] ?? '';
-
         final city = destination['city'] ?? '';
-
         final id = destination['id'] ?? '';
 
-        return DropdownMenuItem<String>(
+        return PickerOption<String>(
           value: id,
-          child: Row(
-            children: [
-              Icon(
-                id == '__head_office__'
-                    ? Icons.business_outlined
-                    : Icons.storefront_outlined,
-                size: 20,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  city.isEmpty ? name : '$name — $city',
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
+          label: name,
+          subtitle: city.isEmpty ? null : city,
+          icon: id == '__head_office__'
+              ? Icons.business_outlined
+              : Icons.storefront_outlined,
         );
       }).toList(),
-      onChanged: _isTransferring
-          ? null
-          : (value) {
-              if (value == null) {
-                return;
-              }
+      onChanged: (value) {
+        if (value == null) {
+          return;
+        }
 
-              String? name;
+        String? name;
 
-              for (final destination in destinations) {
-                if (destination['id'] == value) {
-                  name = destination['name'];
-                  break;
-                }
-              }
+        for (final destination in destinations) {
+          if (destination['id'] == value) {
+            name = destination['name'];
+            break;
+          }
+        }
 
-              setState(() {
-                _selectedDestinationId = value;
-                _selectedDestinationName = name;
-              });
-            },
+        setState(() {
+          _selectedDestinationId = value;
+          _selectedDestinationName = name;
+        });
+      },
       validator: (_) {
         final destinationId = _selectedDestinationId;
 

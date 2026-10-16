@@ -8,6 +8,7 @@ import '../../providers/bazaar_provider.dart';
 import '../../providers/deployment_provider.dart';
 import '../../services/bazaar_service.dart';
 import '../../shared/widgets/app_states.dart';
+import '../../shared/widgets/searchable_picker.dart';
 import '../../theme/colors.dart';
 import '../../widgets/motion/success_check.dart';
 
@@ -274,26 +275,24 @@ class _DeploymentsScreenState extends State<DeploymentsScreen> {
                       ),
                     ),
                     const SizedBox(height: 18),
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedBazaarId,
-                      isExpanded: true,
+                    SearchablePickerField<String>(
+                      value: selectedBazaarId,
+                      searchHint: 'Search Bazaars…',
+                      emptyMessage: 'No Bazaar matches that search.',
                       decoration: InputDecoration(
                         labelText: 'New Bazaar',
                         prefixIcon: const Icon(Icons.store_outlined),
                       ),
-                      items: bazaars.map((bazaar) {
-                        return DropdownMenuItem<String>(
+                      options: bazaars.map((bazaar) {
+                        return PickerOption<String>(
                           value: bazaar.id,
-                          child: Text(
-                            // BazaarModel falls back to the legacy `city`
-                            // field, so the oldest Bazaar shows its city too.
-                            bazaar.location.isEmpty
-                                ? bazaar.name
-                                : '${bazaar.name} — '
-                                      '${bazaar.location}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          label: bazaar.name,
+                          // BazaarModel falls back to the legacy `city`
+                          // field, so the oldest Bazaar shows its city too.
+                          subtitle: bazaar.location.isEmpty
+                              ? null
+                              : bazaar.location,
+                          icon: Icons.storefront_outlined,
                         );
                       }).toList(),
                       onChanged: (value) {
