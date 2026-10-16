@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'guarded_transaction.dart';
+
 class BazaarModel {
   final String id;
   final String name;
@@ -215,7 +217,14 @@ class BazaarService {
         .doc(_newDocumentId(cleanName));
 
     try {
-      await _firestore.runTransaction((transaction) async {
+      // Not a raw _firestore.runTransaction: on Flutter Web, an exception
+      // thrown inside the transaction callback (the duplicate check below)
+      // does not survive the JS-interop round trip back into a catchable
+      // Dart exception - it surfaces as an opaque "Dart exception thrown
+      // from converted Future" with the real reason lost. Every other
+      // service's transaction already goes through this same guard; this one
+      // was the one write path still calling the Firestore API directly.
+      await runGuardedTransaction(_firestore, (transaction) async {
         // A plain set() would silently overwrite an existing Bazaar when the
         // writer is a manager, so the target document is read first and inside
         // the transaction, where the check cannot be raced.
