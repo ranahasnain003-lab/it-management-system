@@ -20,7 +20,14 @@ import '../widgets/dashboard_parts.dart';
 import '../../../models/asset_model.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
+  const DashboardScreen({super.key, this.today});
+
+  /// Today, for the date in the hero band.
+  ///
+  /// Null everywhere in the app, which means the real clock. A screenshot test
+  /// pins it, because a golden that photographs DateTime.now() is a golden
+  /// that fails the next morning - which is exactly what happened.
+  final DateTime? today;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -390,7 +397,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       role: _displayRole(userProvider),
       // Spelled out rather than numeric, so it cannot be read as the American
       // order on one device and the British order on another.
-      dateLabel: DateFormat('EEEE, d MMMM y').format(DateTime.now()),
+      dateLabel: DateFormat(
+        'EEEE, d MMMM y',
+      ).format(widget.today ?? DateTime.now()),
       description: userProvider.isNormalUser
           ? 'View permitted IT assets, submit requests and monitor your '
                 'request activity from your secure workspace.'

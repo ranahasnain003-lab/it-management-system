@@ -21,7 +21,11 @@ import '../widgets/web_common.dart';
 import 'movement_kind.dart';
 
 class WebDashboardPage extends StatefulWidget {
-  const WebDashboardPage({super.key});
+  const WebDashboardPage({super.key, this.today});
+
+  /// Today, for the date in the hero band. Null means the real clock; only a
+  /// screenshot test pins it, so its goldens do not expire overnight.
+  final DateTime? today;
 
   @override
   State<WebDashboardPage> createState() => _WebDashboardPageState();
@@ -65,7 +69,9 @@ class _WebDashboardPageState extends State<WebDashboardPage> {
                 role: PermissionService.roleLabel(role),
                 // Spelled out rather than numeric, so it cannot be read as the
                 // American order on one machine and the British order on another.
-                dateLabel: DateFormat('EEEE, d MMMM y').format(DateTime.now()),
+                dateLabel: DateFormat(
+                  'EEEE, d MMMM y',
+                ).format(widget.today ?? DateTime.now()),
                 description: users.isNormalUser
                     ? 'Real-time inventory of the organisation, shared with the '
                           'Android app.'

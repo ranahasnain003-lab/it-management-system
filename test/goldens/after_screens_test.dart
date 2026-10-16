@@ -66,6 +66,13 @@ Widget _hosted(Widget child, {required bool dark, required String fontFamily}) {
   );
 }
 
+/// The day the dashboard screenshots are taken on.
+///
+/// Pinned, because the hero band prints today's date. A golden that
+/// photographs DateTime.now() passes on the day it is written and fails every
+/// morning after, which is exactly what it did.
+final DateTime _goldenToday = DateTime(2026, 10, 13, 9, 40);
+
 void main() {
   setUpAll(() async {
     setupFirebaseMocks();
@@ -123,7 +130,7 @@ void main() {
   // The phone dashboard.
   screen(
     'dashboard_mobile',
-    () => const DashboardScreen(),
+    () => DashboardScreen(today: _goldenToday),
     only: const [GoldenDevice.phone],
     settle: const Duration(milliseconds: 2100),
   );
@@ -135,7 +142,7 @@ void main() {
     'dashboard_web',
     // The shell supplies the Scaffold in the real app; without one here every
     // Text renders with Flutter's missing-Material debug marks.
-    () => const Scaffold(body: WebDashboardPage()),
+    () => Scaffold(body: WebDashboardPage(today: _goldenToday)),
     only: const [GoldenDevice.desktop],
     settle: const Duration(milliseconds: 2100),
   );

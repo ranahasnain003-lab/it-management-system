@@ -95,7 +95,9 @@ Widget _dashboard({required AnimationLevel level}) {
         child: MaterialApp(
           debugShowCheckedModeBanner: false,
           theme: withGoldenFont(AppTheme.light(), AppType.family),
-          home: const DashboardScreen(),
+          // Pinned, so a frame comparison is never a comparison of two
+          // different dates.
+          home: DashboardScreen(today: DateTime(2026, 10, 13, 9, 40)),
         ),
       ),
     ),
